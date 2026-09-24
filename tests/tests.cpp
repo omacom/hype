@@ -1536,6 +1536,29 @@ class HypeTests : public QObject {
         QVERIFY(d.slide(columns).contains("# S1\n") || d.slide(columns).trimmed() == "# S1");
         d.undo();
         QVERIFY(d.slide(0).contains("# S1"));
+        // Movement by five counts slides even in the grid; a range stays together.
+        d.select(2);
+        d.extendSelection(3);
+        QTest::keyClick(window, Qt::Key_PageDown, Qt::ControlModifier);
+        QCOMPARE(d.selectionFirst(), 7);
+        QCOMPARE(d.selectionLast(), 8);
+        QCOMPARE(d.slide(7).trimmed(), "# S3");
+        QCOMPARE(d.slide(8).trimmed(), "# S4");
+        QTest::keyClick(window, Qt::Key_PageUp, Qt::ControlModifier);
+        QCOMPARE(d.selectionFirst(), 2);
+        QCOMPARE(d.selectionLast(), 3);
+        QTest::keyClick(window, Qt::Key_Home, Qt::ControlModifier);
+        QCOMPARE(d.selectionFirst(), 0);
+        QCOMPARE(d.selectionLast(), 1);
+        QTest::keyClick(window, Qt::Key_End, Qt::ControlModifier);
+        QCOMPARE(d.selectionFirst(), 10);
+        QCOMPARE(d.selectionLast(), 11);
+        QTest::keyClick(window, Qt::Key_PageDown, Qt::ControlModifier);
+        QCOMPARE(d.selectionFirst(), 10);
+        QCOMPARE(d.selectionLast(), 11);
+        for (int i = 0; i < 4; ++i) d.undo();
+        QCOMPARE(d.slide(2).trimmed(), "# S3");
+        QCOMPARE(d.slide(3).trimmed(), "# S4");
         // Dragging a slide onto the left half of another drops it before that slide.
         d.select(0);
         const QPoint from = center(0), to = center(2) - QPoint(int(cellWidth * 0.3), 0);
@@ -1784,6 +1807,16 @@ class HypeTests : public QObject {
         QTest::keyClick(window, Qt::Key_Up, Qt::ControlModifier);
         QCOMPARE(d.selected(), 1);
         QTest::keyClick(window, Qt::Key_Left, Qt::ControlModifier);
+        QCOMPARE(d.selected(), 0);
+        QCOMPARE(d.source(), many);
+        QTest::keyClick(window, Qt::Key_PageDown, Qt::ControlModifier);
+        QCOMPARE(d.selected(), 5);
+        QCOMPARE(d.slideSource().trimmed(), "# Slide 0");
+        QTest::keyClick(window, Qt::Key_PageUp, Qt::ControlModifier);
+        QCOMPARE(d.selected(), 0);
+        QTest::keyClick(window, Qt::Key_End, Qt::ControlModifier);
+        QCOMPARE(d.selected(), d.count() - 1);
+        QTest::keyClick(window, Qt::Key_Home, Qt::ControlModifier);
         QCOMPARE(d.selected(), 0);
         QCOMPARE(d.source(), many);
         QTest::keyClick(window, Qt::Key_Up, Qt::ControlModifier);

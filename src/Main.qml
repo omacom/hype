@@ -443,8 +443,12 @@ ApplicationWindow {
     Shortcut { sequence: "Shift+Up"; enabled: !win.popupOpen && !deck.compressingImage && !win.presenting && !slideEditor.activeFocus && !sourceEditor.activeFocus; onActivated: { deck.extendSelection(deck.selected + -win.rowStep); if (win.markdown) win.alignSource(false) } }
     Shortcut { sequence: "PgDown"; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!slideEditor.activeFocus && !sourceEditor.activeFocus)); onActivated: deck.select(deck.selected + 5 * win.rowStep) }
     Shortcut { sequence: "PgUp"; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!slideEditor.activeFocus && !sourceEditor.activeFocus)); onActivated: deck.select(deck.selected - 5 * win.rowStep) }
+    Shortcut { sequence: "Ctrl+PgDown"; enabled: !win.popupOpen && !deck.compressingImage && !win.presenting && !slideEditor.activeFocus && !sourceEditor.activeFocus; onActivated: win.moveSlides(5) }
+    Shortcut { sequence: "Ctrl+PgUp"; enabled: !win.popupOpen && !deck.compressingImage && !win.presenting && !slideEditor.activeFocus && !sourceEditor.activeFocus; onActivated: win.moveSlides(-5) }
     Shortcut { sequence: "Home"; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!win.markdown && !slideEditor.activeFocus)); onActivated: deck.select(0) }
     Shortcut { sequence: "End"; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!win.markdown && !slideEditor.activeFocus)); onActivated: deck.select(deck.count - 1) }
+    Shortcut { sequence: "Ctrl+Home"; enabled: !win.popupOpen && !deck.compressingImage && !win.presenting && !slideEditor.activeFocus && !sourceEditor.activeFocus; onActivated: win.moveSlides(-deck.count) }
+    Shortcut { sequence: "Ctrl+End"; enabled: !win.popupOpen && !deck.compressingImage && !win.presenting && !slideEditor.activeFocus && !sourceEditor.activeFocus; onActivated: win.moveSlides(deck.count) }
     Shortcut { sequence: "Space"; enabled: !win.popupOpen && !deck.compressingImage && win.presenting && (deck.media.video || animation.active); autoRepeat: false; onActivated: { if (animation.item) animation.item.paused = !animation.item.paused; else win.toggleVideo() } }
     Shortcut { sequence: "Ctrl+V"; enabled: !win.popupOpen && !deck.compressingImage && (!slideEditor.activeFocus && !sourceEditor.activeFocus); onActivated: deck.pasteMedia() }
     component ToolbarIconButton: ToolButton {
@@ -815,7 +819,8 @@ ApplicationWindow {
             { title: "Slides", keys: [
                 ["Arrows", "Previous or next slide, by row in Overview"], ["Page Up / Page Down", "Jump five slides, or five rows in Overview"],
                 ["Home / End", "First or last slide"], ["Shift+Arrows", "Extend the selection"],
-                ["Ctrl+Arrows", "Move selected slides"], ["Ctrl+Enter", "Add a slide"],
+                ["Ctrl+Arrows", "Move selected slides"], ["Ctrl+Page Up / Page Down", "Move selected slides five places"],
+                ["Ctrl+Home / End", "Move selected slides to first or last"], ["Ctrl+Enter", "Add a slide"],
                 ["Ctrl+D", "Duplicate"], ["Delete", "Delete"] ] },
             { title: "Editing", keys: [
                 ["Ctrl+B", "Bold"], ["Ctrl+I", "Italic"], ["Ctrl+U", "Underline"], ["Ctrl+H", "Headline"], ["Ctrl+K", "Code block"],
