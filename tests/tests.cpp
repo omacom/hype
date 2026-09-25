@@ -622,6 +622,17 @@ class HypeTests : public QObject {
         for (auto &s : parsed.slides)
             QCOMPARE(source.mid(s.start, s.end - s.start), s.source);
     }
+    void newDeckTitleFollowsFileName() {
+        QTemporaryDir tmp;
+        Deck d;
+        QCOMPARE(d.title(), "Untitled");
+        QVERIFY(d.savePath(tmp.filePath("talk.md")));
+        QCOMPARE(d.title(), "talk");
+        d.newDeck();
+        QCOMPARE(d.title(), "Untitled");
+        QVERIFY(d.savePath(tmp.filePath("second_talk.md")));
+        QCOMPARE(d.title(), "second_talk");
+    }
     void emptyBoundariesAndUnicode() {
         auto p = parseDeck("# Æble 🍎\n---\n\n---\n");
         QCOMPARE(p.slides.size(), 3);
