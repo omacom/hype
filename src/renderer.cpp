@@ -1,5 +1,6 @@
 #include "renderer.h"
 #include "images.h"
+#include "math.h"
 #include "syntax.h"
 #include <QAbstractTextDocumentLayout>
 #include <QCache>
@@ -461,6 +462,21 @@ static void sizeSlideText(QTextDocument &doc, const QVariantMap &palette, qreal 
             bf.setTopMargin(0);
             bf.setLineHeight(120, QTextBlockFormat::ProportionalHeight);
         }
+        bool displayMath = false;
+        for (auto it = block.begin(); !it.atEnd(); ++it) {
+            const auto fragment = it.fragment();
+            if (!fragment.isValid() || fragment.charFormat().objectType() != HypeMathObject)
+                continue;
+            if (fragment.charFormat().property(HypeMathDisplay).toBool())
+                displayMath = true;
+        }
+        QString besides = block.text();
+        besides.remove(QChar::ObjectReplacementCharacter);
+        if (displayMath && besides.trimmed().isEmpty()) {
+            bf.setAlignment(Qt::AlignHCenter);
+            bf.setTopMargin(fontSize * 0.3);
+            bf.setBottomMargin(fontSize * 0.35);
+        }
         cursor.setBlockFormat(bf);
         for (auto it = block.begin(); !it.atEnd(); ++it) {
             auto fragment = it.fragment();
@@ -506,7 +522,11 @@ static void sizeSlideText(QTextDocument &doc, const QVariantMap &palette, qreal 
 void layoutSlideText(QTextDocument &doc, const QString &markdown, const QVariantMap &palette,
                      qreal fontSize, qreal width, bool centered, bool code) {
     doc.setUndoRedoEnabled(false);
-    doc.setMarkdown(preserveLineBreaks(markdown), QTextDocument::MarkdownDialectGitHub);
+    const QVector<MathSpan> math = findMath(markdown);
+    const QString source = math.isEmpty() ? markdown : markdownWithMath(markdown, math);
+    doc.setMarkdown(preserveLineBreaks(source), QTextDocument::MarkdownDialectGitHub);
+    if (!math.isEmpty())
+        materializeMath(doc, math, QColor(palette.value("foreground", "#ffffff").toString()));
     sizeSlideText(doc, palette, fontSize, width, centered, code);
 }
 static QMutex fitMutex;
