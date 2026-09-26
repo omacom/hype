@@ -2027,6 +2027,17 @@ static void write(const QString &path, const QString &content) {
         QTest::keyClick(window, Qt::Key_Space, Qt::ControlModifier);
         QVERIFY(!window->property("presenting").toBool());
         QVERIFY(editor->isVisible());
+        QVERIFY(d.count() > 1);
+        d.select(d.count() - 1);
+        QTest::keyClick(window, Qt::Key_F5, Qt::ShiftModifier);
+        QVERIFY(window->property("presenting").toBool());
+        QCOMPARE(d.selected(), 0);
+        d.select(d.count() - 1);
+        QTest::keyClick(window, Qt::Key_F5, Qt::ShiftModifier);
+        QVERIFY(window->property("presenting").toBool());
+        QCOMPARE(d.selected(), 0);
+        QTest::keyClick(window, Qt::Key_Escape);
+        QVERIFY(!window->property("presenting").toBool());
         QString trial2025 = QFINDTESTDATA("../trials/rails-world-2025/presentation.md");
         if (!trial2025.isEmpty()) {
             QVERIFY(d.loadPath(trial2025));

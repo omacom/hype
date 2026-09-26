@@ -65,6 +65,10 @@ ApplicationWindow {
         if (presenting) { win.showFullScreen(); stage.forceActiveFocus() }
         else { player.stop(); win.showNormal() }
     }
+    function presentFromBeginning() {
+        deck.select(0)
+        if (!presenting) togglePresent()
+    }
     function toggleVideo() {
         if (player.playbackState === MediaPlayer.PlayingState) player.pause()
         else {
@@ -423,6 +427,7 @@ ApplicationWindow {
     Shortcut { sequences: ["Return", "Enter"]; enabled: !win.popupOpen && !deck.compressingImage && win.overview && !win.presenting; onActivated: win.focusMarkdown() }
     Shortcut { enabled: !win.popupOpen && !deck.compressingImage; sequence: "Ctrl+N"; onActivated: deck.newDeck() }
     Shortcut { enabled: !win.popupOpen && !deck.compressingImage; sequences: ["F5", "Ctrl+Space"]; autoRepeat: false; onActivated: win.togglePresent() }
+    Shortcut { enabled: !win.popupOpen && !deck.compressingImage; sequence: "Shift+F5"; autoRepeat: false; onActivated: win.presentFromBeginning() }
     Shortcut { sequence: "Escape"; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting); onActivated: win.togglePresent() }
     Shortcut { sequence: "Ctrl+Z"; enabled: !win.popupOpen && !deck.compressingImage && (!slideEditor.activeFocus && !sourceEditor.activeFocus); onActivated: deck.undo() }
     Shortcut { sequence: "Ctrl+Shift+Z"; enabled: !win.popupOpen && !deck.compressingImage && (!slideEditor.activeFocus && !sourceEditor.activeFocus); onActivated: deck.redo() }
@@ -806,7 +811,7 @@ ApplicationWindow {
         readonly property var groups: [
             { title: "Presentation", keys: [
                 ["Ctrl+N", "New presentation"], ["Ctrl+O", "Open"], ["Ctrl+S", "Save"], ["Ctrl+Shift+S", "Save as"],
-                ["Ctrl+E", "Export as PDF"], ["Ctrl+Shift+E", "Export as PowerPoint"], ["Ctrl+Space / F5", "Present"], ["Esc", "Stop presenting"],
+                ["Ctrl+E", "Export as PDF"], ["Ctrl+Shift+E", "Export as PowerPoint"], ["Ctrl+Space / F5", "Present"], ["Shift+F5", "Present from first slide"], ["Esc", "Stop presenting"],
                 ["Space", "Play or pause video while presenting"] ] },
             { title: "View", keys: [
                 ["Ctrl+M", "Overview on or off"], ["Ctrl+.", "Markdown source on or off"],
