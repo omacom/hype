@@ -16,6 +16,7 @@
 #include <QProcess>
 #include <QRegularExpression>
 #include <QSet>
+#include <QSvgRenderer>
 #include <QTemporaryFile>
 #include <QTextBlock>
 #include <QTextCursor>
@@ -551,7 +552,11 @@ void paintSlide(QPainter *p, const QRectF &target, const QString &source, const 
                         : media.path;
         const QRectF rect = mediaRect(media);
         const QSize pixels = p->deviceTransform().mapRect(rect).size().toSize();
-        QImage image = loadedImage(path, pixels, media.span);
+        // An SVG with nothing over it is drawn as vectors, sharp at any size and in PDF. Its
+        // small raster only gives its shape and edge colors for the background.
+        const bool vector = !media.video && text.isEmpty() &&
+                            QStringList{"svg", "svgz"}.contains(QFileInfo(path).suffix().toLower());
+        QImage image = loadedImage(path, vector ? QSize(480, 270) : pixels, media.span);
         // Video backgrounds use the first frame, even with a custom poster.
         const QImage backdrop = media.video && !media.span && !media.poster.isEmpty() &&
             (media.background == "blur" || media.background == "auto")
@@ -614,7 +619,12 @@ void paintSlide(QPainter *p, const QRectF &target, const QString &source, const 
                         scaled);
             p->save();
             p->setClipRect(rect);
-            p->drawImage(dest, !media.video && !text.isEmpty() ? softenedImage(image, dest.size()) : image);
+            QSvgRenderer svg;
+            if (vector && svg.load(path)) {
+                svg.setAspectRatioMode(Qt::KeepAspectRatio);
+                svg.render(p, dest);
+            } else
+                p->drawImage(dest, !media.video && !text.isEmpty() ? softenedImage(image, dest.size()) : image);
             p->restore();
         } else if (!overlayOnly && !backgroundOnly) {
             p->setPen(QColor(palette["accent"].toString()));
