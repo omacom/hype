@@ -1,1 +1,25 @@
-<RCC><qresource prefix="/"><file>Main.qml</file><file>AppIcon.qml</file><file>Markdown.js</file><file>format.md</file><file>skill.md</file></qresource></RCC>
+<RCC><qresource prefix="/"><file>Main.qml</file><file>AppIcon.qml</file><file>Markdown.js</file><file>format.md</file><file>skill.md</file></qresource>
+<qresource prefix="/">
+<file>themes/catppuccin/colors.toml</file>
+<file>themes/catppuccin-latte/colors.toml</file>
+<file>themes/ethereal/colors.toml</file>
+<file>themes/everforest/colors.toml</file>
+<file>themes/flexoki-light/colors.toml</file>
+<file>themes/gruvbox/colors.toml</file>
+<file>themes/hackerman/colors.toml</file>
+<file>themes/kanagawa/colors.toml</file>
+<file>themes/last-horizon/colors.toml</file>
+<file>themes/lumon/colors.toml</file>
+<file>themes/lupine/colors.toml</file>
+<file>themes/matte-black/colors.toml</file>
+<file>themes/miasma/colors.toml</file>
+<file>themes/nord/colors.toml</file>
+<file>themes/osaka-jade/colors.toml</file>
+<file>themes/retro-82/colors.toml</file>
+<file>themes/ristretto/colors.toml</file>
+<file>themes/rose-pine/colors.toml</file>
+<file>themes/solitude/colors.toml</file>
+<file>themes/tokyo-night/colors.toml</file>
+<file>themes/vantablack/colors.toml</file>
+<file>themes/white/colors.toml</file>
+</qresource></RCC>

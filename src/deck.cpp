@@ -465,8 +465,12 @@ void Deck::redo() {
     apply(state.source, state.selected, false, state.anchor, &state.parsed);
 }
 void Deck::discoverThemes() {
+    // Built-in palettes keep the stock theme picker usable without Omarchy.
+    for (const auto &name : QDir(":/themes").entryList(QDir::Dirs | QDir::NoDotAndDotDot))
+        m_themes[name] = ":/themes/" + name + "/colors.toml";
+
     QString root = qEnvironmentVariable("OMARCHY_PATH", QDir::homePath() + "/.local/share/omarchy");
-    QStringList roots{root + "/themes", QDir::homePath() + "/omarchy/themes",
+    QStringList roots{"/usr/share/omarchy/themes", root + "/themes", QDir::homePath() + "/omarchy/themes",
                       QDir::homePath() + "/.config/omarchy/themes"};
     for (auto &r : roots)
         for (auto &name : QDir(r).entryList(QDir::Dirs | QDir::NoDotAndDotDot)) {
@@ -553,10 +557,7 @@ QColor Deck::background() const { return QColor(palette()["background"].toString
 QColor Deck::foreground() const { return QColor(palette()["foreground"].toString()); }
 QColor Deck::accent() const { return QColor(palette()["accent"].toString()); }
 void Deck::chooseTheme(const QString &name) {
-    QString header = setScalar(m_parsed.header, "theme", name);
-    // Remove old palette before reading the newly selected installed theme.
-    header.remove(
-        QRegularExpression("^color_[a-z_]+:[^\\n]*\\n", QRegularExpression::MultilineOption));
+    QVector<QPair<QString, QString>> colors;
     QFile file(m_themes.value(name));
     if (file.open(QIODevice::ReadOnly)) {
         QRegularExpression re("^([a-z_]+)\\s*=\\s*\"(#[0-9a-fA-F]{6})\"",
@@ -564,10 +565,35 @@ void Deck::chooseTheme(const QString &name) {
         auto matches = re.globalMatch(QString::fromUtf8(file.readAll()));
         while (matches.hasNext()) {
             auto m = matches.next();
-            header = setScalar(header, "color_" + m.captured(1), m.captured(2));
+            colors.append({m.captured(1), m.captured(2)});
         }
     }
-    replaceHeader(header);
+    auto restyle = [&](State &state) {
+        QString header = setScalar(state.parsed.header, "theme", name);
+        // Each history entry keeps its own edits but adopts the selected palette.
+        header.remove(QRegularExpression("^color_[a-z_]+:[^\\n]*\\n",
+                                         QRegularExpression::MultilineOption));
+        for (const auto &color : colors)
+            header = setScalar(header, "color_" + color.first, color.second);
+        const int shift = header.size() - state.parsed.header.size();
+        state.source = header + state.source.mid(state.parsed.header.size());
+        state.parsed.header = header;
+        for (auto &slide : state.parsed.slides) {
+            slide.start += shift;
+            slide.end += shift;
+        }
+        if (state.parsed.errorOffset >= 0)
+            state.parsed.errorOffset += shift;
+    };
+    State current{m_source, m_selected, m_anchor, m_parsed};
+    restyle(current);
+    if (current.source == m_source)
+        return;
+    for (auto &state : m_undo)
+        restyle(state);
+    for (auto &state : m_redo)
+        restyle(state);
+    apply(current.source, current.selected, false, current.anchor, &current.parsed);
 }
 QVariantMap Deck::media() const {
     const QString source = slideSource(), base = baseDir();

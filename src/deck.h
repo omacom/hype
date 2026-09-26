@@ -52,6 +52,7 @@ class Deck : public QAbstractListModel {
     Q_PROPERTY(QColor background READ background NOTIFY changed)
     Q_PROPERTY(QColor foreground READ foreground NOTIFY changed)
     Q_PROPERTY(QColor accent READ accent NOTIFY changed)
+    Q_PROPERTY(QVariantMap palette READ palette NOTIFY changed)
     Q_PROPERTY(QVariantMap media READ media NOTIFY changed)
   public:
     explicit Deck(QObject *parent = nullptr, const QString &exportProgram = {});

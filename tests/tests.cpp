@@ -25,6 +25,7 @@
 #include <QPdfDocument>
 #include <QProcess>
 #include <QQmlApplicationEngine>
+#include <QQmlComponent>
 #include <QQmlContext>
 #include <QQuickStyle>
 #include <QQuickWindow>
@@ -2243,15 +2244,67 @@ static void write(const QString &path, const QString &content) {
     }
     void themeSnapshot() {
         Deck d;
-        if (!d.themeNames().contains("tokyo-night"))
-            QSKIP("Tokyo Night is not installed");
+        QVERIFY(d.themeNames().contains("tokyo-night"));
         d.chooseTheme("tokyo-night");
         QVERIFY(d.source().contains("color_background:"));
         QCOMPARE(d.background(), QColor("#1a1b26"));
-        QString before = d.source();
+        d.editSlide("# Edited");
         d.chooseTheme("nord");
+        const QString nordEdit = d.source();
+        QCOMPARE(d.background(), QColor("#2e3440"));
         d.undo();
-        QCOMPARE(d.source(), before);
+        QCOMPARE(d.themeName(), "nord");
+        QCOMPARE(d.background(), QColor("#2e3440"));
+        QVERIFY(!d.slideText().contains("Edited"));
+        d.chooseTheme("white");
+        d.redo();
+        QVERIFY(d.slideText().contains("Edited"));
+        QCOMPARE(d.themeName(), "white");
+        QCOMPARE(d.background(), QColor("#ffffff"));
+        d.undo();
+        d.redo();
+        QCOMPARE(d.themeName(), "white");
+        QVERIFY(d.source() != nordEdit);
+
+        Deck onlyTheme;
+        onlyTheme.chooseTheme("nord");
+        const QString themed = onlyTheme.source();
+        onlyTheme.undo();
+        QCOMPARE(onlyTheme.source(), themed);
+    }
+    void presentationThemeColorsEditorWithoutOmarchy() {
+        QTemporaryDir files;
+        AppTheme theme(files.path() + "/no-omarchy-current");
+        Deck deck;
+        deck.chooseTheme("nord");
+        theme.setPresentationPalette(deck.palette());
+        QCOMPARE(theme.colors().value("background").value<QColor>(), deck.background());
+        QCOMPARE(theme.colors().value("accent").value<QColor>(), deck.accent());
+        const QColor panel = theme.colors().value("panel").value<QColor>();
+        deck.chooseTheme("white");
+        theme.setPresentationPalette(deck.palette());
+        QCOMPARE(theme.colors().value("background").value<QColor>(), QColor("#ffffff"));
+        QVERIFY(theme.colors().value("panel").value<QColor>() != panel);
+
+        const bool hadStateHome = qEnvironmentVariableIsSet("XDG_STATE_HOME");
+        const QByteArray previousStateHome = qgetenv("XDG_STATE_HOME");
+        qputenv("XDG_STATE_HOME", files.path().toUtf8());
+        const auto restoreStateHome = qScopeGuard([&] {
+            if (hadStateHome) qputenv("XDG_STATE_HOME", previousStateHome);
+            else qunsetenv("XDG_STATE_HOME");
+        });
+        qmlRegisterType<AppTheme>("Hype", 1, 0, "AppTheme");
+        QQmlEngine engine;
+        engine.rootContext()->setContextProperty("deck", &deck);
+        QQmlComponent component(&engine);
+        component.setData("import Hype 1.0\nAppTheme { presentationPalette: deck.palette }", QUrl());
+        std::unique_ptr<QObject> bound(component.create());
+        QVERIFY2(bound, qPrintable(component.errorString()));
+        auto boundTheme = qobject_cast<AppTheme *>(bound.get());
+        QVERIFY(boundTheme);
+        QCOMPARE(boundTheme->colors().value("background").value<QColor>(), QColor("#ffffff"));
+        deck.chooseTheme("nord");
+        QTRY_COMPARE(boundTheme->colors().value("background").value<QColor>(), QColor("#2e3440"));
     }
     void shutdownDrainsAndRejectsRenders() {
         Deck deck;

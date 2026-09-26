@@ -32,6 +32,12 @@ AppTheme::AppTheme(const QString &currentDirectory, QObject *parent)
     connect(&m_watcher, &QFileSystemWatcher::directoryChanged, this, [this] { m_reload.start(); });
     reload();
 }
+void AppTheme::setPresentationPalette(const QVariantMap &palette) {
+    if (m_presentationPalette == palette)
+        return;
+    m_presentationPalette = palette;
+    reload();
+}
 void AppTheme::reload() {
     const QString theme = m_currentDirectory + "/theme", path = theme + "/colors.toml";
     QMap<QString, QColor> values;
@@ -42,6 +48,13 @@ void AppTheme::reload() {
             const auto match = entry.match(QString::fromUtf8(file.readLine()));
             if (match.hasMatch())
                 values[match.captured(1)] = QColor(match.captured(2));
+        }
+    } else {
+        // On other desktops, color the whole editor with the selected presentation theme.
+        for (auto it = m_presentationPalette.cbegin(); it != m_presentationPalette.cend(); ++it) {
+            const QColor color(it.value().toString());
+            if (color.isValid())
+                values[it.key()] = color;
         }
     }
     const QColor bg = values.value("background", QColor("#1a1b26"));
