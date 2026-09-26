@@ -3,6 +3,7 @@
 #include "filedialog.h"
 #include "renderer.h"
 #include "images.h"
+#include "math.h"
 #include "syntax.h"
 #include <QApplication>
 #include <QAbstractTextDocumentLayout>
@@ -2902,6 +2903,255 @@ class HypeTests : public QObject {
         QPdfDocument pdf;
         QCOMPARE(pdf.load(tmp.path() + "/talk.pdf"), QPdfDocument::Error::None);
         QCOMPARE(pdf.pageCount(), 3);
+    }
+    void mathDelimiters() {
+        auto kinds = [](const QString &source) {
+            QStringList out;
+            for (const MathSpan &span : findMath(source))
+                out << (span.display ? "D:" : "I:") + span.tex;
+            return out;
+        };
+        QCOMPARE(kinds("I bought a $1000 laptop."), QStringList());
+        QCOMPARE(kinds("I bought a $1000 laptop and a $50 keyboard."), QStringList());
+        QCOMPARE(kinds("the cost is $2.50 for the first one, and $2.00 for each additional one"),
+                 QStringList());
+        QCOMPARE(kinds("$20,000 and $30,000"), QStringList());
+        QCOMPARE(kinds("$1000 and$50"), QStringList());
+        QCOMPARE(kinds("$x$"), QStringList{"I:x"});
+        QCOMPARE(kinds("Energy $E=mc^2$ stays."), QStringList{"I:E=mc^2"});
+        QCOMPARE(kinds("$ x$"), QStringList());
+        QCOMPARE(kinds("$x $"), QStringList());
+        QCOMPARE(kinds("$x$2"), QStringList());
+        QCOMPARE(kinds("The $n$th term"), QStringList{"I:n"});
+        QCOMPARE(kinds("($x$)."), QStringList{"I:x"});
+        QCOMPARE(kinds("I paid $50 for $x$."), QStringList{"I:x"});
+        QCOMPARE(kinds("\\$50 and $x$"), QStringList{"I:x"});
+        QCOMPARE(kinds("\\$x$"), QStringList());
+        QCOMPARE(kinds("`$x$` and $y$"), QStringList{"I:y"});
+        QCOMPARE(kinds("```\n$x$\n```\n\n$y$\n"), QStringList{"I:y"});
+        QCOMPARE(kinds("<!-- $x$ --> $y$"), QStringList{"I:y"});
+        QCOMPARE(kinds("$$\nE=mc^2\n$$"), QStringList{"D:E=mc^2"});
+        QCOMPARE(kinds("$$ E = mc^2 $$"), QStringList{"D:E = mc^2"});
+        QCOMPARE(kinds("See $$a+b$$ now"), QStringList{"D:a+b"});
+        QCOMPARE(kinds("$x$ and $y$"), (QStringList{"I:x", "I:y"}));
+        QCOMPARE(kinds("$a_b$"), QStringList{"I:a_b"});
+        QCOMPARE(kinds("$$"), QStringList());
+        QCOMPARE(kinds("$"), QStringList());
+        QCOMPARE(kinds("$x"), QStringList());
+        QCOMPARE(kinds("$$\nx\n"), QStringList());
+        QCOMPARE(kinds("$\nx\n$"), QStringList());
+        QCOMPARE(kinds("$x\\$$"), QStringList{"I:x\\$"});
+        QCOMPARE(kinds("$a\\$b$"), QStringList{"I:a\\$b"});
+        QCOMPARE(kinds("**$x$**"), QStringList{"I:x"});
+        QCOMPARE(kinds("US$50"), QStringList());
+        QCOMPARE(kinds("$100$"), QStringList{"I:100"});
+        QCOMPARE(kinds("$$\na\n\nb\n$$"), QStringList{"D:a\n\nb"});
+        QCOMPARE(kinds("$$ oops\n\nThen $x$."), QStringList{"I:x"});
+        QCOMPARE(kinds("`$not$`"), QStringList());
+        QCOMPARE(kinds("    $$\n    x\n    $$\n"), QStringList());
+        QCOMPARE(kinds("$$x$$"), QStringList{"D:x"});
+        QCOMPARE(kinds("$$x$$2"), QStringList{"D:x"});
+        QCOMPARE(kinds("$\\text{price is $5}$"), QStringList{"I:\\text{price is $5}"});
+    }
+    void mathRendersOnTheSlide() {
+        Deck deck;
+        auto plain = [&](const QString &source) {
+            QTextDocument doc;
+            layoutSlideText(doc, source, deck.palette(), 32, 800, false, false);
+            return doc.toPlainText();
+        };
+        const QString price = plain("I bought a $1000 laptop and a $50 keyboard.");
+        QVERIFY(!price.contains(QChar::ObjectReplacementCharacter));
+        QVERIFY(price.contains("$1000"));
+        QVERIFY(price.contains("$50"));
+        const QString energy = plain("Energy $E=mc^2$ is conserved.");
+        QVERIFY(energy.contains(QChar::ObjectReplacementCharacter));
+        QVERIFY(!energy.contains("HYPEMATH"));
+        QVERIFY(!energy.contains("$"));
+        const QString fenced = plain("```\n$x$\n```\n\nThen $y$.\n");
+        QVERIFY(fenced.contains("$x$"));
+        QCOMPARE(fenced.count(QChar::ObjectReplacementCharacter), 1);
+
+        QTextDocument displayed;
+        layoutSlideText(displayed, "See $$a+b$$ now", deck.palette(), 32, 800, false, false);
+        int objects = 0, centered = 0;
+        for (auto block = displayed.begin(); block.isValid(); block = block.next()) {
+            if (!block.text().contains(QChar::ObjectReplacementCharacter))
+                continue;
+            ++objects;
+            if (block.blockFormat().alignment() & Qt::AlignHCenter)
+                ++centered;
+        }
+        QCOMPARE(objects, 1);
+        QCOMPARE(centered, 1);
+
+        auto render = [&](const QString &source, const QSize &size) {
+            QImage image(size, QImage::Format_ARGB32_Premultiplied);
+            image.fill(Qt::transparent);
+            QPainter painter(&image);
+            paintSlide(&painter, image.rect(), source, "/tmp", deck.palette());
+            return image;
+        };
+        auto bounds = [](const QImage &image) {
+            const QColor background = image.pixelColor(0, 0);
+            QRect box;
+            for (int y = 0; y < image.height(); ++y)
+                for (int x = 0; x < image.width(); ++x)
+                    if (image.pixelColor(x, y) != background)
+                        box |= QRect(x, y, 1, 1);
+            return box;
+        };
+        const QImage fraction = render("$$\\frac{1}{2}$$", QSize(960, 540));
+        const QRect box = bounds(fraction);
+        QVERIFY(box.width() > 8);
+        QVERIFY(box.height() > 8);
+        const QColor background = fraction.pixelColor(0, 0);
+        const int midY = box.center().y();
+        int above = 0, below = 0, widest = 0, widestY = 0;
+        for (int y = box.top(); y <= box.bottom(); ++y) {
+            int run = 0, best = 0, row = 0;
+            for (int x = box.left(); x <= box.right(); ++x) {
+                if (fraction.pixelColor(x, y) == background) {
+                    best = qMax(best, run);
+                    run = 0;
+                    continue;
+                }
+                ++run;
+                ++row;
+            }
+            best = qMax(best, run);
+            if (y < midY)
+                above += row;
+            else if (y > midY)
+                below += row;
+            if (best > widest) {
+                widest = best;
+                widestY = y;
+            }
+        }
+        QVERIFY2(above > 5 && below > 5, "A fraction needs ink above and below its bar");
+        QVERIFY2(widest > box.width() / 3, "The fraction bar should be the wide stroke");
+        QVERIFY(qAbs(widestY - midY) < box.height() / 3);
+
+        // The bullet sits on the left. The fraction bar is the wide stroke, and a
+        // displayed equation is centered even when the rest of the slide is not.
+        const QImage listed = render("- keep\n\n$$\\frac{a}{b}$$\n", QSize(960, 540));
+        const QColor listedBackground = listed.pixelColor(0, 0);
+        int bar = 0, barX = 0;
+        for (int y = 0; y < listed.height(); ++y) {
+            int run = 0, best = 0, start = 0, bestStart = 0;
+            for (int x = 0; x < listed.width(); ++x) {
+                if (listed.pixelColor(x, y) == listedBackground) {
+                    if (run > best) {
+                        best = run;
+                        bestStart = start;
+                    }
+                    run = 0;
+                    continue;
+                }
+                if (!run)
+                    start = x;
+                ++run;
+            }
+            if (run > best) {
+                best = run;
+                bestStart = start;
+            }
+            if (best > bar) {
+                bar = best;
+                barX = bestStart + best / 2;
+            }
+        }
+        QVERIFY(bar > 10);
+        QVERIFY(qAbs(barX - listed.width() / 2) < listed.width() / 10);
+
+        const QRect half = bounds(render("$$\\frac{1}{2}$$", QSize(480, 270)));
+        QVERIFY(qAbs(half.width() * 2 - box.width()) < box.width() / 3);
+        QVERIFY(qAbs(half.height() * 2 - box.height()) < box.height() / 3);
+    }
+    void mathInlineKeepsTheLine() {
+        Deck deck;
+        auto heightOf = [&](const QString &source) {
+            QTextDocument doc;
+            layoutSlideText(doc, source, deck.palette(), 48, 1400, false, false);
+            doc.documentLayout()->documentSize();
+            qreal height = -1;
+            for (auto block = doc.begin(); block.isValid(); block = block.next()) {
+                if (block.layout()->lineCount() < 1 || block.text().trimmed().isEmpty())
+                    continue;
+                const qreal line = block.layout()->lineAt(0).height();
+                height = height < 0 ? line : qMax(height, line);
+                if (block.blockFormat().lineHeight() != 115 ||
+                    block.blockFormat().lineHeightType() != QTextBlockFormat::ProportionalHeight)
+                    return qreal(-2);
+            }
+            return height;
+        };
+        const qreal sentence = heightOf("Energy stays in the sentence.");
+        QVERIFY(sentence > 10);
+        QCOMPARE(heightOf("Energy $E=mc^2$ stays in the sentence."), sentence);
+        QCOMPARE(heightOf("Energy $a_b$ stays."), sentence);
+        QCOMPARE(heightOf("Energy $\\frac{1}{2}$ stays."), sentence);
+        QCOMPARE(heightOf("$E=mc^2$"), heightOf("E"));
+        QCOMPARE(heightOf("# Energy $E=mc^2$"), heightOf("# Energy"));
+
+        QTextDocument listed;
+        layoutSlideText(listed, "- Write in Markdown $E=mc^2$\n- Drag slides to reorder\n",
+                        deck.palette(), 48, 1400, false, false);
+        listed.documentLayout()->documentSize();
+        QVector<qreal> items;
+        for (auto block = listed.begin(); block.isValid(); block = block.next()) {
+            if (block.layout()->lineCount() < 1 || block.text().trimmed().isEmpty())
+                continue;
+            items << block.layout()->lineAt(0).height();
+        }
+        QCOMPARE(items.size(), 2);
+        QCOMPARE(items[0], items[1]);
+
+        // The math E shares the baseline of the surrounding E. A superscript
+        // may rise above the cap, and the letter itself stays on the line.
+        QImage image(900, 160, QImage::Format_ARGB32_Premultiplied);
+        image.fill(Qt::black);
+        QTextDocument doc;
+        layoutSlideText(doc, "E $E=mc^2$ E", deck.palette(), 64, 860, false, false);
+        QPainter painter(&image);
+        doc.drawContents(&painter);
+        painter.end();
+        const QColor background = image.pixelColor(0, 0);
+        struct Run {
+            int x0, x1, top, bottom;
+        };
+        QVector<Run> runs;
+        for (int x = 0; x < image.width();) {
+            int top = image.height(), bottom = -1;
+            int x1 = x;
+            for (; x1 < image.width(); ++x1) {
+                int colTop = image.height(), colBottom = -1;
+                for (int y = 0; y < image.height(); ++y) {
+                    if (image.pixelColor(x1, y) == background)
+                        continue;
+                    colTop = qMin(colTop, y);
+                    colBottom = qMax(colBottom, y);
+                }
+                if (colBottom < 0)
+                    break;
+                top = qMin(top, colTop);
+                bottom = qMax(bottom, colBottom);
+            }
+            if (bottom >= 0 && x1 > x + 2)
+                runs.append({x, x1 - 1, top, bottom});
+            x = qMax(x1, x) + 1;
+        }
+        QVERIFY2(runs.size() >= 3, "Expected the two text E's and the formula between them");
+        const int textBottom = runs.first().bottom;
+        QCOMPARE(runs.last().bottom, textBottom);
+        int mathBottom = -1, mathTop = image.height();
+        for (int i = 1; i + 1 < runs.size(); ++i) {
+            mathBottom = qMax(mathBottom, runs[i].bottom);
+            mathTop = qMin(mathTop, runs[i].top);
+        }
+        QVERIFY2(qAbs(mathBottom - textBottom) <= 2, "Inline math sits on the text baseline");
+        QVERIFY2(mathTop < runs.first().top, "The superscript still draws above the cap");
     }
     void missingMediaDoesNotOverwriteExport() {
         QTemporaryDir tmp;

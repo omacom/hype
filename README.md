@@ -68,6 +68,8 @@ end
 
 Headlines are big by default. Quotes, lists, tables, and inline `code` work too. Ordinary line breaks stay visible on the slide. Code blocks fit the slide and use syntax highlighting when you specify a language, such as `ruby`, `rust`, `javascript`, `bash`, or `json`.
 
+Inline math sits in the sentence as `$E=mc^2$`. A displayed equation uses `$$` on its own, and may run across lines. Prices stay prices: `I bought a $1000 laptop and a $50 keyboard` is not an equation. Write `\$` for a literal dollar sign. Math inside code is left as written.
+
 The single-slide editor hides the blank lines around slide separators, leaving just your content to edit.
 
 ## Add images and video

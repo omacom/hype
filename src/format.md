@@ -67,6 +67,28 @@ puts "Code is highlighted when you name the language"
 - `<!-- comments -->` are hidden from the slide; use them for speaker notes.
 - A `---` inside a code fence does not split the slide.
 
+## Math
+
+Inline math sits inside a sentence, between single dollar signs. A displayed
+equation is a block of its own, between double dollar signs. The formula is
+LaTeX. A price is not an equation:
+
+```markdown
+Energy $E=mc^2$ stays in the sentence.
+
+$$
+\frac{-b \pm \sqrt{b^2-4ac}}{2a}
+$$
+
+I bought a $1000 laptop and a $50 keyboard.
+```
+
+A `$` starts inline math only when the next character is not a space, and a
+later `$` on that same line ends it only when there is no space before that
+closer and no digit after it. `$$` may cross lines, and spaces just inside
+`$$` are kept as part of the formula's padding. `\$` is a literal dollar.
+Math inside a code span, a code fence, or a comment stays as written.
+
 ## Images and video
 
 Each slide takes one image or video. Options go inside the brackets:
