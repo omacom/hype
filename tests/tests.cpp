@@ -2451,7 +2451,9 @@ static void write(const QString &path, const QString &content) {
         QVERIFY(!engine.rootObjects().isEmpty());
         auto window = qobject_cast<QQuickWindow *>(engine.rootObjects()[0]);
         auto preview = window->findChild<QQuickItem *>("slidePreview");
-        QVERIFY(preview);
+        auto quick = window->findChild<QQuickItem *>("slideQuickPreview");
+        auto frame = window->findChild<QQuickItem *>("slideFrame");
+        QVERIFY(preview && quick && frame);
         for (int i = 0; i < 40; ++i) {
             deck.select((i * 7) % 18);
             QTest::qWait(5);
@@ -2467,6 +2469,22 @@ static void write(const QString &path, const QString &content) {
         capture = preview->grabToImage();
         QTRY_VERIFY(!capture->image().isNull());
         QCOMPARE(capture->image().pixelColor(capture->image().width() / 2, capture->image().height() / 2),
+                 QColor::fromRgb(QColor::fromHsv(17 * 19, 230, 210).rgb()));
+        // A late thumbnail must never cover the full render, even if its visible
+        // state lags behind the full image's Ready notification.
+        quick->setProperty("source", "image://slides/" + deck.renderId(0));
+        QTRY_COMPARE_WITH_TIMEOUT(quick->property("status").toInt(), 1, 5000);
+        quick->setVisible(true);
+        QVERIFY(quick->isVisible());
+        auto thumbnailCapture = quick->grabToImage();
+        QTRY_VERIFY(!thumbnailCapture->image().isNull());
+        QCOMPARE(thumbnailCapture->image().pixelColor(thumbnailCapture->image().width() / 2,
+                                                      thumbnailCapture->image().height() / 2),
+                 QColor::fromRgb(QColor::fromHsv(0, 230, 210).rgb()));
+        auto stageCapture = frame->grabToImage();
+        QTRY_VERIFY(!stageCapture->image().isNull());
+        QCOMPARE(stageCapture->image().pixelColor(stageCapture->image().width() / 2,
+                                                  stageCapture->image().height() / 2),
                  QColor::fromRgb(QColor::fromHsv(17 * 19, 230, 210).rgb()));
     }
     void imageTextOverlaysEveryLayout() {
