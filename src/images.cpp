@@ -19,13 +19,18 @@ QImage readSizedImage(const QString &path, QSize canvas, bool span) {
     const bool rotated = reader.transformation() & QImageIOHandler::TransformationRotate90;
     if (rotated)
         oriented.transpose();
-    QSize target = imageSizeForCanvas(oriented, canvas, span);
+    // A vector image has no real size of its own: draw it at the size it will show, even when
+    // that's larger than the size its file declares. Photos are never enlarged.
+    const bool vector = reader.format().startsWith("svg");
+    QSize target = vector && !canvas.isEmpty()
+        ? oriented.scaled(canvas, span ? Qt::KeepAspectRatioByExpanding : Qt::KeepAspectRatio)
+        : imageSizeForCanvas(oriented, canvas, span);
     if (rotated)
         target.transpose();
     if (!target.isEmpty() && target != original)
         reader.setScaledSize(target);
     QImage image = reader.read();
-    if (!image.isNull()) {
+    if (!image.isNull() && !vector) {
         const QSize size = imageSizeForCanvas(image.size(), canvas, span);
         if (size != image.size())
             image = image.scaled(size, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);

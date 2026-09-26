@@ -2840,6 +2840,37 @@ static void write(const QString &path, const QString &content) {
         QCOMPARE(render(cr), render(explicitBreaks));
         QCOMPARE(render("`one`\n`two`"), render("`one`\\\n`two`"));
     }
+    void svgStaysSharp() {
+        QTemporaryDir tmp;
+        QVERIFY(QDir().mkpath(tmp.path() + "/images"));
+        // An SVG declaring a small size, as icons and design-tool exports usually do.
+        write(tmp.path() + "/images/chart.svg",
+              "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 400 240\">"
+              "<rect x=\"20\" y=\"140\" width=\"60\" height=\"80\" fill=\"#7aa2f7\"/>"
+              "<text x=\"20\" y=\"30\" font-size=\"20\" fill=\"#c0caf5\">Requests per second</text></svg>");
+        // Loaded for a slide, it takes the slide's size rather than its declared 400 by 240.
+        const QImage loaded = readSizedImage(tmp.path() + "/images/chart.svg", QSize(1780, 980), false);
+        QCOMPARE(loaded.size(), QSize(1633, 980));
+        // Alone on a slide, it stays vector in a PDF: its text is text, and no picture is embedded.
+        write(tmp.path() + "/talk.md", "![fit](chart.svg)\n");
+        Deck deck;
+        QVERIFY(deck.loadPath(tmp.path() + "/talk.md"));
+        QVERIFY(deck.exportPdf(tmp.path() + "/vector.pdf"));
+        QPdfDocument pdf;
+        QCOMPARE(pdf.load(tmp.path() + "/vector.pdf"), QPdfDocument::Error::None);
+        QVERIFY(pdf.getAllText(0).text().contains("Requests per second"));
+        QFile file(tmp.path() + "/vector.pdf");
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        QVERIFY(!file.readAll().contains("/Subtype /Image"));
+        // Under a headline it is still softened as a picture, from a sharp full-size copy.
+        deck.editSource("![fit](chart.svg)\n\n# Growth\n");
+        QVERIFY(deck.exportPdf(tmp.path() + "/softened.pdf"));
+        QFile softened(tmp.path() + "/softened.pdf");
+        QVERIFY(softened.open(QIODevice::ReadOnly));
+        const QByteArray bytes = softened.readAll();
+        QVERIFY(bytes.contains("/Subtype /Image"));
+        QVERIFY(!bytes.contains("/Width 400"));
+    }
     void pdfPreserves4kDetailAndReusesImages() {
         QTemporaryDir tmp;
         QVERIFY(QDir().mkpath(tmp.path() + "/images"));
