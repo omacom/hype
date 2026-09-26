@@ -84,6 +84,20 @@ Each slide takes one image or video. Options go inside the brackets:
 | `![autoplay=false](demo.mp4)` | Wait for Space to play the video |
 | `![poster=still.png](demo.mp4)` | Show an image from `images/` until it plays |
 
+An `svg` code block draws SVG in the image's place, sharp at any size. Give it
+a `viewBox`. `var(--accent)`, `var(--foreground)`, `var(--background)`,
+`var(--dark-foreground)`, `var(--red)`, `var(--green)`, `var(--yellow)`,
+`var(--magenta)`, and `var(--cyan)` are the theme's colors. Shapes and text
+without a color take the theme's text color, and text takes the font.
+
+````markdown
+```svg
+<svg viewBox="0 0 300 120">
+  <rect x="120" y="20" width="60" height="100" fill="var(--accent)"/>
+</svg>
+```
+````
+
 Text on an image slide is overlaid in white over a slightly darkened picture.
 An image with a headline spans the slide unless you say `fit`.
 
