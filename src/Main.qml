@@ -60,10 +60,71 @@ ApplicationWindow {
     property real dragY: 0
     property real dragX: 0
     property int dragScroll: 0
+    property var presentationReturnScreen: null
+    property int presentationReturnVisibility: Window.Windowed
+    property rect presentationReturnGeometry: Qt.rect(0, 0, 0, 0)
     function togglePresent() {
         presenting = !presenting
-        if (presenting) { win.showFullScreen(); stage.forceActiveFocus() }
-        else { player.stop(); win.showNormal() }
+        if (presenting) {
+            presentationReturnScreen = win.screen
+            presentationReturnVisibility = win.visibility
+            presentationReturnGeometry = Qt.rect(win.x, win.y, win.width, win.height)
+            const screens = presentationScreens(win.screen, Qt.application.screens)
+            win.screen = screens.audience
+            win.showFullScreen()
+            if (screens.notes) {
+                presenterWindow.screen = screens.notes
+                presenterWindow.showFullScreen()
+                Qt.callLater(function() { presenterWindow.requestActivate() })
+            } else stage.forceActiveFocus()
+        } else {
+            presenterWindow.hide()
+            player.stop()
+            // Wayland compositors retain a fullscreen window's output when it is
+            // normalized. Take it off-screen first so the saved editor output and
+            // geometry are applied before the window is mapped again.
+            win.hide()
+            if (presentationReturnScreen) win.screen = presentationReturnScreen
+            if (presentationReturnGeometry.width > 0) {
+                win.x = presentationReturnGeometry.x
+                win.y = presentationReturnGeometry.y
+                win.width = presentationReturnGeometry.width
+                win.height = presentationReturnGeometry.height
+            }
+            if (presentationReturnVisibility === Window.Maximized) win.showMaximized()
+            else win.showNormal()
+            Qt.callLater(function() {
+                win.requestActivate()
+                stage.forceActiveFocus()
+            })
+        }
+    }
+    function isBuiltInScreen(screen) {
+        const name = screen && screen.name ? screen.name.toLowerCase() : ""
+        return name.indexOf("edp") >= 0 || name.indexOf("lvds") >= 0 || name.indexOf("dsi") >= 0
+    }
+    function sameScreen(a, b) {
+        // Window.screen and Qt.application.screens wrap the same display in
+        // distinct objects, so identity comparison never matches between them.
+        return !!a && !!b && a.name === b.name && a.virtualX === b.virtualX && a.virtualY === b.virtualY
+    }
+    // Pure so tests can pass fake screens. Picks the audience screen and the
+    // presenter screen, which is null without a second display.
+    function presentationScreens(current, screens) {
+        const other = function(accept) {
+            for (let i = 0; i < screens.length; ++i)
+                if (!sameScreen(screens[i], current) && accept(screens[i])) return screens[i]
+            return null
+        }
+        let audience = current
+        if (screens.length > 1 && isBuiltInScreen(current)) {
+            // Connector names normally expose laptop panels as eDP/LVDS/DSI. Prefer
+            // HDMI explicitly, then any non-built-in output (including USB-C/DP docks).
+            audience = other(s => s.name.toLowerCase().indexOf("hdmi") >= 0)
+                || other(s => !isBuiltInScreen(s)) || other(s => true) || current
+        }
+        const notes = sameScreen(audience, current) ? other(s => true) : current
+        return { audience: audience, notes: notes }
     }
     function toggleVideo() {
         if (player.playbackState === MediaPlayer.PlayingState) player.pause()
@@ -264,7 +325,115 @@ ApplicationWindow {
     onClosing: function(close) {
         if (!allowClose && !deck.flushAutosave() && deck.dirty) {
             close.accepted = false
+            if (presenting) togglePresent()
             closeDialog.open()
+            return
+        }
+        if (presenting) {
+            presenting = false
+            presenterWindow.hide()
+            player.stop()
+        }
+    }
+    ApplicationWindow {
+        id: presenterWindow; objectName: "presenterWindow"
+        visible: false; minimumWidth: 800; minimumHeight: 520
+        title: deck.title + " — Presenter View"
+        color: win.ui.background
+        palette.window: win.ui.panel; palette.base: win.ui.background; palette.text: win.ui.foreground
+        palette.windowText: win.ui.foreground; palette.button: win.ui.button; palette.buttonText: win.ui.foreground
+        palette.highlight: win.ui.selection; palette.highlightedText: win.ui.selectionText
+        onClosing: function(close) {
+            if (win.presenting) {
+                close.accepted = false
+                win.togglePresent()
+            }
+        }
+
+        ColumnLayout {
+            anchors.fill: parent; anchors.margins: 28; spacing: 22
+            RowLayout {
+                Layout.fillWidth: true; spacing: 16
+                Label {
+                    text: deck.title; color: win.ui.foreground; font.pixelSize: 22; font.bold: true
+                    Layout.fillWidth: true; elide: Text.ElideRight
+                }
+                Label {
+                    text: "Slide " + (deck.selected + 1) + " of " + deck.count
+                    color: win.ui.muted; font.pixelSize: 16
+                }
+                Button {
+                    text: "End show"
+                    onClicked: win.togglePresent()
+                    contentItem: Text { text: parent.text; color: win.ui.foreground; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                    background: Rectangle { color: parent.hovered ? win.ui.hover : win.ui.button; radius: win.softRadius; border.color: win.ui.border }
+                }
+            }
+            RowLayout {
+                Layout.fillWidth: true; Layout.preferredHeight: presenterWindow.height * 0.42; spacing: 22
+                ColumnLayout {
+                    Layout.fillWidth: true; Layout.fillHeight: true; Layout.preferredWidth: 2
+                    Label { text: "CURRENT"; color: win.ui.muted; font.pixelSize: 12; font.bold: true }
+                    Item {
+                        Layout.fillWidth: true; Layout.fillHeight: true
+                        Rectangle {
+                            anchors.centerIn: parent
+                            width: Math.min(parent.width, parent.height * 16 / 9)
+                            height: width * 9 / 16
+                            color: deck.background; border.color: win.ui.border
+                            Image {
+                                anchors.fill: parent
+                                source: "image://slides/" + (deck.revision, deck.renderId(deck.selected))
+                                asynchronous: true; retainWhileLoading: true; cache: true
+                                sourceSize: Qt.size(960, 540)
+                            }
+                        }
+                    }
+                }
+                ColumnLayout {
+                    Layout.fillWidth: true; Layout.fillHeight: true; Layout.preferredWidth: 1
+                    Label { text: "NEXT"; color: win.ui.muted; font.pixelSize: 12; font.bold: true }
+                    Item {
+                        Layout.fillWidth: true; Layout.fillHeight: true
+                        Rectangle {
+                            anchors.centerIn: parent
+                            width: Math.min(parent.width, parent.height * 16 / 9)
+                            height: width * 9 / 16
+                            color: deck.background; border.color: win.ui.border
+                            Image {
+                                anchors.fill: parent
+                                source: deck.selected + 1 < deck.count
+                                    ? "image://slides/" + (deck.revision, deck.renderId(deck.selected + 1)) : ""
+                                asynchronous: true; retainWhileLoading: true; cache: true
+                                sourceSize: Qt.size(640, 360)
+                            }
+                            Label {
+                                anchors.centerIn: parent; visible: deck.selected + 1 >= deck.count
+                                text: "End of presentation"; color: win.ui.muted; font.pixelSize: 16
+                            }
+                        }
+                    }
+                }
+            }
+            Rectangle { Layout.fillWidth: true; height: 1; color: win.ui.border }
+            Label { text: "SPEAKER NOTES"; color: win.ui.muted; font.pixelSize: 12; font.bold: true }
+            ScrollView {
+                Layout.fillWidth: true; Layout.fillHeight: true; clip: true
+                background: Rectangle { color: win.ui.panel; radius: win.rounding; border.color: win.ui.border }
+                TextArea {
+                    objectName: "presenterNotes"; readOnly: true; selectByMouse: true
+                    text: deck.speakerNotes || "No speaker notes for this slide."
+                    color: deck.speakerNotes ? win.ui.foreground : win.ui.muted
+                    font.pixelSize: 24; wrapMode: TextEdit.Wrap
+                    leftPadding: 24; rightPadding: 24; topPadding: 20; bottomPadding: 20
+                    background: null
+                }
+            }
+            Label {
+                Layout.fillWidth: true
+                text: "←/→ change slide   ·   Space plays media   ·   Esc ends the show"
+                color: win.ui.muted; font.pixelSize: 13; horizontalAlignment: Text.AlignHCenter
+            }
         }
     }
     Dialog {
@@ -422,30 +591,30 @@ ApplicationWindow {
     Shortcut { sequence: "Ctrl+/"; enabled: win.canFormat; onActivated: win.formatSlide("comment") }
     Shortcut { sequences: ["Return", "Enter"]; enabled: !win.popupOpen && !deck.compressingImage && win.overview && !win.presenting; onActivated: win.focusMarkdown() }
     Shortcut { enabled: !win.popupOpen && !deck.compressingImage; sequence: "Ctrl+N"; onActivated: deck.newDeck() }
-    Shortcut { enabled: !win.popupOpen && !deck.compressingImage; sequences: ["F5", "Ctrl+Space"]; autoRepeat: false; onActivated: win.togglePresent() }
-    Shortcut { sequence: "Escape"; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting); onActivated: win.togglePresent() }
+    Shortcut { enabled: !win.popupOpen && !deck.compressingImage; sequences: ["F5", "Ctrl+Space"]; context: win.presenting ? Qt.ApplicationShortcut : Qt.WindowShortcut; autoRepeat: false; onActivated: win.togglePresent() }
+    Shortcut { sequence: "Escape"; context: Qt.ApplicationShortcut; enabled: !win.popupOpen && !deck.compressingImage && win.presenting; onActivated: win.togglePresent() }
     Shortcut { sequence: "Ctrl+Z"; enabled: !win.popupOpen && !deck.compressingImage && (!slideEditor.activeFocus && !sourceEditor.activeFocus); onActivated: deck.undo() }
     Shortcut { sequence: "Ctrl+Shift+Z"; enabled: !win.popupOpen && !deck.compressingImage && (!slideEditor.activeFocus && !sourceEditor.activeFocus); onActivated: deck.redo() }
     Shortcut { sequence: "Ctrl+D"; enabled: !win.popupOpen && !deck.compressingImage && (!slideEditor.activeFocus && !sourceEditor.activeFocus); onActivated: deck.duplicateSlide() }
     Shortcut { enabled: !win.popupOpen && !deck.compressingImage; sequence: "Ctrl+Return"; onActivated: { win.addSlide() } }
     Shortcut { sequence: "Delete"; enabled: !win.popupOpen && !deck.compressingImage && (!slideEditor.activeFocus && !sourceEditor.activeFocus); onActivated: deck.deleteSlide() }
-    Shortcut { sequence: "Right"; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!slideEditor.activeFocus && !sourceEditor.activeFocus)); onActivated: deck.select(deck.selected + 1) }
+    Shortcut { sequence: "Right"; context: win.presenting ? Qt.ApplicationShortcut : Qt.WindowShortcut; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!slideEditor.activeFocus && !sourceEditor.activeFocus)); onActivated: deck.select(deck.selected + 1) }
     Shortcut { sequence: "Ctrl+Right"; enabled: !win.popupOpen && !deck.compressingImage && !win.presenting && !slideEditor.activeFocus && !sourceEditor.activeFocus; onActivated: win.moveSlides(1) }
     Shortcut { sequence: "Shift+Right"; enabled: !win.popupOpen && !deck.compressingImage && !win.presenting && !slideEditor.activeFocus && !sourceEditor.activeFocus; onActivated: { deck.extendSelection(deck.selected + 1); if (win.markdown) win.alignSource(false) } }
-    Shortcut { sequence: "Down"; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!slideEditor.activeFocus && !sourceEditor.activeFocus)); onActivated: deck.select(deck.selected + (win.presenting ? 1 : win.rowStep)) }
+    Shortcut { sequence: "Down"; context: win.presenting ? Qt.ApplicationShortcut : Qt.WindowShortcut; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!slideEditor.activeFocus && !sourceEditor.activeFocus)); onActivated: deck.select(deck.selected + (win.presenting ? 1 : win.rowStep)) }
     Shortcut { sequence: "Ctrl+Down"; enabled: !win.popupOpen && !deck.compressingImage && !win.presenting && !slideEditor.activeFocus && !sourceEditor.activeFocus; onActivated: win.moveSlides(win.rowStep) }
     Shortcut { sequence: "Shift+Down"; enabled: !win.popupOpen && !deck.compressingImage && !win.presenting && !slideEditor.activeFocus && !sourceEditor.activeFocus; onActivated: { deck.extendSelection(deck.selected + win.rowStep); if (win.markdown) win.alignSource(false) } }
-    Shortcut { sequence: "Left"; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!slideEditor.activeFocus && !sourceEditor.activeFocus)); onActivated: deck.select(deck.selected + -1) }
+    Shortcut { sequence: "Left"; context: win.presenting ? Qt.ApplicationShortcut : Qt.WindowShortcut; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!slideEditor.activeFocus && !sourceEditor.activeFocus)); onActivated: deck.select(deck.selected + -1) }
     Shortcut { sequence: "Ctrl+Left"; enabled: !win.popupOpen && !deck.compressingImage && !win.presenting && !slideEditor.activeFocus && !sourceEditor.activeFocus; onActivated: win.moveSlides(-1) }
     Shortcut { sequence: "Shift+Left"; enabled: !win.popupOpen && !deck.compressingImage && !win.presenting && !slideEditor.activeFocus && !sourceEditor.activeFocus; onActivated: { deck.extendSelection(deck.selected + -1); if (win.markdown) win.alignSource(false) } }
-    Shortcut { sequence: "Up"; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!slideEditor.activeFocus && !sourceEditor.activeFocus)); onActivated: deck.select(deck.selected + (win.presenting ? -1 : -win.rowStep)) }
+    Shortcut { sequence: "Up"; context: win.presenting ? Qt.ApplicationShortcut : Qt.WindowShortcut; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!slideEditor.activeFocus && !sourceEditor.activeFocus)); onActivated: deck.select(deck.selected + (win.presenting ? -1 : -win.rowStep)) }
     Shortcut { sequence: "Ctrl+Up"; enabled: !win.popupOpen && !deck.compressingImage && !win.presenting && !slideEditor.activeFocus && !sourceEditor.activeFocus; onActivated: win.moveSlides(-win.rowStep) }
     Shortcut { sequence: "Shift+Up"; enabled: !win.popupOpen && !deck.compressingImage && !win.presenting && !slideEditor.activeFocus && !sourceEditor.activeFocus; onActivated: { deck.extendSelection(deck.selected + -win.rowStep); if (win.markdown) win.alignSource(false) } }
-    Shortcut { sequence: "PgDown"; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!slideEditor.activeFocus && !sourceEditor.activeFocus)); onActivated: deck.select(deck.selected + 5 * win.rowStep) }
-    Shortcut { sequence: "PgUp"; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!slideEditor.activeFocus && !sourceEditor.activeFocus)); onActivated: deck.select(deck.selected - 5 * win.rowStep) }
-    Shortcut { sequence: "Home"; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!win.markdown && !slideEditor.activeFocus)); onActivated: deck.select(0) }
-    Shortcut { sequence: "End"; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!win.markdown && !slideEditor.activeFocus)); onActivated: deck.select(deck.count - 1) }
-    Shortcut { sequence: "Space"; enabled: !win.popupOpen && !deck.compressingImage && win.presenting && (deck.media.video || animation.active); autoRepeat: false; onActivated: { if (animation.item) animation.item.paused = !animation.item.paused; else win.toggleVideo() } }
+    Shortcut { sequence: "PgDown"; context: win.presenting ? Qt.ApplicationShortcut : Qt.WindowShortcut; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!slideEditor.activeFocus && !sourceEditor.activeFocus)); onActivated: deck.select(deck.selected + 5 * win.rowStep) }
+    Shortcut { sequence: "PgUp"; context: win.presenting ? Qt.ApplicationShortcut : Qt.WindowShortcut; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!slideEditor.activeFocus && !sourceEditor.activeFocus)); onActivated: deck.select(deck.selected - 5 * win.rowStep) }
+    Shortcut { sequence: "Home"; context: win.presenting ? Qt.ApplicationShortcut : Qt.WindowShortcut; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!win.markdown && !slideEditor.activeFocus)); onActivated: deck.select(0) }
+    Shortcut { sequence: "End"; context: win.presenting ? Qt.ApplicationShortcut : Qt.WindowShortcut; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!win.markdown && !slideEditor.activeFocus)); onActivated: deck.select(deck.count - 1) }
+    Shortcut { sequence: "Space"; context: Qt.ApplicationShortcut; enabled: !win.popupOpen && !deck.compressingImage && win.presenting && (deck.media.video || animation.active); autoRepeat: false; onActivated: { if (animation.item) animation.item.paused = !animation.item.paused; else win.toggleVideo() } }
     Shortcut { sequence: "Ctrl+V"; enabled: !win.popupOpen && !deck.compressingImage && (!slideEditor.activeFocus && !sourceEditor.activeFocus); onActivated: deck.pasteMedia() }
     component ToolbarIconButton: ToolButton {
         id: toolbarButton

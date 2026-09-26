@@ -224,6 +224,7 @@ static QString withoutSlidePadding(QString text) {
     return text.trimmed().isEmpty() ? QString() : text;
 }
 QString Deck::slideText() const { return withoutSlidePadding(slideSource()); }
+QString Deck::speakerNotes() const { return ::speakerNotes(slideSource()); }
 QString Deck::slide(int i) const {
     return i >= 0 && i < count() ? m_parsed.slides[i].source : QString();
 }

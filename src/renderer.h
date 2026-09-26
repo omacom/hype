@@ -18,6 +18,7 @@ QImage softenedImage(const QImage &image, const QSizeF &slideSize);
 QString withMedia(const QString &source, const QString &reference);
 QString withMediaDirectives(const QString &source, const QStringList &remove,
                             const QStringList &add);
+QString speakerNotes(const QString &source);
 Media parseMedia(const QString &source, const QString &base);
 QString ensurePoster(const QString &video, const QString &base);
 QStringList slideProblems(const QString &source, const QString &base);
