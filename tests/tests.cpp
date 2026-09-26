@@ -3,6 +3,7 @@
 #include "filedialog.h"
 #include "renderer.h"
 #include "images.h"
+#include "mermaid.h"
 #include "syntax.h"
 #include <QApplication>
 #include <QAbstractTextDocumentLayout>
@@ -813,6 +814,140 @@ static void write(const QString &path, const QString &content) {
         QVERIFY(media.text.contains("<!-- Keep this code -->"));
         QVERIFY(slideProblems(source, "/tmp").isEmpty());
         QVERIFY(parseMedia("An inline `![](missing.png)` example.", "/tmp").file.isEmpty());
+    }
+    void mermaidDiagramIsSlideMedia() {
+        const QString source = "# Flow\n\n```mermaid\nflowchart LR\n  A --> B\n```\n";
+        auto media = parseMedia(source, "/tmp");
+        QCOMPARE(media.diagram, QString("flowchart LR\n  A --> B\n"));
+        QCOMPARE(media.text.trimmed(), QString("# Flow"));
+        QVERIFY(media.file.isEmpty());
+        QVERIFY(slideProblems(source, "/tmp").isEmpty());
+        // A mermaid fence shown inside another fence is only code.
+        QVERIFY(parseMedia("````markdown\n```mermaid\nflowchart\n```\n````", "/tmp").diagram.isEmpty());
+        QVERIFY(slideProblems(source + "\n![](photo.jpg)", "/tmp").join(' ').contains("one media item"));
+        const auto problems = slideProblems("```mermaid\nflowchart TD\n  A -> B\n```", "/tmp");
+        QCOMPARE(problems.size(), 1);
+        QVERIFY2(problems[0].startsWith("Mermaid line 2: "), qPrintable(problems[0]));
+        QVERIFY(slideProblems("```mermaid\nsequenceDiagram\n  A->>B: hi\n```", "/tmp")
+                    .join(' ').contains("sequenceDiagram isn't supported yet"));
+    }
+    void mermaidFlowchartSyntax() {
+        const QString everything = "---\ntitle: Everything\n---\nflowchart LR;\n"
+                                   "  A[Start] --> B{Ok?}\n"
+                                   "  B -- yes --> C([Done]); B -.->|no| A\n"
+                                   "  A ==> D[(DB)] & E((\"E #quot;quoted#quot;\"))\n"
+                                   "  D --- F>Flag] ~~~ G[/in/] --x H[\\out\\] <--> I[[Sub]]\n"
+                                   "  J@{ shape: cyl, label: \"Store\" } o--o K:::hot\n"
+                                   "  L{{Hex}} -. maybe .-> M[/Trap\\] == sure ==> N[\\Alt/] ----> O(((Twice)))\n"
+                                   "  classDef hot fill:#f00,color:#fff\n  class A,B hot\n  style A stroke:#0f0\n"
+                                   "  linkStyle 0 stroke:#fff\n  click A callback\n  %% a comment\n"
+                                   "  subgraph S [Group]\n    direction TB\n    P --> Q\n  end\n  S --> A\n";
+        QCOMPARE(mermaidProblem(everything), QString());
+        QCOMPARE(mermaidNodeRects(everything).size(), 18); // 17 nodes and the subgraph
+        QCOMPARE(mermaidProblem("flowchart TD\n  subgraph one\n    A --> B"),
+                 QString("Mermaid line 3: subgraph “one” needs an “end”"));
+        QVERIFY(mermaidProblem("flowchart TD\n  A[unclosed --> B").contains("closing bracket"));
+        QVERIFY(mermaidProblem("flowchart XY\n  A").contains("Unknown direction"));
+        QVERIFY(mermaidProblem("flowchart\n  A --> B\n  end").contains("without a subgraph"));
+        QVERIFY(mermaidProblem("flowchart\n  A@{ shape: blob }").contains("“blob” shape"));
+        QVERIFY(mermaidProblem("").contains("empty"));
+    }
+    void mermaidLayout() {
+        auto rects = mermaidNodeRects("flowchart TD\n  A --> B --> C\n  A --> C");
+        QVERIFY(rects["A"].bottom() < rects["B"].top() && rects["B"].bottom() < rects["C"].top());
+        rects = mermaidNodeRects("flowchart LR\n  A --> B\n  A --> C");
+        QVERIFY(rects["A"].right() < rects["B"].left() && rects["A"].right() < rects["C"].left());
+        QVERIFY(!rects["B"].intersects(rects["C"]));
+        rects = mermaidNodeRects("flowchart BT\n  A --> B");
+        QVERIFY(rects["A"].top() > rects["B"].bottom());
+        rects = mermaidNodeRects("flowchart RL\n  A --> B");
+        QVERIFY(rects["A"].left() > rects["B"].right());
+        // A single chain lines up exactly, without jogs.
+        rects = mermaidNodeRects("flowchart TD\n  A[Short] --> B[A much longer label] --> C((C))");
+        QCOMPARE(rects["A"].center().x(), rects["B"].center().x());
+        QCOMPARE(rects["B"].center().x(), rects["C"].center().x());
+        // Cycles still lay out, and subgraphs hold their nodes without overlapping others.
+        rects = mermaidNodeRects("flowchart TD\n  A --> B --> C --> A\n  subgraph S\n    B\n    C\n  end");
+        QVERIFY(rects["subgraph:S"].contains(rects["B"]) && rects["subgraph:S"].contains(rects["C"]));
+        QVERIFY(!rects["subgraph:S"].intersects(rects["A"]));
+        rects = mermaidNodeRects("flowchart TD\n  A-->B & C & D\n  B-->E\n  C-->E & F\n  D-->F\n  E-->G\n"
+                                 "  F-->G\n  A-->|skip|G\n  subgraph T\n    direction LR\n    X-->Y\n  end\n  G-->T");
+        const auto boxes = rects.values();
+        for (int i = 0; i < boxes.size(); ++i)
+            for (int j = i + 1; j < boxes.size(); ++j)
+                QVERIFY(!boxes[i].intersects(boxes[j]) || boxes[i].contains(boxes[j]) || boxes[j].contains(boxes[i]));
+        QVERIFY(rects["X"].right() < rects["Y"].left());
+    }
+    void mermaidLinksAvoidOtherNodes() {
+        const QStringList charts{
+            "flowchart TD\n  client[Client] --> api\n  subgraph backend [Backend]\n"
+            "    api[API] --> auth[Auth] --> jobs[Jobs] --> store[(Store)]\n  end\n"
+            "  admin[Admin] --> store\n  jobs --> mail[Mailer]",
+            "flowchart LR\n  user((User)) --> lb[Load balancer]\n  subgraph app [App servers]\n"
+            "    web1[Rails] & web2[Rails]\n  end\n  lb --> web1 & web2\n"
+            "  web1 & web2 --> db[(Postgres)]\n  web1 & web2 --> cache[(Redis)]",
+            "flowchart TB\n  subgraph vpc [VPC]\n    subgraph public [Public subnet]\n      lb[Load balancer]\n"
+            "    end\n    subgraph private [Private subnet]\n      app[App] --> worker[[Queue]]\n"
+            "      app --> db[(Primary)]\n      db -.-> replica[(Replica)]\n    end\n    lb ==> app\n  end\n"
+            "  internet{{Internet}} --> lb",
+            "flowchart LR\n  a --> b\n  subgraph one\n    b --> c --> d\n  end\n  subgraph two\n    e --> f --> g\n"
+            "  end\n  a --> f\n  d --> x\n  g --> x\n  c --> e"};
+        for (const QString &chart : charts) {
+            const auto rects = mermaidNodeRects(chart);
+            for (const auto &link : mermaidLinks(chart))
+                for (auto it = rects.cbegin(); it != rects.cend(); ++it) {
+                    if (it.key() == link.from || it.key() == link.to || it.key().startsWith("subgraph:"))
+                        continue;
+                    const QRectF inner = it.value().adjusted(3, 3, -3, -3);
+                    for (int step = 0; step <= 200; ++step)
+                        QVERIFY2(!inner.contains(link.path.pointAtPercent(step / 200.0)),
+                                 qPrintable(link.from + " → " + link.to + " crosses " + it.key()));
+                }
+            // A subgraph's box holds its own members and nothing else.
+            const QString members = chart.section("subgraph", 1);
+            for (auto box = rects.cbegin(); box != rects.cend(); ++box) {
+                if (!box.key().startsWith("subgraph:"))
+                    continue;
+                for (auto node = rects.cbegin(); node != rects.cend(); ++node)
+                    if (!node.key().startsWith("subgraph:") && box.value().intersects(node.value()))
+                        QVERIFY2(box.value().contains(node.value()),
+                                 qPrintable(node.key() + " straddles " + box.key()));
+            }
+        }
+        // Admin is linked only to Store, inside Backend: it stays outside the box.
+        const QString backend = charts[0];
+        QVERIFY(!mermaidNodeRects(backend)["subgraph:backend"].intersects(mermaidNodeRects(backend)["admin"]));
+    }
+    void mermaidRendersInThemeColors() {
+        const QVariantMap palette{{"background", "#1a1b26"}, {"foreground", "#c0caf5"},
+                                  {"accent", "#7aa2f7"}, {"font", "JetBrains Mono"}};
+        QImage image(960, 540, QImage::Format_ARGB32_Premultiplied);
+        QPainter painter(&image);
+        QString warning;
+        paintSlide(&painter, image.rect(), "# Flow\n\n```mermaid\nflowchart LR\n  A[Alpha] --> B[Beta]\n```",
+                   "/tmp", palette, &warning);
+        painter.end();
+        QVERIFY(warning.isEmpty());
+        int borders = 0, top = image.height(), bottom = 0;
+        for (int y = 0; y < image.height(); ++y)
+            for (int x = 0; x < image.width(); ++x)
+                if (QColor(image.pixel(x, y)) == QColor("#7aa2f7")) {
+                    ++borders;
+                    top = qMin(top, y);
+                    bottom = qMax(bottom, y);
+                }
+        QVERIFY(borders > 200);
+        // The diagram stays below the headline's band.
+        QVERIFY(top > 140 && bottom < 510);
+        // A sprawling chart still fits, and says when its text gets too small to read.
+        QString chain = "flowchart LR\n  N0";
+        for (int i = 1; i < 30; ++i)
+            chain += QString(" --> N%1[Step number %1]").arg(i);
+        image.fill(Qt::black);
+        painter.begin(&image);
+        paintSlide(&painter, image.rect(), "```mermaid\n" + chain + "\n```", "/tmp", palette, &warning);
+        painter.end();
+        QVERIFY(warning.contains("Diagram text"));
     }
     void pasteNamedMedia() {
         QTemporaryDir tmp;

@@ -1,5 +1,6 @@
 #include "renderer.h"
 #include "images.h"
+#include "mermaid.h"
 #include "syntax.h"
 #include <QAbstractTextDocumentLayout>
 #include <QCache>
@@ -95,6 +96,38 @@ static QString withoutComments(QString source) {
         source.remove(it->first, it->second);
     return source;
 }
+// The first ```mermaid fence on a slide is its diagram: take it out of the slide's text.
+static bool takeDiagram(QString &text, QString *diagram) {
+    static const QRegularExpression marker("^ {0,3}(`{3,}|~{3,})(.*)$");
+    int position = 0, fenceLength = 0, start = -1, body = 0;
+    QChar fence;
+    while (position < text.size()) {
+        int end = text.indexOf('\n', position);
+        if (end < 0)
+            end = text.size();
+        const auto match = marker.match(text.mid(position, end - position));
+        if (match.hasMatch()) {
+            const QString run = match.captured(1);
+            if (!fenceLength) {
+                fence = run[0];
+                fenceLength = run.size();
+                if (match.captured(2).trimmed().section(' ', 0, 0).compare("mermaid", Qt::CaseInsensitive) == 0) {
+                    start = position;
+                    body = qMin(int(text.size()), end + 1);
+                }
+            } else if (run[0] == fence && run.size() >= fenceLength && match.captured(2).trimmed().isEmpty()) {
+                fenceLength = 0;
+                if (start >= 0) {
+                    *diagram = text.mid(body, position - body);
+                    text.remove(start, qMin(int(text.size()), end + 1) - start);
+                    return true;
+                }
+            }
+        }
+        position = end + 1;
+    }
+    return false;
+}
 static QString assetPath(const QString &base, QString file, bool video) {
     if (QFileInfo(file).isAbsolute())
         return file;
@@ -154,6 +187,7 @@ QString withMediaDirectives(const QString &source, const QStringList &remove,
 static Media readMedia(const QString &source, const QString &base) {
     Media result;
     result.text = withoutComments(source);
+    takeDiagram(result.text, &result.diagram);
     auto m = mediaRe.match(outsideCode(result.text));
     if (!m.hasMatch())
         return result;
@@ -312,8 +346,11 @@ QStringList slideProblems(const QString &source, const QString &base) {
         matches.next();
         ++count;
     }
-    if (count > 1)
+    if (count + !media.diagram.isEmpty() > 1)
         errors << "Use one media item per slide (combine artwork before importing)";
+    if (!media.diagram.isEmpty())
+        if (const QString problem = mermaidProblem(media.diagram); !problem.isEmpty())
+            errors << problem;
     return errors;
 }
 static QImage loadedImage(const QString &path, QSize canvas, bool span) {
@@ -630,6 +667,17 @@ void paintSlide(QPainter *p, const QRectF &target, const QString &source, const 
                 palette["foreground"] = "#ffffff";
         } else if (!text.isEmpty())
             area = QRectF(130, 40, 1660, 205);
+    }
+    if (!media.diagram.isEmpty() && media.file.isEmpty()) {
+        // Like a video, a diagram under a headline leaves the headline a band at the top.
+        const QRectF rect = text.isEmpty() ? QRectF(70, 50, 1780, 980) : QRectF(100, 280, 1720, 730);
+        if (!text.isEmpty())
+            area = QRectF(130, 40, 1660, 205);
+        if (!overlayOnly && !backgroundOnly) {
+            const qreal size = paintMermaid(p, rect, media.diagram, palette);
+            if (size > 0 && size < 18 && warning)
+                *warning = "Diagram text renders below 18px on a 1080p slide";
+        }
     }
     if (backgroundOnly) {
         p->restore();

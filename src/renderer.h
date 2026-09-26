@@ -12,6 +12,7 @@ struct Media {
     bool video = false, span = false, loop = false, muted = false, autoplay = true;
     double overlay = 0;
     QString text;
+    QString diagram; // A ```mermaid fence, drawn where a picture would be
 };
 QRectF mediaRect(const Media &media);
 QImage softenedImage(const QImage &image, const QSizeF &slideSize);

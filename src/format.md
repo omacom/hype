@@ -87,6 +87,39 @@ Each slide takes one image or video. Options go inside the brackets:
 Text on an image slide is overlaid in white over a slightly darkened picture.
 An image with a headline spans the slide unless you say `fit`.
 
+## Diagrams
+
+A `mermaid` code block draws a Mermaid flowchart in the theme's colors and
+font. It counts as the slide's image, so a slide takes one image, video, or
+diagram, and a headline above it sits in a band at the top.
+
+````markdown
+# How a request flows
+
+```mermaid
+flowchart LR
+  user((User)) --> lb[Load balancer]
+  subgraph app [App servers]
+    web1[Rails] & web2[Rails]
+  end
+  lb --> web1 & web2
+  web1 & web2 --> db[(Postgres)]
+```
+````
+
+- Directions: `flowchart TD`, `LR`, `BT`, `RL`; a subgraph can set its own
+  `direction`, unless a link from outside reaches a node inside it. Then, as in
+  Mermaid, it follows the diagram's direction so the link can route around.
+- Shapes: `[box]`, `(rounded)`, `([stadium])`, `[[subroutine]]`,
+  `[(database)]`, `((circle))`, `(((double circle)))`, `{decision}`,
+  `{{hexagon}}`, `[/lean/]`, `[\lean\]`, `[/trapezoid\]`, `[\trapezoid/]`,
+  `>flag]`, and `A@{ shape: cyl, label: "Text" }`.
+- Links: `-->`, `---`, `-.->`, `==>`, `~~~` (invisible), `<-->`, `--o`,
+  `--x`; labels as `-->|text|` or `-- text -->`; more dashes make a link longer.
+- Colors: `classDef`, `class`, `:::name`, and `style` set fill, stroke, and color.
+- Only flowcharts are drawn; `hype check` reports any other diagram type and
+  every syntax error with its line within the diagram.
+
 ## Commands
 
 ```text

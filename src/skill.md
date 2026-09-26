@@ -14,7 +14,8 @@ You write the file with your ordinary editing tools; the `hype` command starts,
 checks, renders, and exports it. No command needs a display.
 
 Run `hype help format` first. It prints the whole slide format, including front
-matter, slide separators, and image and video options, for this version of Hype.
+matter, slide separators, image and video options, and Mermaid flowchart
+diagrams, for this version of Hype.
 
 ## Workflow
 
