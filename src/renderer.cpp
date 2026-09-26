@@ -16,6 +16,7 @@
 #include <QProcess>
 #include <QRegularExpression>
 #include <QSet>
+#include <QSvgRenderer>
 #include <QTemporaryFile>
 #include <QTextBlock>
 #include <QTextCursor>
@@ -23,6 +24,7 @@
 #include <QTextTable>
 #include <QTimer>
 #include <QWaitCondition>
+#include <QXmlStreamReader>
 
 static QRegularExpression mediaRe(R"(!\[([^\]]*)\]\((?:<([^>]+)>|([^\s)]+))\))");
 namespace {
@@ -227,13 +229,102 @@ static Media readMedia(const QString &source, const QString &base) {
     }
     return result;
 }
+// The first fence in this language: taken out of the text, its lines returned in body.
+static bool takeFence(QString &text, const QString &language, QString *body) {
+    static const QRegularExpression marker("^ {0,3}(`{3,}|~{3,})(.*)$");
+    int position = 0, fenceLength = 0, start = -1, content = 0;
+    QChar fence;
+    while (position < text.size()) {
+        int end = text.indexOf('\n', position);
+        if (end < 0)
+            end = text.size();
+        const auto match = marker.match(text.mid(position, end - position));
+        if (match.hasMatch()) {
+            const QString run = match.captured(1);
+            if (!fenceLength) {
+                fence = run[0];
+                fenceLength = run.size();
+                if (match.captured(2).trimmed().section(' ', 0, 0).compare(language, Qt::CaseInsensitive) == 0) {
+                    start = position;
+                    content = qMin(int(text.size()), end + 1);
+                }
+            } else if (run[0] == fence && run.size() >= fenceLength && match.captured(2).trimmed().isEmpty()) {
+                fenceLength = 0;
+                if (start >= 0) {
+                    *body = text.mid(content, position - content);
+                    text.remove(start, qMin(int(text.size()), end + 1) - start);
+                    return true;
+                }
+            }
+        }
+        position = end + 1;
+    }
+    return false;
+}
+// The deck's colors by name, as var(--accent), and its colors and font as the SVG's defaults,
+// so a drawing follows the theme unless it says otherwise.
+static QByteArray themedSvg(const QString &svg, const QVariantMap &palette) {
+    static const QRegularExpression variable(R"(var\(\s*--([a-z_-]+)\s*\))"), root("<svg\\b([^>]*)>");
+    QString themed;
+    int last = 0;
+    for (auto it = variable.globalMatch(svg); it.hasNext();) {
+        const auto m = it.next();
+        const QString value = palette.value(m.captured(1).replace('-', '_')).toString();
+        themed += svg.mid(last, m.capturedStart() - last) + (value.isEmpty() ? m.captured(0) : value);
+        last = m.capturedEnd();
+    }
+    themed += svg.mid(last);
+    if (const auto m = root.match(themed); m.hasMatch()) {
+        const QString attributes = m.captured(1), ink = palette.value("foreground").toString();
+        QString defaults;
+        if (!attributes.contains("xmlns="))
+            defaults += " xmlns=\"http://www.w3.org/2000/svg\"";
+        if (!attributes.contains(QRegularExpression("(^|\\s)color=")))
+            defaults += " color=\"" + ink + "\"";
+        if (!attributes.contains(QRegularExpression("(^|\\s)fill=")))
+            defaults += " fill=\"" + ink + "\"";
+        if (!attributes.contains("font-family="))
+            defaults += " font-family=\"" + palette.value("font", "JetBrains Mono").toString() + "\"";
+        themed.insert(m.capturedStart(1), defaults);
+    }
+    return themed.toUtf8();
+}
+// Why an ```svg fence can't be drawn, or empty when it can. Lines count within the fence.
+static QString svgProblem(const QString &svg) {
+    QXmlStreamReader xml(svg);
+    bool first = true;
+    while (!xml.atEnd()) {
+        if (xml.readNext() == QXmlStreamReader::StartElement && first) {
+            first = false;
+            if (xml.name() != QLatin1String("svg"))
+                return "An svg block holds one <svg> element";
+        }
+    }
+    if (xml.hasError())
+        return QString("SVG line %1: %2").arg(xml.lineNumber()).arg(xml.errorString());
+    static const QRegularExpression variable(R"(var\(\s*--([a-z_-]+)\s*\))");
+    static const QStringList colors{"background", "foreground", "accent", "green", "red",
+                                    "yellow", "magenta", "cyan", "dark_foreground", "font"};
+    for (auto it = variable.globalMatch(svg); it.hasNext();) {
+        const QString name = it.next().captured(1);
+        if (!colors.contains(QString(name).replace('-', '_')))
+            return "Unknown theme color --" + name + "; use --" + colors.mid(0, 9).join(", --").replace('_', '-');
+    }
+    QSvgRenderer renderer(themedSvg(svg, {{"foreground", "#000000"}}));
+    if (!renderer.isValid())
+        return "Qt can't draw this SVG";
+    if (renderer.viewBoxF().isEmpty())
+        return "Give the SVG a viewBox, or a width and height";
+    return {};
+}
 Media parseMedia(const QString &source, const QString &base) {
     // Parsing is pure: file existence and modification checks remain at call sites.
     static thread_local QCache<QString, Media> cache(8 * 1024 * 1024);
     const QString key = base + QChar(0) + source;
     if (const auto result = cache.object(key))
         return *result;
-    const auto result = readMedia(source, base);
+    auto result = readMedia(source, base);
+    takeFence(result.text, "svg", &result.svg);
     cache.insert(key, new Media(result), qMax(1, int((key.size() + result.text.size()) * 2)));
     return result;
 }
@@ -299,6 +390,12 @@ QStringList slideProblems(const QString &source, const QString &base) {
     auto media = parseMedia(source, base);
     if (!media.error.isEmpty())
         errors << media.error;
+    if (!media.svg.isEmpty()) {
+        if (!media.file.isEmpty())
+            errors << "Use one media item per slide (combine artwork before importing)";
+        if (const QString problem = svgProblem(media.svg); !problem.isEmpty())
+            errors << problem;
+    }
     if (!media.file.isEmpty() && !QFileInfo::exists(media.path))
         errors << "Missing media: " + media.file;
     if (!media.file.isEmpty() && !media.video && QFileInfo::exists(media.path) &&
@@ -545,6 +642,19 @@ void paintSlide(QPainter *p, const QRectF &target, const QString &source, const 
     QString text = media.text.trimmed();
     auto problems = slideProblems(source, base);
     QRectF area(130, 90, 1660, 900);
+    if (!media.svg.isEmpty() && media.file.isEmpty()) {
+        // Like a video, a drawing under a headline leaves the headline a band at the top.
+        const QRectF rect = text.isEmpty() ? QRectF(70, 50, 1780, 980) : QRectF(100, 280, 1720, 730);
+        if (!text.isEmpty())
+            area = QRectF(130, 40, 1660, 205);
+        QSvgRenderer svg(themedSvg(media.svg, palette));
+        if (!overlayOnly && !backgroundOnly && svg.isValid() && !svg.viewBoxF().isEmpty()) {
+            QSizeF size = svg.viewBoxF().size();
+            size.scale(rect.size(), Qt::KeepAspectRatio);
+            svg.setAspectRatioMode(Qt::KeepAspectRatio);
+            svg.render(p, QRectF(rect.center() - QPointF(size.width(), size.height()) / 2, size));
+        }
+    }
     if (!media.file.isEmpty()) {
         QString path =
             media.video ? (media.poster.isEmpty() ? ensurePoster(media.path, base) : media.poster)

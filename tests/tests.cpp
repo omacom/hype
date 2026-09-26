@@ -786,6 +786,50 @@ static void write(const QString &path, const QString &content) {
         QVERIFY(f.open(QIODevice::ReadOnly));
         QCOMPARE(f.readAll(), QByteArray("# External\n"));
     }
+    void inlineSvg() {
+        const QString chart = "# Growth\n\n```svg\n<svg viewBox=\"0 0 200 100\">\n"
+                              "  <rect width=\"200\" height=\"100\" fill=\"var(--accent)\"/>\n"
+                              "  <text x=\"10\" y=\"50\">Requests per second</text>\n</svg>\n```\n";
+        const auto media = parseMedia(chart, "/tmp");
+        QVERIFY(media.svg.startsWith("<svg viewBox"));
+        QCOMPARE(media.text.trimmed(), QString("# Growth"));
+        QVERIFY(media.file.isEmpty());
+        QVERIFY(slideProblems(chart, "/tmp").isEmpty());
+        // Mistakes name their line within the block, or what to use instead.
+        QVERIFY(slideProblems("```svg\n<svg viewBox=\"0 0 1 1\">\n<rect>\n</svg>\n```", "/tmp")
+                    .value(0).startsWith("SVG line 3: "));
+        QVERIFY(slideProblems("```svg\n<svg viewBox=\"0 0 1 1\"><rect fill=\"var(--purple)\"/></svg>\n```", "/tmp")
+                    .value(0).startsWith("Unknown theme color --purple; use --background"));
+        QVERIFY(slideProblems("```svg\n<svg><rect/></svg>\n```", "/tmp").value(0).contains("viewBox"));
+        QVERIFY(slideProblems("![](photo.jpg)\n\n```svg\n<svg viewBox=\"0 0 1 1\"/>\n```", "/tmp")
+                    .join(' ').contains("one media item"));
+        // Drawn in the theme's colors, below the headline's band.
+        QVariantMap palette{{"background", "#1a1b26"}, {"foreground", "#c0caf5"}, {"accent", "#7aa2f7"},
+                            {"font", "JetBrains Mono"}};
+        auto drawn = [&] {
+            QImage image(960, 540, QImage::Format_ARGB32_Premultiplied);
+            QPainter painter(&image);
+            paintSlide(&painter, image.rect(), chart, "/tmp", palette);
+            return image;
+        };
+        QImage image = drawn();
+        QCOMPARE(image.pixelColor(480, 300), QColor("#7aa2f7"));
+        QCOMPARE(image.pixelColor(480, 100), QColor("#1a1b26"));
+        palette["accent"] = "#e0af68";
+        QCOMPARE(drawn().pixelColor(480, 300), QColor("#e0af68"));
+        // In a PDF it stays vector: text, and no embedded picture.
+        QTemporaryDir tmp;
+        write(tmp.path() + "/talk.md", chart);
+        Deck deck;
+        QVERIFY(deck.loadPath(tmp.path() + "/talk.md"));
+        QVERIFY(deck.exportPdf(tmp.path() + "/talk.pdf"));
+        QPdfDocument pdf;
+        QCOMPARE(pdf.load(tmp.path() + "/talk.pdf"), QPdfDocument::Error::None);
+        QVERIFY(pdf.getAllText(0).text().contains("Requests per second"));
+        QFile file(tmp.path() + "/talk.pdf");
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        QVERIFY(!file.readAll().contains("/Subtype /Image"));
+    }
     void mediaDefaultsAndDirectives() {
         auto m = parseMedia("![](<City at night.JPG>)\n\n# Hello", "/tmp/deck");
         QCOMPARE(m.path, QString("/tmp/deck/images/City at night.JPG"));
