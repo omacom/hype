@@ -95,12 +95,6 @@ ApplicationWindow {
             return
         }
         let control = event.modifiers & Qt.ControlModifier
-        if (!win.markdown && editor === slideEditor && event.modifiers === Qt.NoModifier &&
-            (event.key === Qt.Key_Home || event.key === Qt.Key_End)) {
-            event.accepted = true
-            deck.select(event.key === Qt.Key_Home ? 0 : deck.count - 1)
-            return
-        }
         if (control && event.key === Qt.Key_Z) {
             event.accepted = true
             event.modifiers & Qt.ShiftModifier ? deck.redo() : deck.undo()
@@ -814,13 +808,13 @@ ApplicationWindow {
                 ["? / F1", "Show these shortcuts"] ] },
             { title: "Slides", keys: [
                 ["Arrows", "Previous or next slide, by row in Overview"], ["Page Up / Page Down", "Jump five slides, or five rows in Overview"],
-                ["Home / End", "First or last slide"], ["Shift+Arrows", "Extend the selection"],
+                ["Home / End", "First or last slide when focused in Slides list"], ["Shift+Arrows", "Extend the selection"],
                 ["Ctrl+Arrows", "Move selected slides"], ["Ctrl+Enter", "Add a slide"],
                 ["Ctrl+D", "Duplicate"], ["Delete", "Delete"] ] },
             { title: "Editing", keys: [
                 ["Ctrl+B", "Bold"], ["Ctrl+I", "Italic"], ["Ctrl+U", "Underline"], ["Ctrl+H", "Headline"], ["Ctrl+K", "Code block"],
                 ["Ctrl+/", "Comment, hidden on slide"],
-                ["Ctrl+Z", "Undo"], ["Ctrl+Shift+Z", "Redo"], ["Ctrl+V", "Paste text, or add and name media"] ] }
+                ["Home / End", "Start or end of the line"], ["Ctrl+Z", "Undo"], ["Ctrl+Shift+Z", "Redo"], ["Ctrl+V", "Paste text, or add and name media"] ] }
         ]
         contentItem: ColumnLayout {
             spacing: 22; focus: true

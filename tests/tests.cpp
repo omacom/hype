@@ -1908,10 +1908,16 @@ class HypeTests : public QObject {
         editor->forceActiveFocus();
         QVERIFY(editor->hasActiveFocus());
         const QString beforeJump = d.source();
+        const QString editText = editor->property("text").toString();
+        const int lineEnd = editText.indexOf('\n') < 0 ? editText.size() : editText.indexOf('\n');
+        QVERIFY(lineEnd > 2);
+        editor->setProperty("cursorPosition", 2);
         QTest::keyClick(window, Qt::Key_End);
-        QCOMPARE(d.selected(), d.count() - 1);
+        QCOMPARE(d.selected(), 20);
+        QCOMPARE(editor->property("cursorPosition").toInt(), lineEnd);
         QTest::keyClick(window, Qt::Key_Home);
-        QCOMPARE(d.selected(), 0);
+        QCOMPARE(d.selected(), 20);
+        QCOMPARE(editor->property("cursorPosition").toInt(), 0);
         QCOMPARE(d.source(), beforeJump);
         d.select(20);
         const QString beforeTab = d.source();
