@@ -9,6 +9,7 @@
 class QTextDocument;
 struct Media {
     QString file, path, poster, error, background;
+    QString svg; // A ```svg fence, drawn as vectors where a picture would be
     bool video = false, span = false, loop = false, muted = false, autoplay = true;
     double overlay = 0;
     QString text;

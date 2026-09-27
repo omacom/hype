@@ -125,6 +125,19 @@ For videos, choose **Background → Blurred first frame**, or write `![fit backg
 
 **Background → Match image edges** also works with videos: `![fit background=auto](portrait.mp4)`. It samples the edges of the first frame and keeps that background color during playback, even with a custom poster. Selecting it switches spanning videos to fit.
 
+To draw something yourself, write SVG in an `svg` code block. It takes the place of the slide's image, stays sharp, and stays vector in PDF. Name the theme's colors as `var(--accent)`, `var(--foreground)`, and so on, and the drawing follows the theme; shapes and text without colors of their own take the theme's text color, and text takes the presentation's font:
+
+````markdown
+# Requests per second
+
+```svg
+<svg viewBox="0 0 300 120">
+  <rect x="20" y="60" width="60" height="60" fill="var(--dark-foreground)"/>
+  <rect x="120" y="20" width="60" height="100" fill="var(--accent)"/>
+</svg>
+```
+````
+
 Animated WebP and GIF images play inline in the preview and while presenting. Use the usual image syntax, such as `![](demo.webp)`, with the file in `images/`. Space pauses or resumes animations while presenting; PowerPoint exports automatically convert them to embedded MP4 videos, preserving the slide layout and playback settings. PDF exports capture their first frame.
 
 Each slide supports one image or video. Copy the whole presentation folder when sharing or moving it.
