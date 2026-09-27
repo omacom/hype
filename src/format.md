@@ -83,9 +83,16 @@ Each slide takes one image or video. Options go inside the brackets:
 | `![loop muted](demo.mp4)` | Loop a video without sound |
 | `![autoplay=false](demo.mp4)` | Wait for Space to play the video |
 | `![poster=still.png](demo.mp4)` | Show an image from `images/` until it plays |
+| `![position=bottom-right size=10%](logo.png)` | Place a small image, such as a logo, in a corner |
 
 Text on an image slide is overlaid in white over a slightly darkened picture.
 An image with a headline spans the slide unless you say `fit`.
+
+A placed image leaves the slide's text and theme colors alone. `position` is
+`top-left`, `top`, `top-right`, `left`, `center`, `right`, `bottom-left`,
+`bottom`, or `bottom-right`; `size` is the share of the slide it may fill, from
+1% to 100% (default 10%). Placement is for images only and cannot be combined
+with `fit`, `span`, `background`, or `overlay`.
 
 ## Commands
 

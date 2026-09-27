@@ -617,6 +617,47 @@ static void write(const QString &path, const QString &content) {
         window->setProperty("allowClose", true);
         window->close();
     }
+    void placeMenuPlacesImage() {
+        if (!qEnvironmentVariableIsSet("HYPE_GUI_TESTS")) QSKIP("Set HYPE_GUI_TESTS=1");
+        Deck deck; deck.editSource("# Headline\n\n![](logo.png)\n");
+        QQuickStyle::setStyle("Basic");
+        qmlRegisterType<SlideItem>("Hype", 1, 0, "SlideCanvas");
+        qmlRegisterType<AppTheme>("Hype", 1, 0, "AppTheme");
+        QQmlApplicationEngine engine;
+        engine.rootContext()->setContextProperty("deck", &deck);
+        engine.addImageProvider("slides", new Thumbnails(&deck));
+        engine.load(QUrl("qrc:/Main.qml"));
+        QVERIFY(!engine.rootObjects().isEmpty());
+        auto window = qobject_cast<QQuickWindow *>(engine.rootObjects().first());
+        auto place = window->findChild<QObject *>("placeMenu");
+        QVERIFY(place);
+        QTRY_COMPARE(place->property("count").toInt(), 9);
+        QQuickItem *bottomRight = nullptr;
+        QVERIFY(QMetaObject::invokeMethod(place, "itemAt", Q_RETURN_ARG(QQuickItem *, bottomRight), Q_ARG(int, 8)));
+        QVERIFY(bottomRight);
+        QCOMPARE(bottomRight->property("text").toString(), QString("Bottom right"));
+        QVERIFY(QMetaObject::invokeMethod(bottomRight, "triggered"));
+        QCOMPARE(parseMedia(deck.slideSource(), {}).position, QString("bottom-right"));
+        QTRY_VERIFY(bottomRight->property("checked").toBool());
+        // Small, the default size, is checked; backgrounds are off while placed.
+        auto size = window->findChild<QObject *>("sizeMenu");
+        QVERIFY(size);
+        QQuickItem *small = nullptr;
+        QVERIFY(QMetaObject::invokeMethod(size, "itemAt", Q_RETURN_ARG(QQuickItem *, small), Q_ARG(int, 0)));
+        QTRY_VERIFY(small->property("checked").toBool());
+        QVERIFY(size->property("enabled").toBool());
+        auto white = window->findChild<QObject *>("whiteBackgroundItem");
+        QVERIFY(white);
+        QTRY_VERIFY(!white->property("enabled").toBool());
+        deck.setMediaMode("fit");
+        QTRY_VERIFY(white->property("enabled").toBool());
+        QTRY_VERIFY(!size->property("enabled").toBool());
+        // Videos cannot be placed.
+        deck.editSlide("![](demo.mp4)");
+        QTRY_VERIFY(!place->property("enabled").toBool());
+        window->setProperty("allowClose", true);
+        window->close();
+    }
     void fencesAndFrontMatter() {
         QString source = "---\ntitle: Test\n---\n\n# "
                          "One\n\n---\n\n````ruby\n---\n```\n````\n\n---\n\n~~~sh\n---\n~~~\n";
@@ -806,6 +847,92 @@ static void write(const QString &path, const QString &content) {
         m = parseMedia("![left](photo.jpg)\n\n# Text", "/tmp/deck");
         QVERIFY(m.error.isEmpty());
         QVERIFY(m.span);
+    }
+    void placedImageDirectives() {
+        auto m = parseMedia("# Headline\n\n![position=bottom-right size=10%](logo.png)", "/tmp/deck");
+        QVERIFY(m.error.isEmpty());
+        QVERIFY(m.placed());
+        QCOMPARE(m.position, QString("bottom-right"));
+        QCOMPARE(m.size, 10.0);
+        QVERIFY(!m.span); // A headline no longer makes the image span.
+        QCOMPARE(m.overlay, 0.0);
+        QCOMPARE(mediaRect(m), QRectF(1920 - 60 - 192, 1080 - 60 - 108, 192, 108));
+        m = parseMedia("![position=top-left size=50%](logo.png)", "/tmp/deck");
+        QCOMPARE(mediaRect(m), QRectF(60, 60, 960, 540));
+        m = parseMedia("![position=top](logo.png)", "/tmp/deck");
+        QVERIFY(m.error.isEmpty());
+        QCOMPARE(m.size, 10.0);
+        QCOMPARE(mediaRect(m), QRectF((1920 - 192) / 2.0, 60, 192, 108));
+        m = parseMedia("![size=20%](logo.png)", "/tmp/deck");
+        QVERIFY(m.error.isEmpty());
+        QCOMPARE(m.position, QString("center"));
+        QCOMPARE(mediaRect(m), QRectF((1920 - 384) / 2.0, (1080 - 216) / 2.0, 384, 216));
+        QCOMPARE(parseMedia("![size=12.5%](logo.png)", "/tmp/deck").size, 12.5);
+        QVERIFY(!parseMedia("![](logo.png)", "/tmp/deck").placed());
+        // Every position maps to one alignment, shared by painting and the preview.
+        QCOMPARE(mediaPositions().size(), 9);
+        QCOMPARE(parseMedia("![](logo.png)", "/tmp/deck").alignment, Qt::AlignCenter);
+        QCOMPARE(parseMedia("![position=bottom-right](logo.png)", "/tmp/deck").alignment,
+                 Qt::AlignRight | Qt::AlignBottom);
+        QCOMPARE(parseMedia("![position=left](logo.png)", "/tmp/deck").alignment,
+                 Qt::AlignLeft | Qt::AlignVCenter);
+        QCOMPARE(parseMedia("![position=top](logo.png)", "/tmp/deck").alignment,
+                 Qt::AlignHCenter | Qt::AlignTop);
+        for (const QString &bad : {QString("position=middle"), QString("size=0%"),
+                                   QString("size=101%"), QString("size=10"),
+                                   QString("size=nan%"), QString("size=NaN%"),
+                                   QString("size=1e1%"), QString("size=%"), QString("size=-5%"),
+                                   QString("fit position=left"), QString("span size=10%"),
+                                   QString("position=left background=white"),
+                                   QString("position=left overlay=0.5")}) {
+            const auto invalid = parseMedia("![" + bad + "](logo.png)", "/tmp/deck");
+            QVERIFY2(!invalid.error.isEmpty(), qPrintable(bad));
+            QVERIFY2(qIsFinite(mediaRect(invalid).width()), qPrintable(bad));
+        }
+        QVERIFY(!parseMedia("![position=left](demo.mp4)", "/tmp/deck").error.isEmpty());
+        // Errors never echo the author's value, which may hold markup.
+        QCOMPARE(parseMedia("![position=\"<b>x</b>\"](logo.png)", "/tmp/deck").error,
+                 QString("Unknown position"));
+    }
+    void placedImageKeepsThemeLayout() {
+        QTemporaryDir tmp;
+        QVERIFY(QDir().mkpath(tmp.path() + "/images"));
+        QImage logo(40, 20, QImage::Format_RGB32);
+        logo.fill(Qt::red);
+        QVERIFY(logo.save(tmp.path() + "/images/logo.png"));
+        Deck deck;
+        QVERIFY(deck.savePath(tmp.path() + "/talk.md"));
+        const QString source = "# Headline\n\n![position=bottom-right size=10%](logo.png)";
+        QImage slide(1920, 1080, QImage::Format_ARGB32_Premultiplied);
+        QPainter p(&slide);
+        paintSlide(&p, slide.rect(), source, deck.baseDir(), deck.palette());
+        p.end();
+        // A 2:1 logo in a 192x108 box is 192x96, pinned to the bottom-right margin.
+        QCOMPARE(slide.pixelColor(1850, 1010), QColor(Qt::red));
+        QCOMPARE(slide.pixelColor(1675, 930), QColor(Qt::red));
+        const QColor background(deck.palette()["background"].toString());
+        QCOMPARE(slide.pixelColor(1850, 915), background);
+        QCOMPARE(slide.pixelColor(10, 10), background); // No overlay or edge-color fill.
+        // The PDF places the logo in the same corner.
+        deck.editSource(source);
+        QVERIFY(deck.exportPdf(tmp.filePath("talk.pdf")));
+        QPdfDocument pdf;
+        QCOMPARE(pdf.load(tmp.filePath("talk.pdf")), QPdfDocument::Error::None);
+        const QImage page = pdf.render(0, QSize(1920, 1080));
+        const QColor corner = page.pixelColor(1850, 1010), outside = page.pixelColor(1850, 900);
+        QVERIFY2(corner.red() > 200 && corner.green() < 60, qPrintable(corner.name()));
+        QVERIFY2(outside.red() < 100, qPrintable(outside.name()));
+        // A missing placed image keeps its placeholder inside the small box.
+        slide.fill(Qt::transparent);
+        p.begin(&slide);
+        paintSlide(&p, slide.rect(), "![position=bottom-right size=10%](gone.png)", deck.baseDir(),
+                   deck.palette());
+        p.end();
+        const QRectF box = mediaRect(parseMedia("![position=bottom-right size=10%](gone.png)", {}));
+        for (int y = 0; y < 1000; ++y) // The error banner fills the bottom 80 pixels.
+            for (int x = 0; x < 1920; ++x)
+                if (!box.contains(x, y) && slide.pixelColor(x, y) != background)
+                    QFAIL(qPrintable(QString("Placeholder drawn outside its box at %1,%2").arg(x).arg(y)));
     }
     void codeIsNotMedia() {
         QString source = "```markdown\n![](missing.png)\n<!-- Keep this code -->\n```";
@@ -1310,6 +1437,13 @@ static void write(const QString &path, const QString &content) {
         const int paused = animation->property("currentFrame").toInt();
         QTest::qWait(450);
         QCOMPARE(animation->property("currentFrame").toInt(), paused);
+        // A placed animation hugs its corner of the small box, like the rendered slide.
+        QCOMPARE(animation->property("horizontalAlignment").toInt(), int(Qt::AlignHCenter));
+        d.editSlide("# Headline\n\n![position=bottom-right size=20%](demo.webp)");
+        QTRY_COMPARE(animation->property("horizontalAlignment").toInt(), int(Qt::AlignRight));
+        QCOMPARE(animation->property("verticalAlignment").toInt(), int(Qt::AlignBottom));
+        d.editSlide("![fit background=#123456](demo.webp)");
+        QTRY_COMPARE(animation->property("horizontalAlignment").toInt(), int(Qt::AlignHCenter));
         window->setProperty("markdown", true);
         QTRY_VERIFY(!loader->property("active").toBool());
         QTRY_VERIFY(!loader->property("item").value<QObject *>());
@@ -2219,6 +2353,88 @@ static void write(const QString &path, const QString &content) {
         const QString original = d.source();
         d.setMediaMode("invalid");
         QCOMPARE(d.source(), original);
+    }
+    void placementControls() {
+        Deck d;
+        d.editSlide("# Headline\n![span background=blur alt=\"Company\"](logo.png)");
+        d.setMediaPosition("bottom-right");
+        auto m = parseMedia(d.slideText(), {});
+        QVERIFY2(m.error.isEmpty(), qPrintable(m.error));
+        QCOMPARE(m.position, QString("bottom-right"));
+        QCOMPARE(m.size, 10.0);
+        QVERIFY(m.background.isEmpty());
+        QVERIFY(d.slideText().contains("alt=\"Company\""));
+        QCOMPARE(d.media()["position"].toString(), QString("bottom-right"));
+        QCOMPARE(d.media()["size"].toDouble(), 10.0);
+        QCOMPARE(d.media()["alignment"].toInt(), int(Qt::AlignRight | Qt::AlignBottom));
+        QCOMPARE(d.property("mediaPositions").toStringList(), mediaPositions());
+        d.setMediaSize(12.5);
+        QCOMPARE(parseMedia(d.slideText(), {}).size, 12.5);
+        d.setMediaSize(20);
+        QCOMPARE(parseMedia(d.slideText(), {}).size, 20.0);
+        d.setMediaPosition("top-left");
+        m = parseMedia(d.slideText(), {});
+        QCOMPARE(m.position, QString("top-left"));
+        QCOMPARE(m.size, 20.0); // Moving keeps the chosen size.
+        d.setMediaMode("fit");
+        m = parseMedia(d.slideText(), {});
+        QVERIFY(m.error.isEmpty());
+        QVERIFY(!m.placed());
+        const QString unplaced = d.source();
+        d.setMediaSize(10); // Size only applies to placed images.
+        QCOMPARE(d.source(), unplaced);
+        d.setMediaPosition("nowhere");
+        QCOMPARE(d.source(), unplaced);
+        d.editSlide("![](demo.mp4)");
+        const QString video = d.source();
+        d.setMediaPosition("bottom-right");
+        QCOMPARE(d.source(), video);
+        // Choosing a background returns a placed image to a full layout.
+        d.editSlide("![position=bottom-right size=20%](logo.png)");
+        d.setMediaBackground("white");
+        m = parseMedia(d.slideText(), {});
+        QVERIFY2(m.error.isEmpty(), qPrintable(m.error));
+        QVERIFY(!m.placed());
+        QCOMPARE(m.background, QString("white"));
+    }
+    void replacingPlacedMediaKeepsPlacement() {
+        const QString placed = "# Headline\n\n![position=bottom-right size=20% alt=\"Old\"](old.png)\n";
+        auto m = parseMedia(withReplacedMedia(placed, "new.png"), {});
+        QCOMPARE(m.file, QString("new.png"));
+        QCOMPARE(m.position, QString("bottom-right"));
+        QCOMPARE(m.size, 20.0);
+        QVERIFY(m.error.isEmpty());
+        // Videos cannot be placed, and unplaced media is replaced as before.
+        QVERIFY(!parseMedia(withReplacedMedia(placed, "demo.mp4"), {}).placed());
+        QVERIFY(parseMedia(withReplacedMedia(placed, "demo.mp4"), {}).error.isEmpty());
+        QCOMPARE(withReplacedMedia("# Headline\n![fit](old.png)", "new.png"),
+                 QString("# Headline\n![](<new.png>)"));
+        QCOMPARE(withReplacedMedia("# Headline", "new.png"), QString("# Headline\n![](<new.png>)\n"));
+
+        // Importing a file onto a placed slide keeps it in the corner.
+        QTemporaryDir tmp;
+        Deck deck;
+        QVERIFY(deck.savePath(tmp.path() + "/talk.md"));
+        QImage logo(40, 20, QImage::Format_RGB32);
+        logo.fill(Qt::red);
+        QVERIFY(logo.save(tmp.path() + "/new.png"));
+        deck.editSlide(placed);
+        QVERIFY(deck.importMedia(QUrl::fromLocalFile(tmp.path() + "/new.png")));
+        m = parseMedia(deck.slideSource(), deck.baseDir());
+        QCOMPARE(m.position, QString("bottom-right"));
+
+        // Pasted images for a placed slide are sized for its box, not the whole 4K slide.
+        deck.editSlide(placed);
+        QImage large(4800, 3600, QImage::Format_RGB32);
+        large.fill(Qt::blue);
+        QApplication::clipboard()->setImage(large);
+        QVERIFY(deck.pasteMedia());
+        QTRY_VERIFY_WITH_TIMEOUT(!deck.compressingImage(), 10000);
+        QVERIFY(deck.savePastedMedia("pasted").isEmpty());
+        m = parseMedia(deck.slideSource(), deck.baseDir());
+        QCOMPARE(m.position, QString("bottom-right"));
+        QCOMPARE(m.size, 20.0);
+        QCOMPARE(QImage(m.path).size(), QSize(576, 432)); // A 4:3 image in a 20% box at 4K (768x432).
     }
     void mediaImportCollisionAndPortability() {
         QTemporaryDir tmp;

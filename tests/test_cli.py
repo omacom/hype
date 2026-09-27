@@ -1,6 +1,7 @@
 """Exercise the headless commands as an agent would: no display, only files and JSON."""
 import json
 import os
+import shutil
 from pathlib import Path
 import struct
 import subprocess
@@ -65,6 +66,16 @@ class CliTests(unittest.TestCase):
         text = self.hype('check', self.deck, code=1)
         self.assertIn('talk/presentation.md:20: slide 4 error: Missing media: missing.png', text.stderr)
         self.assertIn('6 slides, 3 errors, 1 warnings', text.stdout)
+
+    def test_check_reports_invalid_placement(self):
+        self.write('# One\n\n![position=middle](logo.gif)\n\n---\n\n![position=left size=nan%](logo.gif)\n')
+        (self.deck.parent / 'images').mkdir()
+        shutil.copy2(Path(__file__).parent / 'fixtures/animated.gif', self.deck.parent / 'images/logo.gif')
+        problems = json.loads(self.hype('check', self.deck, '--json', code=1).stdout)['problems']
+        self.assertEqual([(p['slide'], p['line'], p['message']) for p in problems],
+                         [(1, 1, 'Unknown position'), (2, 7, 'Size must be a percentage from 1% to 100%')])
+        self.write('# One\n\n![position=bottom-right size=10%](logo.gif)\n')
+        self.assertEqual(json.loads(self.hype('check', self.deck, '--json').stdout)['problems'], [])
 
     def test_check_locates_an_unclosed_fence_and_warns_about_cramped_text(self):
         self.write('# One\n\n---\n\n```ruby\na = 1\n')
