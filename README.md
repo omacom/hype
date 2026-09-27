@@ -2,7 +2,7 @@
 
 Simple presentations, written in Markdown. Big headlines, images, video, and code—with a visual editor to put everything in order.
 
-Hype is a native app for Omarchy. Your presentation is a Markdown file with its media alongside it. Choose an installed Omarchy theme, pick a font, and export to PDF or PowerPoint.
+Hype is a native presentation app for Omarchy. Your presentation is a Markdown file with its media alongside it. Choose an Omarchy theme, pick a font, and export to PDF or PowerPoint.
 
 ## Install
 
@@ -131,7 +131,9 @@ Each slide supports one image or video. Copy the whole presentation folder when 
 
 ## Choose your look
 
-The palette and font icons in the toolbar choose an installed Omarchy theme and a presentation font. Hover to see the current choices. Theme colors apply to text, code, and slide backgrounds; your images keep their original colors. Code stays monospaced. Hype’s interface follows your current desktop theme independently and updates when you change it.
+The palette and font icons in the toolbar choose an Omarchy theme and a presentation font. Hype includes the 22 stock Omarchy color palettes, so the theme picker also works on Mint and other Linux desktops without Omarchy installed. Hover to see the current choices. Theme colors apply to text, code, and slide backgrounds; your images keep their original colors. Code stays monospaced. Without Omarchy, the selected presentation theme also colors the whole editor. On Omarchy, Hype’s interface follows your current desktop theme independently and updates when you change it.
+
+Installed theme files with the same name take precedence over Hype’s included palette. You can also list available palettes with `hype themes`.
 
 The header shows the presentation's name with your position in it, such as “Slide 4 of 45”; saving and exporting report their progress on that line. The file icon beside it holds New, Open, Save, Export, and Version history, and is highlighted when you have unsaved changes.
 

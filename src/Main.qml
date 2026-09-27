@@ -11,7 +11,7 @@ ApplicationWindow {
     width: 1400; height: 900; minimumWidth: 900; minimumHeight: 600
     visible: true
     title: deck.title + (deck.dirty ? " •" : "") + " — Hype"
-    AppTheme { id: appTheme }
+    AppTheme { id: appTheme; presentationPalette: deck.palette }
     readonly property var ui: appTheme.colors
     readonly property int rounding: appTheme.rounding
     // Small controls soften only when the desktop theme rounds its windows.

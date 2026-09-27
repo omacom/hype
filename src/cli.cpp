@@ -74,7 +74,7 @@ QList<Problem> findProblems(const Deck &deck) {
     if (!scalar(parsed.header, "theme").isEmpty() && !deck.themeNames().contains(deck.themeName()) &&
         scalar(parsed.header, "color_background").isEmpty())
         problems << Problem{0, headerLine("theme"), false,
-                            "Theme " + deck.themeName() + " is not installed; using the default colors"};
+                            "Theme " + deck.themeName() + " is unavailable; using the default colors"};
     QList<int> indices;
     for (int i = 0; i < deck.count(); ++i)
         indices << i;
@@ -315,7 +315,7 @@ int create(const QStringList &arguments) {
     Deck deck;
     const QString theme = command.parser.value("theme");
     if (!theme.isEmpty() && !deck.themeNames().contains(theme))
-        return fail("Theme " + theme + " is not installed. Installed: " + deck.themeNames().join(", "));
+        return fail("Theme " + theme + " is unavailable. Available: " + deck.themeNames().join(", "));
     const QString font = command.parser.value("font");
     if (!font.isEmpty() && font != deck.fontName() && !deck.fontNames().contains(font))
         return fail("Font " + font + " is not installed.");
@@ -341,7 +341,7 @@ int create(const QStringList &arguments) {
 }
 
 int themes(const QStringList &arguments) {
-    Command command("themes", "List the installed themes.", false);
+    Command command("themes", "List the available themes.", false);
     command.json();
     command.parser.process(arguments);
     const Deck deck;
