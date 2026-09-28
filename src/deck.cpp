@@ -799,6 +799,7 @@ bool Deck::saveCopyPath(const QString &path) {
     QList<QPair<QString, QString>> copies;
     // Check every collision before publishing anything; compare streams so a
     // large video never requires two whole-file buffers in the editor.
+    const QString stagingPrefix = QDir(staging.path()).absolutePath() + '/';
     for (const QString &kind : {QString("images"), QString("videos")}) {
         const QDir source(baseDir() + '/' + kind);
         // Copy the whole tree, hidden files included, since references may
@@ -806,6 +807,8 @@ bool Deck::saveCopyPath(const QString &path) {
         for (QDirIterator it(source.absolutePath(), QDir::Files | QDir::Hidden, QDirIterator::Subdirectories);
              it.hasNext();) {
             const QString file = it.next();
+            if (file.startsWith(stagingPrefix))
+                continue;
             const QString name = source.relativeFilePath(file);
             if (kind == "images" && name.startsWith(".hype-poster-") && !name.contains('/'))
                 continue;

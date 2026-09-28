@@ -2287,6 +2287,26 @@ static QString nestedMediaDeck(const QTemporaryDir &tmp) {
         QVERIFY2(d.status().contains("slide 2"), qPrintable(d.status()));
         QVERIFY2(d.status().contains("Missing media"), qPrintable(d.status()));
     }
+    void saveCopyIgnoresItsStagingDirectory() {
+        QTemporaryDir tmp;
+        const QString original = tmp.filePath("original"), copy = tmp.filePath("original/videos/copy");
+        QVERIFY(QDir().mkpath(original + "/images"));
+        QVERIFY(QDir().mkpath(copy));
+        write(original + "/images/extra.txt", "extra");
+        write(original + "/talk.md", "# Hello");
+        Deck d;
+        QVERIFY(d.loadPath(original + "/talk.md"));
+        QVERIFY(d.saveCopyPath(copy + "/talk.md"));
+        QFile extra(copy + "/images/extra.txt");
+        QVERIFY(extra.open(QIODevice::ReadOnly));
+        QCOMPARE(extra.readAll(), QByteArray("extra"));
+        for (QDirIterator it(copy, QDir::AllEntries | QDir::Hidden | QDir::NoDotAndDotDot,
+                 QDirIterator::Subdirectories);
+             it.hasNext();) {
+            const QString entry = it.next();
+            QVERIFY2(!entry.contains(".hype-save-"), qPrintable(entry));
+        }
+    }
     void mediaControlsPreserveCodeAndAltText() {
         Deck d;
         const QString examples = "```markdown\n![](fenced.png)\n```\n"
