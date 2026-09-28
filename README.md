@@ -129,6 +129,25 @@ Animated WebP and GIF images play inline in the preview and while presenting. Us
 
 Each slide supports one image or video. Copy the whole presentation folder when sharing or moving it.
 
+## Draw diagrams
+
+A `mermaid` code block draws a [Mermaid](https://mermaid.js.org) flowchart in your theme’s colors and font. It takes the place of a slide’s image, so a headline above it gets a band at the top:
+
+````markdown
+# How a request flows
+
+```mermaid
+flowchart LR
+  Browser --> lb[Load balancer]
+  subgraph app [App servers]
+    web1[Rails] & web2[Rails]
+  end
+  lb --> web1 & web2 --> db[(Postgres)]
+```
+````
+
+Hype draws flowcharts itself, with no browser or Node.js involved. It supports every direction (`TD`, `LR`, `BT`, `RL`), the node shapes, solid, dotted, thick, and invisible links with arrow, circle, and cross ends, link labels, nested subgraphs with their own `direction` (as in Mermaid, a subgraph follows the diagram’s direction when links reach inside it from outside), and `classDef`, `class`, and `style` colors. Other Mermaid diagram types, like sequence diagrams, show an error on the slide for now. Diagrams stay sharp in PDF. See [examples/diagrams.md](examples/diagrams.md) for more.
+
 ## Choose your look
 
 The palette and font icons in the toolbar choose an installed Omarchy theme and a presentation font. Hover to see the current choices. Theme colors apply to text, code, and slide backgrounds; your images keep their original colors. Code stays monospaced. Hype’s interface follows your current desktop theme independently and updates when you change it.

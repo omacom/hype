@@ -45,6 +45,15 @@ end
 
 ---
 
+# Diagrams, too
+
+```mermaid
+flowchart LR
+  md[presentation.md] --> hype([Hype]) --> pdf[PDF] & pptx[PowerPoint]
+```
+
+---
+
 # One folder
 
 | Directory | Contents |

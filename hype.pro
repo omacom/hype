@@ -26,3 +26,5 @@ HEADERS += src/filedialog.h
 SOURCES += src/recovery.cpp
 SOURCES += src/cli.cpp
 HEADERS += src/cli.h
+SOURCES += src/mermaid.cpp
+HEADERS += src/mermaid.h

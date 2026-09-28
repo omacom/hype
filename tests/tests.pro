@@ -23,3 +23,5 @@ HEADERS += ../src/images.h
 SOURCES += ../src/filedialog.cpp
 SOURCES += ../src/recovery.cpp
 HEADERS += ../src/filedialog.h
+SOURCES += ../src/mermaid.cpp
+HEADERS += ../src/mermaid.h
