@@ -9,6 +9,8 @@ RESOURCES += ../src/resources.qrc
 
 SOURCES += ../src/syntax.cpp
 HEADERS += ../src/syntax.h
+SOURCES += ../src/math.cpp
+HEADERS += ../src/math.h
 SOURCES += ../src/pptx.cpp
 HEADERS += ../src/pptx.h
 LIBS += -lz -lwebpdemux -lwebp
