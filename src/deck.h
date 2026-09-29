@@ -114,6 +114,7 @@ class Deck : public QAbstractListModel {
     Q_INVOKABLE void dropSelection(int slot);
     Q_INVOKABLE void selectAt(int position);
     Q_INVOKABLE int sourcePosition() const;
+    Q_INVOKABLE int sourceEndPosition() const;
     Q_INVOKABLE void editSource(const QString &value);
     Q_INVOKABLE void editSlide(const QString &value);
     Q_INVOKABLE void moveSlide(int from, int to);

@@ -188,12 +188,14 @@ Slide navigation and selection shortcuts apply when the sidebar or preview has f
 | Ctrl+H / Ctrl+K / Ctrl+/ | Headline / code block / hidden comment |
 | ? / F1 | Show all shortcuts (F1 also works while typing) |
 | Tab / Shift+Tab | Switch between sidebar and Markdown input |
-| Arrow keys | Previous / next slide; up and down move by a row in Overview |
+| Arrow keys | In slides list. Previous / next slide; up and down move by a row in Overview |
 | Enter | Open the selected slide from Overview |
 | Page Up / Page Down | Jump five slides, or five rows in Overview |
 | Home / End | First / last slide |
-| Ctrl+Up or Ctrl+Left | Move selected slides earlier (Ctrl+Up by a row in Overview) |
-| Ctrl+Down or Ctrl+Right | Move selected slides later (Ctrl+Down by a row in Overview) |
+| Ctrl+Up or Ctrl+Left | In slides list. Move selected slides earlier (Ctrl+Up by a row in Overview) |
+| Ctrl+Down or Ctrl+Right | In slides list. Move selected slides later (Ctrl+Down by a row in Overview) |
+| Ctrl+Up / Ctrl+Down while typing | Move to a previous or next slide without moving it |
+| Ctrl+Page Up / Ctrl+Page Down while typing | Move to a slide five earlier or later |
 | Shift+arrows / Shift+click | Extend the slide selection |
 | Ctrl+Enter | Add a slide |
 | Ctrl+D | Duplicate selected slides |
@@ -204,7 +206,7 @@ Slide navigation and selection shortcuts apply when the sidebar or preview has f
 | Escape | Leave presentation |
 | Space | Play / pause video while presenting |
 
-The mouse wheel over the sidebar selects the previous or next slide. Home/End jumps to the first/last slide throughout Visual mode, including its input field. In full Markdown mode, Home/End moves within the current line. In either editor, Page Up/Down scrolls a page; Ctrl+Home/End goes to the start/end of the text.
+The mouse wheel over the sidebar selects the previous or next slide. Home/End jumps to the first/last slide throughout Visual mode, including its input field. In full Markdown mode, Home/End moves within the current line. In either editor, Page Up/Down scrolls a page; Ctrl+Home/End goes to the start/end of the text. When the Visual or full Markdown text editor has focus, Ctrl+Up/Down and Ctrl+Page Up/Down change the selected slide without reordering the presentation by 1 or by 5 accordingly.
 
 ## Run from source
 

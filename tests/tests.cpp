@@ -1990,7 +1990,30 @@ static void write(const QString &path, const QString &content) {
         QCOMPARE(d.selected(), selected);
         QTest::keyClick(window, Qt::Key_PageUp);
         QCOMPARE(d.selected(), selected);
-        QString beforeToggle = d.source();
+        const QString beforeToggle = d.source();
+        editor->setProperty("cursorPosition", 0);
+        QTest::keyClick(window, Qt::Key_Right, Qt::ControlModifier);
+        QCOMPARE(d.selected(), selected);
+        QVERIFY(editor->property("cursorPosition").toInt() > 0);
+        QTest::keyClick(window, Qt::Key_Left, Qt::ControlModifier);
+        QCOMPARE(d.selected(), selected);
+        QCOMPARE(editor->property("cursorPosition").toInt(), 0);
+        QTest::keyClick(window, Qt::Key_Down, Qt::ControlModifier);
+        QCOMPARE(d.selected(), selected + 1);
+        QTest::keyClick(window, Qt::Key_PageDown, Qt::ControlModifier);
+        QCOMPARE(d.selected(), selected + 6);
+        QTest::keyClick(window, Qt::Key_Up, Qt::ControlModifier);
+        QCOMPARE(d.selected(), selected + 5);
+        QTest::keyClick(window, Qt::Key_PageUp, Qt::ControlModifier);
+        QCOMPARE(d.selected(), selected);
+        QTest::keyClick(window, Qt::Key_Down, Qt::ControlModifier | Qt::KeypadModifier);
+        QCOMPARE(d.selected(), selected + 1);
+        QTest::keyClick(window, Qt::Key_PageUp, Qt::ControlModifier | Qt::KeypadModifier);
+        QCOMPARE(d.selected(), selected - 4);
+        QTest::keyClick(window, Qt::Key_PageDown, Qt::ControlModifier | Qt::KeypadModifier);
+        QTest::keyClick(window, Qt::Key_Up, Qt::ControlModifier | Qt::KeypadModifier);
+        QCOMPARE(d.selected(), selected);
+        QVERIFY(editor->hasActiveFocus());
         QTest::keyClick(window, Qt::Key_Period, Qt::ControlModifier);
         QVERIFY(window->property("markdown").toBool());
         auto source = window->findChild<QQuickItem *>("sourceEditor");
@@ -2016,6 +2039,42 @@ static void write(const QString &path, const QString &content) {
         QVERIFY(qAbs(flick->property("contentY").toDouble() - rect.y() +
                      source->property("topPadding").toDouble()) < 2);
         QCOMPARE(d.source(), beforeToggle);
+        auto dividerVisible = [&] {
+            int start = d.sourcePosition();
+            if (start <= 0) return false;
+            int divider = d.source().lastIndexOf('\n', start - 2) + 1;
+            if (d.source().mid(divider, 3) != "---") return false;
+            QRectF dividerRect;
+            if (!QMetaObject::invokeMethod(source, "positionToRectangle", Q_RETURN_ARG(QRectF, dividerRect),
+                                           Q_ARG(int, divider + 1))) return false;
+            double y = dividerRect.y() - flick->property("contentY").toDouble();
+            return y >= source->property("topPadding").toDouble() + 2 &&
+                   y + dividerRect.height() <= flick->property("height").toDouble() -
+                                                   source->property("bottomPadding").toDouble() - 2;
+        };
+        // A caret rectangle can fit at the edge even when Qt clips the text glyphs.
+        auto dividerPainted = [&](int position) {
+            QRectF dividerRect;
+            if (!QMetaObject::invokeMethod(source, "positionToRectangle", Q_RETURN_ARG(QRectF, dividerRect),
+                                           Q_ARG(int, position + 1))) return false;
+            QImage image = window->grabWindow();
+            QPointF scene = source->mapToScene(QPointF(dividerRect.x() - 10, dividerRect.y()));
+            int x = qRound(scene.x() * image.devicePixelRatio());
+            int y = qRound(scene.y() * image.devicePixelRatio());
+            int height = qRound(dividerRect.height() * image.devicePixelRatio());
+            if (x < 0 || y < 0 || x + 80 >= image.width() || y + height >= image.height()) return false;
+            QColor background = image.pixelColor(x + 80, y + height / 2);
+            int ink = 0;
+            for (int row = y; row < y + height; ++row)
+                for (int col = x; col < x + 36; ++col) {
+                    QColor pixel = image.pixelColor(col, row);
+                    if (qAbs(pixel.red() - background.red()) > 40 ||
+                        qAbs(pixel.green() - background.green()) > 40 ||
+                        qAbs(pixel.blue() - background.blue()) > 40)
+                        ++ink;
+                }
+            return ink > 6;
+        };
         QTest::keyClick(window, Qt::Key_Home, Qt::ControlModifier);
         QCOMPARE(source->property("cursorPosition").toInt(), 0);
         QTest::keyClick(window, Qt::Key_PageDown);
@@ -2031,6 +2090,60 @@ static void write(const QString &path, const QString &content) {
         QTest::keyClick(window, Qt::Key_End, Qt::ControlModifier);
         QCOMPARE(source->property("cursorPosition").toInt(), d.source().size());
         QTest::keyClick(window, Qt::Key_Home, Qt::ControlModifier);
+        double visibleSlideY = flick->property("contentY").toDouble();
+        QTest::keyClick(window, Qt::Key_Down, Qt::ControlModifier);
+        QCOMPARE(d.selected(), 1);
+        QCOMPARE(source->property("cursorPosition").toInt(), d.sourcePosition() + 1);
+        QTRY_VERIFY(dividerVisible());
+        QCOMPARE(flick->property("contentY").toDouble(), visibleSlideY);
+        const int wordStart = source->property("cursorPosition").toInt();
+        QTest::keyClick(window, Qt::Key_Right, Qt::ControlModifier);
+        QCOMPARE(d.selected(), 1);
+        QVERIFY(source->property("cursorPosition").toInt() > wordStart);
+        QTest::keyClick(window, Qt::Key_Left, Qt::ControlModifier);
+        QCOMPARE(d.selected(), 1);
+        QCOMPARE(source->property("cursorPosition").toInt(), wordStart);
+        QTest::keyClick(window, Qt::Key_Down, Qt::ControlModifier);
+        QCOMPARE(d.selected(), 2);
+        QTest::keyClick(window, Qt::Key_PageDown, Qt::ControlModifier);
+        QCOMPARE(d.selected(), 7);
+        QCOMPARE(source->property("cursorPosition").toInt(), d.sourcePosition() + 1);
+        QTRY_VERIFY(dividerVisible());
+        QTest::keyClick(window, Qt::Key_PageDown, Qt::ControlModifier);
+        QCOMPARE(d.selected(), 12);
+        QRectF endDivider;
+        QVERIFY(QMetaObject::invokeMethod(source, "positionToRectangle", Q_RETURN_ARG(QRectF, endDivider),
+                                          Q_ARG(int, d.sourceEndPosition() + 1)));
+        double neededY = endDivider.y() + endDivider.height() +
+                         source->property("bottomPadding").toDouble() + 2 - flick->property("height").toDouble();
+        QTRY_VERIFY(qAbs(flick->property("contentY").toDouble() - neededY) < 2);
+        QTRY_VERIFY(dividerVisible());
+        QTRY_VERIFY(dividerPainted(d.sourceEndPosition()));
+        QTest::keyClick(window, Qt::Key_PageUp, Qt::ControlModifier);
+        QCOMPARE(d.selected(), 7);
+        QTest::keyClick(window, Qt::Key_PageDown, Qt::ControlModifier);
+        QTest::keyClick(window, Qt::Key_PageDown, Qt::ControlModifier);
+        QTest::keyClick(window, Qt::Key_PageDown, Qt::ControlModifier);
+        QCOMPARE(d.selected(), 22);
+        QTest::keyClick(window, Qt::Key_PageUp, Qt::ControlModifier);
+        QCOMPARE(d.selected(), 17);
+        QTRY_VERIFY(dividerVisible());
+        QTRY_VERIFY(dividerPainted(d.source().lastIndexOf('\n', d.sourcePosition() - 2) + 1));
+        QTest::keyClick(window, Qt::Key_PageUp, Qt::ControlModifier);
+        QTest::keyClick(window, Qt::Key_PageUp, Qt::ControlModifier);
+        QCOMPARE(d.selected(), 7);
+        QTest::keyClick(window, Qt::Key_Up, Qt::ControlModifier);
+        QCOMPARE(d.selected(), 6);
+        QTest::keyClick(window, Qt::Key_Up, Qt::ControlModifier);
+        QCOMPARE(d.selected(), 5);
+        QTest::keyClick(window, Qt::Key_PageUp, Qt::ControlModifier);
+        QCOMPARE(d.selected(), 0);
+        QTest::keyClick(window, Qt::Key_PageDown, Qt::ControlModifier | Qt::KeypadModifier);
+        QCOMPARE(d.selected(), 5);
+        QCOMPARE(source->property("cursorPosition").toInt(), d.sourcePosition() + 1);
+        QTRY_VERIFY(dividerVisible());
+        QVERIFY(source->hasActiveFocus());
+        QCOMPARE(d.source(), beforeToggle);
         QTest::qWait(60);
         auto sourceFlick = window->findChild<QQuickItem *>("sourceFlick");
         QPointF sourcePoint = sourceFlick->mapToScene(QPointF(100, 100));
@@ -2133,6 +2246,28 @@ static void write(const QString &path, const QString &content) {
         const double afterInsert = list->property("contentY").toDouble() - list->property("originY").toDouble();
         QVERIFY(qAbs(afterInsert - expected) < 1);
         QVERIFY(afterInsert - beforeInsert <= slideStep);
+        d.editSource("---\ntitle: Test\n---\n\n# First\n\n---\n\n# Second\n");
+        d.select(1);
+        QVERIFY(QMetaObject::invokeMethod(window, "openMarkdown"));
+        QTest::keyClick(window, Qt::Key_Up, Qt::ControlModifier);
+        QCOMPARE(d.selected(), 0);
+        QCOMPARE(source->property("cursorPosition").toInt(), d.sourcePosition() + 1);
+        QTRY_VERIFY(dividerVisible()); // The closing frontmatter --- anchors slide one.
+        QString tall = "---\ntitle: Test\n---\n\n# First\n\n---\n\n# Tall\n";
+        for (int line = 0; line < 100; ++line) tall += QString("Line %1\n").arg(line);
+        tall += "\n---\n\n# Last\n";
+        d.editSource(tall);
+        d.select(0);
+        QVERIFY(QMetaObject::invokeMethod(window, "openMarkdown"));
+        QTest::keyClick(window, Qt::Key_Down, Qt::ControlModifier);
+        QCOMPARE(d.selected(), 1);
+        int divider = d.source().lastIndexOf('\n', d.sourcePosition() - 2) + 1;
+        QRectF startDivider;
+        QVERIFY(QMetaObject::invokeMethod(source, "positionToRectangle", Q_RETURN_ARG(QRectF, startDivider),
+                                          Q_ARG(int, divider + 1)));
+        QTRY_VERIFY(qAbs(flick->property("contentY").toDouble() -
+                          (startDivider.y() - source->property("topPadding").toDouble() - 2)) < 2);
+        QTRY_VERIFY(dividerVisible());
         window->setProperty("allowClose", true);
         window->close();
     }

@@ -106,6 +106,21 @@ ApplicationWindow {
             event.modifiers & Qt.ShiftModifier ? deck.redo() : deck.undo()
             return
         }
+        // Keypad navigation keys carry KeypadModifier as well as ControlModifier.
+        if (control && !(event.modifiers & (Qt.ShiftModifier | Qt.AltModifier | Qt.MetaModifier))) {
+            let delta = 0
+            if (event.key === Qt.Key_Up) delta = -1
+            else if (event.key === Qt.Key_Down) delta = 1
+            else if (event.key === Qt.Key_PageUp) delta = -5
+            else if (event.key === Qt.Key_PageDown) delta = 5
+            if (delta) {
+                event.accepted = true
+                let previous = deck.selected
+                deck.select(deck.selected + delta)
+                if (editor === sourceEditor && deck.selected !== previous) alignSource(false, delta)
+                return
+            }
+        }
         let position = editor.cursorPosition
         let scroll = flick.contentY
         let page = event.key === Qt.Key_PageDown || event.key === Qt.Key_PageUp
@@ -188,17 +203,54 @@ ApplicationWindow {
         if (markdown) revealSource(false, previousY)
         else slideEditor.forceActiveFocus()
     }
-    function alignSource(focus = true) { revealSource(true, sourceFlick.contentY, focus) }
-    function revealSource(atTop, previousY, focus = true) {
+    function alignSource(focus = true, navigationDelta = 0) { revealSource(true, sourceFlick.contentY, focus, navigationDelta) }
+    function revealSource(atTop, previousY, focus = true, navigationDelta = 0) {
+        let start = deck.sourcePosition()
+        let cursor = start
+        let scrollPosition = start
+        let endPosition
+        if (navigationDelta) {
+            endPosition = deck.sourceEndPosition()
+            if (endPosition === sourceEditor.length && endPosition > 0 && sourceEditor.text[endPosition - 1] === "\n")
+                --endPosition
+            else if (sourceEditor.text.slice(endPosition, endPosition + 3) === "---")
+                ++endPosition // At column zero, Qt measures the preceding blank line.
+            // The parsed slide begins after its --- line, usually on an empty line.
+            let endOfFirstLine = sourceEditor.text.indexOf("\n", start)
+            if (endOfFirstLine >= 0 && sourceEditor.text.slice(start, endOfFirstLine).trim() === "")
+                cursor = endOfFirstLine + 1
+            if (start > 0)
+                scrollPosition = sourceEditor.text.lastIndexOf("\n", start - 2) + 1
+            if (sourceEditor.text.slice(scrollPosition, scrollPosition + 3) === "---")
+                ++scrollPosition
+        }
         syncingEditor = true
-        sourceEditor.cursorPosition = deck.sourcePosition()
+        sourceEditor.cursorPosition = cursor
         syncingEditor = false
         if (focus) sourceEditor.forceActiveFocus()
         Qt.callLater(function() {
-            let rect = sourceEditor.positionToRectangle(deck.sourcePosition())
-            let viewportHeight = win.contentItem.height - 2 * win.inset - sourceBar.height
+            let rect = sourceEditor.positionToRectangle(scrollPosition)
+            let viewportHeight = sourceFlick.height
             let nextY = previousY
-            if (atTop || rect.y < previousY + sourceEditor.topPadding)
+            if (navigationDelta) {
+                let endRect = sourceEditor.positionToRectangle(endPosition)
+                let bottom = endRect.y + endRect.height
+                let topInset = sourceEditor.topPadding + 2
+                let bottomInset = sourceEditor.bottomPadding + 2
+                if (bottom - rect.y > viewportHeight - topInset - bottomInset)
+                    nextY = rect.y - topInset
+                else if (navigationDelta > 0) {
+                    if (bottom + bottomInset > previousY + viewportHeight)
+                        nextY = bottom + bottomInset - viewportHeight
+                    else if (rect.y - topInset < previousY)
+                        nextY = rect.y - topInset
+                } else {
+                    if (rect.y - topInset < previousY)
+                        nextY = rect.y - topInset
+                    else if (bottom + bottomInset > previousY + viewportHeight)
+                        nextY = bottom + bottomInset - viewportHeight
+                }
+            } else if (atTop || rect.y < previousY + sourceEditor.topPadding)
                 nextY = rect.y - sourceEditor.topPadding
             else if (rect.y + rect.height > previousY + viewportHeight - sourceEditor.bottomPadding)
                 nextY = rect.y + rect.height + sourceEditor.bottomPadding - viewportHeight
@@ -818,7 +870,8 @@ ApplicationWindow {
             { title: "Slides", keys: [
                 ["Arrows", "Previous or next slide, by row in Overview"], ["Page Up / Page Down", "Jump five slides, or five rows in Overview"],
                 ["Home / End", "First or last slide"], ["Shift+Arrows", "Extend the selection"],
-                ["Ctrl+Arrows", "Move selected slides"], ["Ctrl+Enter", "Add a slide"],
+                ["Ctrl+Arrows", "Move selected slides when slides focused"], ["Ctrl+Up / Down", "Navigate slides while typing"],
+                ["Ctrl+PgUp / PgDown", "Jump five slides while typing"], ["Ctrl+Enter", "Add a slide"],
                 ["Ctrl+D", "Duplicate"], ["Delete", "Delete"] ] },
             { title: "Editing", keys: [
                 ["Ctrl+B", "Bold"], ["Ctrl+I", "Italic"], ["Ctrl+U", "Underline"], ["Ctrl+H", "Headline"], ["Ctrl+K", "Code block"],
