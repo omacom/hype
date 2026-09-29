@@ -52,7 +52,7 @@ Selecting a thumbnail updates both the preview and the Markdown pane below it. V
 
 Use a conventional Save action and a dirty indicator. Detect external changes: reload a clean document; when local edits exist, offer Reload or Save a Copy rather than silently overwriting. Save atomically. Defer automatic crash recovery and merging. One document-owned undo history spans source edits and visual operations; route both editors through it and disable their separate undo histories.
 
-Fullscreen presentation uses arrows to navigate, Space for video playback, and Escape to return to editing. Stop video when leaving its slide. Start with one presentation window; presenter notes and a separate presenter display can follow.
+Fullscreen presentation uses arrows to navigate, Space for video playback, and Escape to return to editing. Stop video when leaving its slide. On a laptop with an external display, the audience view opens automatically on the external display while a separate presenter window shows the current slide, next slide, and notes from HTML comments on the built-in display. If the editor is already on an external display, keep using it for the audience view.
 
 ## A small Markdown format
 

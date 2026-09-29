@@ -204,6 +204,12 @@ Slide navigation and selection shortcuts apply when the sidebar or preview has f
 | Escape | Leave presentation |
 | Space | Play / pause video while presenting |
 
+With more than one display, Hype sends the slides fullscreen to an external display
+and opens Presenter View on the laptop display with the current slide, next slide,
+and any speaker notes written as `<!-- comments -->`. If Hype is already on an
+external display, that display remains the audience display. Navigate from either
+display with the presentation shortcuts.
+
 The mouse wheel over the sidebar selects the previous or next slide. Home/End jumps to the first/last slide throughout Visual mode, including its input field. In full Markdown mode, Home/End moves within the current line. In either editor, Page Up/Down scrolls a page; Ctrl+Home/End goes to the start/end of the text.
 
 ## Run from source
