@@ -70,6 +70,14 @@ Headlines are big by default. Quotes, lists, tables, and inline `code` work too.
 
 The single-slide editor hides the blank lines around slide separators, leaving just your content to edit.
 
+## Group images with editable labels
+
+For a gallery, add `<!-- hype: layout="gallery" -->` before the slide's `#`
+title. Follow it with pairs of `##` labels and plain `![](image.png)` references.
+An optional `>` footer sits below the groups. Hype arranges up to nine groups
+in three columns, with native editable labels and proportional still images.
+Labels have equal, regular weight unless you add bold explicitly.
+
 ## Add images and video
 
 Paste an image or a copied image/video file with **Ctrl+V**. Hype asks for a name, saves the file, and adds it to the selected slide. Pasting onto a slide that already has media replaces that media while keeping the text. You can also drag a file onto the preview or use **+ Image / video** to replace the media. Dropping several files puts each additional file on a new slide.
@@ -106,9 +114,21 @@ Use just the filename; Hype finds the right directory:
 ![](demo.mp4)
 ```
 
-A lone image fits without cropping. Text on an image slide is always overlaid, with white lettering, subtle darkening, and a very light blur of the picture for readability. The text stays sharp, and pictures without text stay unblurred. An image with a headline spans by default; `fit` or `background=blur` keeps the whole image visible beneath the text. Videos fit the slide and play once when you reach them during a presentation.
+A lone image fits without cropping. By default, text on an image slide is overlaid, with white lettering, subtle darkening, and a very light blur of the picture for readability. The text stays sharp, and pictures without text stay unblurred. An image with a headline spans by default; `fit` or `background=blur` keeps the whole image visible beneath the text. Videos fit the slide and play once when you reach them during a presentation.
 
 Choose **Fit** or **Span** from the **Layout** menu above the editor, or put layout options inside the brackets:
+
+Choose **Title above media**, or use `![layout=title](chart.svg)`, to place the first `# Heading` above a chart or picture. Remaining text overlays the media, so duplicating the slide and adding numbers creates a reveal without moving the chart. The title stays editable, and a title by itself does not blur or darken the image. Use `overlay=0.65` to dim the chart behind the numbers.
+
+Choose **Text beside media**, or use `![layout=split](art.png)`, for editable text on the left and an image or video on the right. Media fits its column and stays sharp; text is left-aligned and uses the theme colors. `span` crops within the media column, and an explicit `overlay` darkens only that column.
+
+Choose **Caption below right half**, or use `![layout=caption-right](collage.png)`, for a wide image with an editable caption beneath its right half. The media stays sharp and undimmed by default. Caption text uses the theme colors; `span` and explicit `overlay` apply within the media area.
+
+Add an optional `# Heading` to that layout for a title above the media. The remaining text stays in the caption below the right half.
+
+Use **Caption below media**, or `![layout=caption](portraits.png)`, for a caption below the full image. Markdown tables use equal-width centered columns, so names and roles can line up under a row of portraits. An optional first heading appears above the media; the image stays sharp and undimmed by default.
+
+For an editable word cloud, add `<!-- hype: layout="cloud" -->`, a `# Title`, and one `##` through `######` heading per label. Fewer hashes mean larger, bolder text. Labels pack automatically, use theme colors, and remain horizontal. An optional final `> Quote` becomes a footer. All labels stay editable in Markdown; the layout needs no image. See `hype help format` for an example.
 
 | Markdown | Result |
 | --- | --- |

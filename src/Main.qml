@@ -615,6 +615,12 @@ ApplicationWindow {
                     AppMenuItem { text: "Fit"; checkable: true; checked: !deck.media.span; onTriggered: deck.setMediaMode("fit") }
                     AppMenuItem { text: "Span"; checkable: true; checked: deck.media.span; onTriggered: deck.setMediaMode("span") }
                     AppMenuSeparator {}
+                    AppMenuItem { text: "Title above media"; checkable: true; checked: deck.media.layout === "title"; onTriggered: deck.setMediaMode("title") }
+                    AppMenuItem { text: "Text beside media"; checkable: true; checked: deck.media.layout === "split"; onTriggered: deck.setMediaMode("split") }
+                    AppMenuItem { text: "Caption below media"; checkable: true; checked: deck.media.layout === "caption"; onTriggered: deck.setMediaMode("caption") }
+                    AppMenuItem { text: "Caption below right half"; checkable: true; checked: deck.media.layout === "caption-right"; onTriggered: deck.setMediaMode("caption-right") }
+                    AppMenuItem { text: "All text over media"; checkable: true; checked: !deck.media.layout || deck.media.layout === "overlay"; onTriggered: deck.setMediaMode("overlay") }
+                    AppMenuSeparator {}
                     AppMenuItem { text: "Match image edges"; checkable: true; checked: deck.media.background === "auto"; onTriggered: deck.matchImageBackground(true) }
                     AppMenuItem { text: deck.media.video ? "Blurred first frame" : "Blurred image"; checkable: true; checked: deck.media.background === "blur"; onTriggered: deck.setMediaBackground("blur") }
                     AppMenuItem { text: "White"; checkable: true; checked: deck.media.background === "white"; onTriggered: deck.setMediaBackground("white") }
@@ -1195,7 +1201,7 @@ ApplicationWindow {
                             onAutoplayChanged: paused = !autoplay
                             fillMode: deck.media.span ? Image.PreserveAspectCrop : Image.PreserveAspectFit
                             clip: true
-                            layer.enabled: !!deck.media.title
+                            layer.enabled: !!deck.media.title && deck.media.layout !== "split" && deck.media.layout !== "caption" && deck.media.layout !== "caption-right"
                             layer.effect: MultiEffect {
                                 blurEnabled: true
                                 blurMax: 4
@@ -1216,7 +1222,7 @@ ApplicationWindow {
                         height: deck.media.rect.height * slideFrame.height / 1080
                         fillMode: deck.media.span ? VideoOutput.PreserveAspectCrop : VideoOutput.PreserveAspectFit
                     }
-                    Image { anchors.fill: parent; source: visible ? "image://slides/" + (deck.revision, deck.renderId(deck.selected)) + "/overlay" : ""; asynchronous: true; retainWhileLoading: true; sourceSize: Qt.size(1920,1080); visible: animation.active || (video.visible && deck.media.span) }
+                    Image { anchors.fill: parent; source: visible ? "image://slides/" + (deck.revision, deck.renderId(deck.selected)) + "/overlay" : ""; asynchronous: true; retainWhileLoading: true; sourceSize: Qt.size(1920,1080); visible: animation.active || (video.visible && (deck.media.span || deck.media.layout === "title" || deck.media.layout === "split" || deck.media.layout === "caption" || deck.media.layout === "caption-right")) }
                     Button { visible: deck.media.video && !win.presenting; anchors.centerIn: parent; text: player.playbackState === MediaPlayer.PlayingState ? "Pause" : "▶ Play"; onClicked: win.toggleVideo() }
                 }
                 DropArea { anchors.fill: parent; onDropped: function(drop) { if (drop.hasUrls) for (let i = 0; i < drop.urls.length; ++i) { if (!deck.importMedia(drop.urls[i], i > 0)) break } } }

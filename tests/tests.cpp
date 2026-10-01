@@ -41,6 +41,7 @@
 #include <QTextCursor>
 #include <QTextBlock>
 #include <QTextLayout>
+#include <QTextTable>
 #include <QVideoSink>
 #include <QVideoFrame>
 #include <QtTest>
@@ -814,6 +815,274 @@ static void write(const QString &path, const QString &content) {
         QVERIFY(media.text.contains("<!-- Keep this code -->"));
         QVERIFY(slideProblems(source, "/tmp").isEmpty());
         QVERIFY(parseMedia("An inline `![](missing.png)` example.", "/tmp").file.isEmpty());
+    }
+    void titleLayoutKeepsChartAndHeadingInPlace() {
+        QTemporaryDir tmp;
+        QVERIFY(QDir().mkpath(tmp.path() + "/images"));
+        QImage picture(1920, 1080, QImage::Format_RGB32);
+        picture.fill(Qt::blue);
+        QVERIFY(picture.save(tmp.path() + "/images/chart.png"));
+        Deck deck;
+        QVERIFY(deck.savePath(tmp.path() + "/talk.md"));
+        deck.editSlide("![layout=title](chart.png)\n\n# Downloads");
+        const auto first = parseMedia(deck.slideSource(), deck.baseDir());
+        QVERIFY(first.error.isEmpty());
+        QCOMPARE(first.heading, QString("# Downloads"));
+        QVERIFY(first.text.trimmed().isEmpty());
+        QVERIFY(!first.span);
+        QCOMPARE(first.overlay, 0.0);
+        Thumbnails provider(&deck);
+        const auto chart = provider.requestImage(deck.renderId(0), nullptr, QSize(1920, 1080));
+        QCOMPARE(chart.pixelColor(1000, 300), QColor(Qt::blue));
+        deck.editSlide("![layout=title overlay=0.65](chart.png)\n\n# Downloads\n\n**87,184** downloads");
+        const auto reveal = parseMedia(deck.slideSource(), deck.baseDir());
+        QCOMPARE(mediaRect(first), mediaRect(reveal));
+        QCOMPARE(reveal.text.trimmed(), QString("**87,184** downloads"));
+        const auto stats = provider.requestImage(deck.renderId(0), nullptr, QSize(1920, 1080));
+        // The whole backdrop dims uniformly, including the title area and margins.
+        QCOMPARE(stats.pixelColor(20, 20), stats.pixelColor(20, 300));
+        QCOMPARE(stats.pixelColor(20, 20), stats.pixelColor(1900, 1060));
+        QVERIFY(stats.pixelColor(20, 20).blue() < chart.pixelColor(20, 20).blue());
+        QVERIFY(stats.pixelColor(1000, 300).blue() < 100);
+        // The title itself stays in place and is painted above the dimming layer.
+        const QColor headingInk(deck.palette().value("foreground").toString());
+        int headingPixels = 0, preservedHeadingPixels = 0;
+        for (int y = 0; y < 190; ++y)
+            for (int x = 0; x < 1920; ++x)
+                if (chart.pixelColor(x, y) == headingInk) {
+                    ++headingPixels;
+                    if (stats.pixelColor(x, y) == headingInk)
+                        ++preservedHeadingPixels;
+                }
+        QVERIFY(headingPixels > 100);
+        QCOMPARE(preservedHeadingPixels, headingPixels);
+        deck.editSlide("![layout=title](chart.png)\n\n# Community plugins");
+        const auto renamed = provider.requestImage(deck.renderId(0), nullptr, QSize(1920, 1080));
+        QVERIFY(renamed.copy(0, 0, 1920, 190) != chart.copy(0, 0, 1920, 190));
+        QCOMPARE(renamed.copy(0, 190, 1920, 890), chart.copy(0, 190, 1920, 890));
+        deck.setMediaMode("overlay");
+        QVERIFY(parseMedia(deck.slideSource(), deck.baseDir()).heading.isEmpty());
+        QVERIFY(deck.slideSource().contains("# Community plugins"));
+        QVERIFY(!parseMedia("![layout=title](chart.png)", tmp.path()).error.isEmpty());
+        QVERIFY(!parseMedia("![layout=unknown](chart.png)\n# Title", tmp.path()).error.isEmpty());
+    }
+    void splitLayoutKeepsTextBesideSharpMedia() {
+        QTemporaryDir tmp;
+        QVERIFY(QDir().mkpath(tmp.path() + "/images"));
+        QImage picture(790, 790, QImage::Format_RGB32);
+        picture.fill(Qt::black);
+        QPainter painter(&picture);
+        painter.fillRect(QRect(395, 0, 395, 790), Qt::white);
+        painter.end();
+        QVERIFY(picture.save(tmp.path() + "/images/art.png"));
+        Deck deck;
+        QVERIFY(deck.savePath(tmp.path() + "/talk.md"));
+        deck.editSlide("![layout=split](art.png)");
+        Thumbnails provider(&deck);
+        const auto empty = provider.requestImage(deck.renderId(0), nullptr, QSize(1920, 1080));
+        deck.editSlide("![layout=split](art.png)\n\n**Episode 22**\n\n# I tried Omarchy for the first time\n\nUnrehearsed.");
+        const auto media = parseMedia(deck.slideSource(), deck.baseDir());
+        QVERIFY(media.error.isEmpty());
+        QVERIFY(!media.span);
+        QCOMPARE(media.overlay, 0.0);
+        QVERIFY(media.heading.isEmpty());
+        QVERIFY(media.text.contains("# I tried Omarchy"));
+        const auto titled = provider.requestImage(deck.renderId(0), nullptr, QSize(1920, 1080));
+        // Native text cannot spill into or soften the artwork, or change its backdrop.
+        QCOMPARE(titled.copy(950, 0, 970, 1080), empty.copy(950, 0, 970, 1080));
+        QVERIFY(titled.copy(0, 0, 950, 1080) != empty.copy(0, 0, 950, 1080));
+        QCOMPARE(titled.pixelColor(10, 10), QColor(deck.palette()["background"].toString()));
+        QCOMPARE(titled.pixelColor(1424, 540), QColor(Qt::black));
+        QCOMPARE(titled.pixelColor(1425, 540), QColor(Qt::white));
+        const auto video = parseMedia("![layout=split](demo.mp4)\n\n# Demo", tmp.path());
+        QCOMPARE(mediaRect(video), mediaRect(media));
+        deck.setMediaMode("overlay");
+        deck.setMediaMode("split");
+        QCOMPARE(parseMedia(deck.slideSource(), deck.baseDir()).layout, QString("split"));
+        QVERIFY(deck.slideSource().contains("# I tried Omarchy"));
+    }
+    void galleryGroupsKeepLabelsEditable() {
+        QTemporaryDir tmp;
+        QVERIFY(QDir().mkpath(tmp.path() + "/images"));
+        QImage picture(100, 100, QImage::Format_RGB32);
+        picture.fill(Qt::red);
+        QVERIFY(picture.save(tmp.path() + "/images/first.png"));
+        picture.fill(Qt::green);
+        QVERIFY(picture.save(tmp.path() + "/images/second.png"));
+        Deck deck;
+        QVERIFY(deck.savePath(tmp.path() + "/talk.md"));
+        const QString source = "<!-- hype: layout=\"gallery\" -->\n# Our teams\n"
+                               "## First\n![](first.png)\n## Second\n![](second.png)\n"
+                               "> More coming soon\n<!-- private notes -->";
+        deck.editSlide(source);
+        const auto media = parseMedia(source, tmp.path());
+        QCOMPARE(media.layout, QString("gallery"));
+        QCOMPARE(media.gallery.size(), 2);
+        QCOMPARE(media.gallery[1].label, QString("Second"));
+        QCOMPARE(media.footer, QString("More coming soon"));
+        QVERIFY(slideProblems(source, tmp.path()).isEmpty());
+        Thumbnails provider(&deck);
+        const auto before = provider.requestImage(deck.renderId(0), nullptr, QSize(1920, 1080));
+        QCOMPARE(before.pixelColor(530, 600), QColor(Qt::red));
+        QCOMPARE(before.pixelColor(1390, 600), QColor(Qt::green));
+        QString edited = source;
+        edited.replace("## Second", "## Renamed");
+        deck.editSlide(edited);
+        const auto after = provider.requestImage(deck.renderId(0), nullptr, QSize(1920, 1080));
+        QVERIFY(before.copy(985, 200, 805, 60) != after.copy(985, 200, 805, 60));
+        QCOMPARE(before.copy(0, 275, 1920, 805), after.copy(0, 275, 1920, 805));
+        QVERIFY(!slideProblems(source + "\n## Missing portrait", tmp.path()).isEmpty());
+        edited = source;
+        edited.replace("second.png", "missing.png");
+        QVERIFY(slideProblems(edited, tmp.path()).contains("Missing media: missing.png"));
+        QVERIFY(!slideProblems("![](first.png)\n![](second.png)", tmp.path()).isEmpty());
+    }
+    void wordCloudKeepsLabelsEditableAndApart() {
+        Deck deck;
+        deck.chooseFont("sans-serif");
+        const QString source = "<!-- hype: layout=\"cloud\" -->\n# Ideas\n"
+                               "## A bigger idea\n### Small computers\n### Creative tools\n"
+                               "#### Better defaults\n#### Local services\n##### Themes\n"
+                               "##### Touch controls\n###### Experiments\n> A preview\n"
+                               "<!-- hidden speaker notes -->";
+        deck.editSlide(source);
+        const auto media = parseMedia(deck.slideSource(), deck.baseDir());
+        QCOMPARE(media.layout, QString("cloud"));
+        QCOMPARE(media.heading, QString("# Ideas"));
+        QVERIFY(slideProblems(source, deck.baseDir()).isEmpty());
+        const QRectF area(120, 210, 1680, 720);
+        const auto cloud = layoutWordCloud(media.text, deck.palette(), area);
+        QVERIFY2(cloud.error.isEmpty(), qPrintable(cloud.error));
+        QCOMPARE(cloud.labels.size(), 8);
+        QCOMPARE(cloud.footer, QString("A preview"));
+        QVERIFY(cloud.labels.first().font.pixelSize() > cloud.labels.last().font.pixelSize());
+        QVERIFY(cloud.labels.first().font.weight() > cloud.labels.last().font.weight());
+        const auto repeat = layoutWordCloud(media.text, deck.palette(), area);
+        for (int i = 0; i < cloud.labels.size(); ++i) {
+            QVERIFY(area.contains(cloud.labels[i].rect));
+            QCOMPARE(cloud.labels[i].rect, repeat.labels[i].rect);
+            for (int j = i + 1; j < cloud.labels.size(); ++j)
+                QVERIFY(!cloud.labels[i].rect.intersects(cloud.labels[j].rect));
+        }
+        Thumbnails provider(&deck);
+        const auto before = provider.requestImage(deck.renderId(0), nullptr, QSize(1920, 1080));
+        QString edited = source;
+        edited.replace("Creative tools", "Personal tools");
+        deck.editSlide(edited);
+        const auto after = provider.requestImage(deck.renderId(0), nullptr, QSize(1920, 1080));
+        QVERIFY(before != after);
+        QCOMPARE(before.copy(0, 0, 1920, 190), after.copy(0, 0, 1920, 190));
+        QVERIFY(deck.slideSource().contains("### Personal tools"));
+        QVERIFY(deck.slideSource().contains("hidden speaker notes"));
+    }
+    void wordCloudRejectsUnsupportedContent() {
+        const QString directive = "<!-- hype: layout=\"cloud\" -->\n";
+        QVERIFY(!slideProblems(directive + "## No title", ".").isEmpty());
+        QVERIFY(!slideProblems(directive + "# Title", ".").isEmpty());
+        QVERIFY(!slideProblems(directive + "# Title\n- A list", ".").isEmpty());
+        QVERIFY(!slideProblems(directive + "# Title\n## Label\n![](image.png)", ".").isEmpty());
+        const auto literal = parseMedia("```html\n" + directive + "```\n# Title", ".");
+        QVERIFY(literal.layout.isEmpty());
+        Deck deck;
+        const auto tooWide = layoutWordCloud("## " + QString(2000, 'M'), deck.palette(), QRectF(0, 0, 200, 100));
+        QVERIFY(!tooWide.error.isEmpty());
+    }
+    void captionTableKeepsNamesUnderPortraits() {
+        QTemporaryDir tmp;
+        QVERIFY(QDir().mkpath(tmp.path() + "/images"));
+        QImage picture(1660, 530, QImage::Format_RGB32);
+        picture.fill(Qt::blue);
+        QVERIFY(picture.save(tmp.path() + "/images/portraits.png"));
+        Deck deck;
+        QVERIFY(deck.savePath(tmp.path() + "/talk.md"));
+        const QString source = "![layout=caption](portraits.png)";
+        const QString names = "| **Krzysztof Wilczyński** | **outfoxxed** | **Emir Beganović** |\n"
+                              "| :---: | :---: | :---: |\n"
+                              "| Head of Omarchy Kernel | Head of Omarchy Shell | Head of Infrastructure |";
+        deck.editSlide(source);
+        Thumbnails provider(&deck);
+        const auto empty = provider.requestImage(deck.renderId(0), nullptr, QSize(1920, 1080));
+        deck.editSlide(source + "\n\n" + names);
+        const auto media = parseMedia(deck.slideSource(), deck.baseDir());
+        QVERIFY(media.error.isEmpty());
+        QVERIFY(!media.span);
+        QCOMPARE(media.overlay, 0.0);
+        const auto captioned = provider.requestImage(deck.renderId(0), nullptr, QSize(1920, 1080));
+        QCOMPARE(captioned.copy(0, 0, 1920, 650), empty.copy(0, 0, 1920, 650));
+        QVERIFY(captioned.copy(130, 650, 1660, 260) != empty.copy(130, 650, 1660, 260));
+        QTextDocument doc;
+        layoutSlideText(doc, names, deck.palette(), 48, 1660, true, false, true);
+        QTextTable *table = nullptr;
+        for (auto it = doc.rootFrame()->begin(); !it.atEnd(); ++it)
+            if (auto found = qobject_cast<QTextTable *>(it.currentFrame())) table = found;
+        QVERIFY(table);
+        QCOMPARE(table->columns(), 3);
+        const auto widths = table->format().columnWidthConstraints();
+        QCOMPARE(widths.size(), 3);
+        for (const auto &width : widths) {
+            QCOMPARE(width.type(), QTextLength::PercentageLength);
+            QVERIFY(qAbs(width.rawValue() - 100.0 / 3) < 0.001);
+        }
+        const auto video = parseMedia("![layout=caption](demo.mp4)\n\n" + names, tmp.path());
+        QCOMPARE(mediaRect(video), mediaRect(media));
+        deck.setMediaMode("overlay");
+        deck.setMediaMode("caption");
+        QCOMPARE(parseMedia(deck.slideSource(), deck.baseDir()).layout, QString("caption"));
+        QVERIFY(deck.slideSource().contains("Krzysztof Wilczyński"));
+    }
+    void captionRightKeepsMediaSharpAndCaptionBelow() {
+        QTemporaryDir tmp;
+        QVERIFY(QDir().mkpath(tmp.path() + "/images"));
+        QImage picture(1780, 800, QImage::Format_RGB32);
+        picture.fill(Qt::black);
+        QPainter painter(&picture);
+        painter.fillRect(QRect(890, 0, 890, 800), Qt::white);
+        painter.end();
+        QVERIFY(picture.save(tmp.path() + "/images/collage.png"));
+        Deck deck;
+        QVERIFY(deck.savePath(tmp.path() + "/talk.md"));
+        const QString source = "![layout=caption-right](collage.png)";
+        deck.editSlide(source);
+        Thumbnails provider(&deck);
+        const auto empty = provider.requestImage(deck.renderId(0), nullptr, QSize(1920, 1080));
+        deck.editSlide(source + "\n\nand **800+ community patrons**");
+        const auto media = parseMedia(deck.slideSource(), deck.baseDir());
+        QVERIFY(media.error.isEmpty());
+        QVERIFY(!media.span);
+        QCOMPARE(media.overlay, 0.0);
+        const auto captioned = provider.requestImage(deck.renderId(0), nullptr, QSize(1920, 1080));
+        QCOMPARE(captioned.copy(0, 0, 1920, 870), empty.copy(0, 0, 1920, 870));
+        QCOMPARE(captioned.copy(0, 870, 1030, 210), empty.copy(0, 870, 1030, 210));
+        QVERIFY(captioned.copy(1030, 870, 790, 160) != empty.copy(1030, 870, 790, 160));
+        QCOMPARE(captioned.pixelColor(959, 400), QColor(Qt::black));
+        QCOMPARE(captioned.pixelColor(960, 400), QColor(Qt::white));
+        QCOMPARE(captioned.pixelColor(10, 10), QColor(deck.palette()["background"].toString()));
+        deck.editSlide(source + "\n\nand **900+ community patrons**");
+        const auto changed = provider.requestImage(deck.renderId(0), nullptr, QSize(1920, 1080));
+        QVERIFY(changed != captioned);
+        QCOMPARE(changed.copy(0, 0, 1920, 870), captioned.copy(0, 0, 1920, 870));
+        deck.editSlide("![layout=caption-right overlay=0.5](collage.png)\n\nand **900+ community patrons**");
+        const auto dimmed = provider.requestImage(deck.renderId(0), nullptr, QSize(1920, 1080));
+        QVERIFY(dimmed.pixelColor(1200, 400).red() < changed.pixelColor(1200, 400).red());
+        QCOMPARE(dimmed.copy(0, 870, 1920, 210), changed.copy(0, 870, 1920, 210));
+        const auto video = parseMedia("![layout=caption-right](demo.mp4)\n\nCaption", tmp.path());
+        QCOMPARE(mediaRect(video), mediaRect(media));
+        deck.setMediaMode("overlay");
+        deck.setMediaMode("caption-right");
+        QCOMPARE(parseMedia(deck.slideSource(), deck.baseDir()).layout, QString("caption-right"));
+        QVERIFY(deck.slideSource().contains("900+ community patrons"));
+        deck.editSlide(source + "\n\n# Backed By\n\nand **800+ community patrons**");
+        const auto titledMedia = parseMedia(deck.slideSource(), deck.baseDir());
+        QCOMPARE(titledMedia.heading, QString("# Backed By"));
+        QVERIFY(!titledMedia.text.contains("Backed By"));
+        const auto titled = provider.requestImage(deck.renderId(0), nullptr, QSize(1920, 1080));
+        // The title gets its own space while the editable caption stays fixed.
+        QCOMPARE(titled.copy(0, 870, 1920, 210), captioned.copy(0, 870, 1920, 210));
+        QVERIFY(titled.copy(0, 0, 1920, 170) != empty.copy(0, 0, 1920, 170));
+        deck.editSlide(source + "\n\n# Our Backers\n\nand **800+ community patrons**");
+        const auto renamed = provider.requestImage(deck.renderId(0), nullptr, QSize(1920, 1080));
+        QCOMPARE(renamed.copy(0, 180, 1920, 900), titled.copy(0, 180, 1920, 900));
+        QVERIFY(renamed.copy(0, 0, 1920, 170) != titled.copy(0, 0, 1920, 170));
     }
     void pasteNamedMedia() {
         QTemporaryDir tmp;

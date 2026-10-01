@@ -1,17 +1,23 @@
 #pragma once
 #include "deck.h"
 #include <QMutex>
+#include <QFont>
 #include <QQuickImageProvider>
 #include <QQuickPaintedItem>
 #include <QThreadPool>
 #include <atomic>
 #include <memory>
 class QTextDocument;
+struct GalleryItem {
+    QString label, file, path;
+};
 struct Media {
-    QString file, path, poster, error, background;
+    QString file, path, poster, error, background, layout, heading;
     bool video = false, span = false, loop = false, muted = false, autoplay = true;
     double overlay = 0;
     QString text;
+    QVector<GalleryItem> gallery;
+    QString footer;
 };
 QRectF mediaRect(const Media &media);
 QImage softenedImage(const QImage &image, const QSizeF &slideSize);
@@ -22,7 +28,18 @@ Media parseMedia(const QString &source, const QString &base);
 QString ensurePoster(const QString &video, const QString &base);
 QStringList slideProblems(const QString &source, const QString &base);
 void layoutSlideText(QTextDocument &document, const QString &markdown, const QVariantMap &palette,
-                     qreal fontSize, qreal width, bool centered, bool code);
+                     qreal fontSize, qreal width, bool centered, bool code, bool equalColumns = false);
+struct CloudLabel {
+    QString text;
+    int level = 0;
+    QFont font;
+    QRectF rect;
+};
+struct WordCloud {
+    QVector<CloudLabel> labels;
+    QString footer, error;
+};
+WordCloud layoutWordCloud(const QString &markdown, const QVariantMap &palette, const QRectF &area);
 void paintSlide(QPainter *painter, const QRectF &target, const QString &source, const QString &base,
                 const QVariantMap &palette, QString *warning = nullptr, bool overlayOnly = false,
                 bool backgroundOnly = false);

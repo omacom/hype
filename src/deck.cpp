@@ -603,6 +603,7 @@ QVariantMap Deck::media() const {
                     {"title", title},
                     {"rect", mediaRect(m)},
                     {"background", m.background},
+                    {"layout", m.layout},
                     {"overlay", m.overlay}};
     return m_mediaCache;
 }
@@ -1154,6 +1155,10 @@ void Deck::setMediaBackground(const QString &mode) {
     editSlide(withMediaDirectives(slideSource(), remove, add));
 }
 void Deck::setMediaMode(const QString &mode) {
+    if (mode == "title" || mode == "overlay" || mode == "split" || mode == "caption" || mode == "caption-right") {
+        editSlide(withMediaDirectives(slideSource(), {"layout"}, {"layout=" + mode}));
+        return;
+    }
     if (!QStringList{"fit", "span"}.contains(mode))
         return;
     editSlide(withMediaDirectives(slideSource(), {"fit", "span"}, {mode}));
