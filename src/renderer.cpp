@@ -96,6 +96,28 @@ static QString withoutComments(QString source) {
         source.remove(it->first, it->second);
     return source;
 }
+static bool isVideoFile(const QString &file) {
+    return QStringList{"mp4", "m4v", "mov", "webm", "mkv"}.contains(QFileInfo(file).suffix().toLower());
+}
+// The one list of placed-image positions and where each pins its image.
+static const QList<std::pair<QString, Qt::Alignment>> &placements() {
+    static const QList<std::pair<QString, Qt::Alignment>> list{
+        {"top-left", Qt::AlignLeft | Qt::AlignTop},     {"top", Qt::AlignHCenter | Qt::AlignTop},
+        {"top-right", Qt::AlignRight | Qt::AlignTop},   {"left", Qt::AlignLeft | Qt::AlignVCenter},
+        {"center", Qt::AlignCenter},                    {"right", Qt::AlignRight | Qt::AlignVCenter},
+        {"bottom-left", Qt::AlignLeft | Qt::AlignBottom}, {"bottom", Qt::AlignHCenter | Qt::AlignBottom},
+        {"bottom-right", Qt::AlignRight | Qt::AlignBottom}};
+    return list;
+}
+const QStringList &mediaPositions() {
+    static const QStringList names = [] {
+        QStringList result;
+        for (const auto &placement : placements())
+            result << placement.first;
+        return result;
+    }();
+    return names;
+}
 static QString assetPath(const QString &base, QString file, bool video) {
     if (QFileInfo(file).isAbsolute())
         return file;
@@ -118,6 +140,14 @@ QString withMedia(const QString &source, const QString &reference) {
     else
         updated += "\n" + reference + "\n";
     return updated;
+}
+QString withReplacedMedia(const QString &source, const QString &file) {
+    // A new logo keeps the old one's corner and size; other layouts start fresh.
+    const auto current = parseMedia(source, {});
+    const QString flags = current.placed() && !isVideoFile(file)
+        ? QString("position=%1 size=%2%").arg(current.position, QString::number(current.size))
+        : QString();
+    return withMedia(source, "![" + flags + "](<" + file + ">)");
 }
 QString withMediaDirectives(const QString &source, const QStringList &remove,
                             const QStringList &add) {
@@ -159,8 +189,7 @@ static Media readMedia(const QString &source, const QString &base) {
     if (!m.hasMatch())
         return result;
     result.file = m.captured(2).isEmpty() ? m.captured(3) : m.captured(2);
-    result.video = QStringList{"mp4", "m4v", "mov", "webm", "mkv"}.contains(
-        QFileInfo(result.file).suffix().toLower());
+    result.video = isVideoFile(result.file);
     result.path = assetPath(base, result.file, result.video);
     result.text.remove(m.capturedStart(), m.capturedLength());
     result.span = !result.video &&
@@ -200,7 +229,23 @@ static Media readMedia(const QString &source, const QString &base) {
                 result.autoplay = value != "false";
             else if (key == "overlay")
                 explicitOverlay = value;
-            else if (key == "background") {
+            else if (key == "position") {
+                // Errors name the directive, never the author's value, which may hold markup.
+                result.position = value;
+                if (!mediaPositions().contains(value))
+                    result.error = "Unknown position";
+            } else if (key == "size") {
+                // Plain decimals only: toDouble() would also accept "nan" and "1e1".
+                static const QRegularExpression percentage(R"(^(\d{1,3}(?:\.\d+)?)%$)");
+                const auto number = percentage.match(value);
+                result.size = number.hasMatch() ? number.captured(1).toDouble() : 0;
+                if (result.size < 1 || result.size > 100) {
+                    result.error = "Size must be a percentage from 1% to 100%";
+                    result.size = 0;
+                }
+                if (result.position.isEmpty())
+                    result.position = "center";
+            } else if (key == "background") {
                 result.background = value;
                 if (value != "auto" && value != "theme" && value != "blur" && !QColor(value).isValid())
                     result.error = "Invalid background color";
@@ -214,6 +259,21 @@ static Media readMedia(const QString &source, const QString &base) {
     }
     if (fit && span)
         result.error = "Choose either span or fit";
+    if (result.placed()) {
+        if (result.video)
+            result.error = "Only images can be placed";
+        else if (fit || span || !result.background.isEmpty() || !explicitOverlay.isEmpty())
+            result.error = "A placed image cannot use fit, span, background, or overlay";
+        if (result.size == 0)
+            result.size = defaultPlacedSize;
+        for (const auto &[position, alignment] : placements())
+            if (position == result.position)
+                result.alignment = alignment;
+        // A placed image leaves the slide's own layout and colors alone.
+        result.span = false;
+        result.overlay = 0;
+        return result;
+    }
     // A background choice implies fitting unless span was explicitly requested.
     if (!span && (result.background == "blur" || result.background == "auto"))
         result.span = false;
@@ -521,10 +581,33 @@ static void rememberFit(const QString &key, qreal size) {
     QMutexLocker lock(&fitMutex);
     fittedSizes.insert(key, new qreal(size));
 }
+static QRectF alignedRect(const QSizeF &size, const QRectF &within, Qt::Alignment alignment) {
+    const qreal x = alignment & Qt::AlignLeft    ? within.left()
+                    : alignment & Qt::AlignRight ? within.right() - size.width()
+                                                 : within.center().x() - size.width() / 2;
+    const qreal y = alignment & Qt::AlignTop      ? within.top()
+                    : alignment & Qt::AlignBottom ? within.bottom() - size.height()
+                                                  : within.center().y() - size.height() / 2;
+    return QRectF(QPointF(x, y), size);
+}
 QRectF mediaRect(const Media &media) {
+    if (media.placed()) {
+        const QSizeF box(1920 * media.size / 100, 1080 * media.size / 100);
+        // The margin shrinks as the box grows, so large images stay on the slide.
+        const qreal margin = qMin(60.0, (1080 - box.height()) / 2);
+        return alignedRect(box, QRectF(0, 0, 1920, 1080).adjusted(margin, margin, -margin, -margin),
+                           media.alignment);
+    }
     return media.span ? QRectF(0, 0, 1920, 1080)
                       : (!media.video || media.text.trimmed().isEmpty() ? QRectF(70, 50, 1780, 980)
                                                         : QRectF(100, 280, 1720, 730));
+}
+QRectF mediaImageRect(const Media &media, const QSizeF &image) {
+    const QRectF rect = mediaRect(media);
+    QSizeF scaled = image;
+    scaled.scale(rect.size(), media.span ? Qt::KeepAspectRatioByExpanding : Qt::KeepAspectRatio);
+    // Placed images hug their corner or edge; everything else is centered.
+    return alignedRect(scaled, rect, media.alignment);
 }
 void paintSlide(QPainter *p, const QRectF &target, const QString &source, const QString &base,
                 const QVariantMap &inputPalette, QString *warning, bool overlayOnly,
@@ -561,7 +644,8 @@ void paintSlide(QPainter *p, const QRectF &target, const QString &source, const 
             if (!backdrop.isNull())
                 p->drawImage(QRectF(0, 0, 1920, 1080), blurredBackground(backdrop));
         }
-        if ((!media.video || !media.background.isEmpty()) && !media.span && media.background != "theme" &&
+        if ((!media.video || !media.background.isEmpty()) && !media.span && !media.placed() &&
+            media.background != "theme" &&
             (bg.isEmpty() || !media.background.isEmpty())) {
             QColor color(media.background);
             if ((media.background.isEmpty() || media.background == "auto") && !backdrop.isNull()) {
@@ -607,29 +691,37 @@ void paintSlide(QPainter *p, const QRectF &target, const QString &source, const 
         }
 
         if (!overlayOnly && !backgroundOnly && !image.isNull()) {
-            QSizeF scaled = image.size();
-            scaled.scale(rect.size(),
-                         media.span ? Qt::KeepAspectRatioByExpanding : Qt::KeepAspectRatio);
-            QRectF dest(QPointF(rect.center().x() - scaled.width() / 2,
-                                rect.center().y() - scaled.height() / 2),
-                        scaled);
+            const QRectF dest = mediaImageRect(media, image.size());
             p->save();
             p->setClipRect(rect);
-            p->drawImage(dest, !media.video && !text.isEmpty() ? softenedImage(image, dest.size()) : image);
+            p->drawImage(dest, !media.video && !media.placed() && !text.isEmpty()
+                                   ? softenedImage(image, dest.size())
+                                   : image);
             p->restore();
         } else if (!overlayOnly && !backgroundOnly) {
             p->setPen(QColor(palette["accent"].toString()));
+            const QString message = "Missing media\n" + media.file;
             QFont diagnostic("sans");
-            diagnostic.setPixelSize(32);
+            // Shrink the notice to fit small placed boxes, and never draw past them.
+            for (int size = 32; size >= 8; size -= 2) {
+                diagnostic.setPixelSize(size);
+                if (QRectF(QFontMetricsF(diagnostic).boundingRect(rect, Qt::AlignCenter, message))
+                        .width() <= rect.width())
+                    break;
+            }
+            p->save();
+            p->setClipRect(rect);
             p->setFont(diagnostic);
-            p->drawText(rect, Qt::AlignCenter, "Missing media\n" + media.file);
+            p->drawText(rect, Qt::AlignCenter, message);
+            p->restore();
         }
-        if (!media.video || media.span) {
+        // Text beside a placed image keeps the theme's colors and full area.
+        if (!media.placed() && (!media.video || media.span)) {
             if (!backgroundOnly)
                 p->fillRect(QRectF(0, 0, 1920, 1080), QColor(0, 0, 0, qRound(media.overlay * 255)));
             if (fg.isEmpty() && !text.isEmpty())
                 palette["foreground"] = "#ffffff";
-        } else if (!text.isEmpty())
+        } else if (!media.placed() && !text.isEmpty())
             area = QRectF(130, 40, 1660, 205);
     }
     if (backgroundOnly) {

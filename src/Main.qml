@@ -563,14 +563,18 @@ ApplicationWindow {
         property bool destructive: false
         readonly property color ink: destructive ? win.ui.error : win.ui.foreground
         implicitHeight: 32
-        implicitWidth: leftPadding + itemLabel.implicitWidth + (hint ? 28 + itemHint.implicitWidth : 0) + rightPadding
+        implicitWidth: leftPadding + itemLabel.implicitWidth + (hint ? 28 + itemHint.implicitWidth : 0) + (subMenu ? 28 : 0) + rightPadding
         leftPadding: menu && menu.hasChecks ? 32 : 12; rightPadding: 12; topPadding: 0; bottomPadding: 0
         font.pixelSize: 13
         indicator: AppIcon {
             x: 10; anchors.verticalCenter: parent.verticalCenter; width: 14; height: 14
             visible: appMenuItem.checkable && appMenuItem.checked; name: "check"; color: win.ui.accent
         }
-        arrow: null
+        arrow: AppIcon {
+            x: parent.width - width - 10; anchors.verticalCenter: parent.verticalCenter; width: 14; height: 14
+            visible: !!appMenuItem.subMenu; name: "chevron-right"; color: win.ui.muted
+            opacity: appMenuItem.enabled ? 1 : 0.4
+        }
         contentItem: Item {
             opacity: appMenuItem.enabled ? 1 : 0.4
             Label { id: itemLabel; anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter; text: appMenuItem.text; font: appMenuItem.font; color: appMenuItem.ink }
@@ -612,14 +616,37 @@ ApplicationWindow {
                 AppMenu {
                     hasChecks: true
                     id: mediaMenu; objectName: editorBar.scope + "mediaMenu"; y: parent.height + 4
-                    AppMenuItem { text: "Fit"; checkable: true; checked: !deck.media.span; onTriggered: deck.setMediaMode("fit") }
+                    readonly property bool placed: !!deck.media.position
+                    AppMenuItem { text: "Fit"; checkable: true; checked: !deck.media.span && !mediaMenu.placed; onTriggered: deck.setMediaMode("fit") }
                     AppMenuItem { text: "Span"; checkable: true; checked: deck.media.span; onTriggered: deck.setMediaMode("span") }
+                    AppMenu {
+                        id: placeMenu; objectName: editorBar.scope + "placeMenu"
+                        title: "Place"; hasChecks: true; enabled: !deck.media.video
+                        Instantiator {
+                            model: deck.mediaPositions
+                            delegate: AppMenuItem {
+                                // "bottom-right" reads as "Bottom right".
+                                text: modelData.charAt(0).toUpperCase() + modelData.slice(1).replace("-", " ")
+                                checkable: true; checked: deck.media.position === modelData
+                                onTriggered: deck.setMediaPosition(modelData)
+                            }
+                            onObjectAdded: (index, item) => placeMenu.insertItem(index, item)
+                            onObjectRemoved: (index, item) => placeMenu.removeItem(item)
+                        }
+                    }
+                    AppMenu {
+                        objectName: editorBar.scope + "sizeMenu"
+                        title: "Size"; hasChecks: true; enabled: mediaMenu.placed
+                        AppMenuItem { text: "Small (10%)"; checkable: true; checked: deck.media.size === 10; onTriggered: deck.setMediaSize(10) }
+                        AppMenuItem { text: "Medium (20%)"; checkable: true; checked: deck.media.size === 20; onTriggered: deck.setMediaSize(20) }
+                        AppMenuItem { text: "Large (35%)"; checkable: true; checked: deck.media.size === 35; onTriggered: deck.setMediaSize(35) }
+                    }
                     AppMenuSeparator {}
-                    AppMenuItem { text: "Match image edges"; checkable: true; checked: deck.media.background === "auto"; onTriggered: deck.matchImageBackground(true) }
-                    AppMenuItem { text: deck.media.video ? "Blurred first frame" : "Blurred image"; checkable: true; checked: deck.media.background === "blur"; onTriggered: deck.setMediaBackground("blur") }
-                    AppMenuItem { text: "White"; checkable: true; checked: deck.media.background === "white"; onTriggered: deck.setMediaBackground("white") }
-                    AppMenuItem { text: "Black"; checkable: true; checked: deck.media.background === "black"; onTriggered: deck.setMediaBackground("black") }
-                    AppMenuItem { text: "Use theme color"; checkable: true; checked: deck.media.background === "theme"; onTriggered: deck.matchImageBackground(false) }
+                    AppMenuItem { text: "Match image edges"; enabled: !mediaMenu.placed; checkable: true; checked: deck.media.background === "auto"; onTriggered: deck.matchImageBackground(true) }
+                    AppMenuItem { text: deck.media.video ? "Blurred first frame" : "Blurred image"; enabled: !mediaMenu.placed; checkable: true; checked: deck.media.background === "blur"; onTriggered: deck.setMediaBackground("blur") }
+                    AppMenuItem { objectName: editorBar.scope + "whiteBackgroundItem"; text: "White"; enabled: !mediaMenu.placed; checkable: true; checked: deck.media.background === "white"; onTriggered: deck.setMediaBackground("white") }
+                    AppMenuItem { text: "Black"; enabled: !mediaMenu.placed; checkable: true; checked: deck.media.background === "black"; onTriggered: deck.setMediaBackground("black") }
+                    AppMenuItem { text: "Use theme color"; enabled: !mediaMenu.placed; checkable: true; checked: deck.media.background === "theme"; onTriggered: deck.matchImageBackground(false) }
                 }
             }
         }
@@ -1194,8 +1221,12 @@ ApplicationWindow {
                             paused: !autoplay
                             onAutoplayChanged: paused = !autoplay
                             fillMode: deck.media.span ? Image.PreserveAspectCrop : Image.PreserveAspectFit
+                            // Placed images hug their corner or edge, matching the rendered slide.
+                            readonly property int alignment: deck.media.alignment || Qt.AlignCenter
+                            horizontalAlignment: alignment & Qt.AlignHorizontal_Mask
+                            verticalAlignment: alignment & Qt.AlignVertical_Mask
                             clip: true
-                            layer.enabled: !!deck.media.title
+                            layer.enabled: !!deck.media.title && !deck.media.position
                             layer.effect: MultiEffect {
                                 blurEnabled: true
                                 blurMax: 4

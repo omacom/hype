@@ -571,6 +571,7 @@ void Deck::chooseTheme(const QString &name) {
     }
     replaceHeader(header);
 }
+QStringList Deck::mediaPositions() const { return ::mediaPositions(); }
 QVariantMap Deck::media() const {
     const QString source = slideSource(), base = baseDir();
     if (!m_mediaCache.isEmpty() && m_mediaSource == source && m_mediaBase == base)
@@ -603,7 +604,10 @@ QVariantMap Deck::media() const {
                     {"title", title},
                     {"rect", mediaRect(m)},
                     {"background", m.background},
-                    {"overlay", m.overlay}};
+                    {"overlay", m.overlay},
+                    {"position", m.position},
+                    {"size", m.size},
+                    {"alignment", int(m.alignment)}};
     return m_mediaCache;
 }
 void Deck::watch() {
@@ -936,7 +940,7 @@ bool Deck::importMedia(const QUrl &url, bool newSlide) {
     }
     if (newSlide)
         addSlide();
-    editSlide(withMedia(slideSource(), "![](<" + name + ">)"));
+    editSlide(withReplacedMedia(slideSource(), name));
     setStatus("Added " + name);
     return true;
 }
@@ -1002,7 +1006,7 @@ bool Deck::pasteMedia() {
         emit pasteRequested(suggested, extension, video);
         return true;
     }
-    const auto media = parseMedia(withMedia(slideSource(), "![](<paste.png>)"), baseDir());
+    const auto media = parseMedia(withReplacedMedia(slideSource(), "paste.png"), baseDir());
     const auto generation = ++m_pasteGeneration;
     m_compressingImage = true;
     emit compressingImageChanged();
@@ -1031,8 +1035,9 @@ bool Deck::pasteMedia() {
     });
     // Clipboard access stays on the UI thread; decoding, scaling and both lossless
     // encoders work on an independent snapshot without touching the document.
-    watcher->setFuture(QtConcurrent::run([pending = m_paste, image, span = media.span]() mutable -> Result {
-        const QSize canvas(3840, 2160);
+    // A placed image only needs enough pixels for its box on a 4K slide.
+    const QSize canvas = media.placed() ? (mediaRect(media).size() * 2).toSize() : QSize(3840, 2160);
+    watcher->setFuture(QtConcurrent::run([pending = m_paste, image, span = media.span, canvas]() mutable -> Result {
         QSize original;
         if (!pending.source.isEmpty()) {
             QImageReader reader(pending.source);
@@ -1107,7 +1112,7 @@ QString Deck::savePastedMedia(const QString &value) {
     if (!saved)
         return "Could not save " + name;
     cancelPaste();
-    editSlide(withMedia(slideSource(), "![](<" + name + ">)"));
+    editSlide(withReplacedMedia(slideSource(), name));
     setStatus("Added " + name);
     return {};
 }
@@ -1146,7 +1151,8 @@ void Deck::setMediaBackground(const QString &mode) {
     // A background only shows around fitted media, so choosing one stops the media spanning.
     const bool fittedBackground = mode == "blur" || mode == "white" || mode == "black" ||
                                   (media.video && mode == "auto");
-    QStringList remove{"background"}, add{"background=" + mode};
+    // Backgrounds belong to full layouts, so choosing one unplaces the image.
+    QStringList remove{"background", "position", "size"}, add{"background=" + mode};
     if (fittedBackground) {
         remove << "span" << "fit";
         add.prepend("fit");
@@ -1156,7 +1162,25 @@ void Deck::setMediaBackground(const QString &mode) {
 void Deck::setMediaMode(const QString &mode) {
     if (!QStringList{"fit", "span"}.contains(mode))
         return;
-    editSlide(withMediaDirectives(slideSource(), {"fit", "span"}, {mode}));
+    editSlide(withMediaDirectives(slideSource(), {"fit", "span", "position", "size"}, {mode}));
+}
+void Deck::setMediaPosition(const QString &position) {
+    if (!mediaPositions().contains(position))
+        return;
+    const auto media = parseMedia(slideSource(), baseDir());
+    if (media.file.isEmpty() || media.video)
+        return;
+    // Placing replaces the full layout; a new placement starts at the default size.
+    const QString size = QString("size=%1%").arg(media.placed() ? media.size : defaultPlacedSize);
+    editSlide(withMediaDirectives(slideSource(),
+                                  {"fit", "span", "background", "overlay", "position", "size"},
+                                  {"position=" + position, size}));
+}
+void Deck::setMediaSize(double percent) {
+    const auto media = parseMedia(slideSource(), baseDir());
+    if (!media.placed() || percent < 1 || percent > 100)
+        return;
+    editSlide(withMediaDirectives(slideSource(), {"size"}, {QString("size=%1%").arg(percent)}));
 }
 void Deck::exportDialog(const QString &format) {
     if (m_exporting)

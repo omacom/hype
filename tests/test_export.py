@@ -230,6 +230,17 @@ class ExportTests(unittest.TestCase):
         self.assert_color(self.movie_pixel(movie, 0.25, 10, 10), (0, 0, 191))
         self.assertEqual(xml.find('.//p:video/p:cMediaNode/p:cTn', NS).get('repeatCount'), 'indefinite')
 
+    def test_placed_animation_keeps_its_corner(self):
+        self.animation('gif')
+        self.export('# Headline\n\n![position=bottom-right size=20%](demo.gif)\n')
+        movie, _, _ = self.extracted_movie()
+        # On a 192x108 frame the 20% box ends 3px from the edges; the 35x27 GIF is 28x22.
+        self.assert_color(self.movie_pixel(movie, 0.05, 180, 100), (255, 0, 0))  # Undarkened.
+        self.assert_color(self.movie_pixel(movie, 0.25, 180, 100), (0, 0, 255))
+        corner = self.movie_pixel(movie, 0.05, 150, 100)
+        self.assertLess(corner[0], 100, corner)  # Left of the image is the theme background.
+        self.assert_color(self.movie_pixel(movie, 0.05, 5, 5), corner)  # No darkening overlay.
+
     def test_animation_conversion_failure_preserves_export(self):
         self.export('# Original\n')
         original = self.output.read_bytes()

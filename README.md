@@ -125,6 +125,8 @@ For videos, choose **Background → Blurred first frame**, or write `![fit backg
 
 **Background → Match image edges** also works with videos: `![fit background=auto](portrait.mp4)`. It samples the edges of the first frame and keeps that background color during playback, even with a custom poster. Selecting it switches spanning videos to fit.
 
+To put a small image such as a logo in a corner, choose **Place** from the **Layout** menu and pick a position, then choose a **Size**. You can also write it in the brackets: `![position=bottom-right size=10%](logo.png)`. Positions are `top-left`, `top`, `top-right`, `left`, `center`, `right`, `bottom-left`, `bottom`, and `bottom-right`. The size is the share of the slide the image may fill, from 1% to 100%, and defaults to 10% (Small). A placed image keeps its shape and sits just inside the slide edge. The slide's text and theme colors stay as they are, without darkening or white lettering. Placement works with still and animated images, not videos, and replaces `fit`, `span`, and background choices; choosing **Fit** or **Span** removes it. Pasting or dropping a new image onto a placed slide keeps its position and size, so swapping a logo is one step, and pasted images are only stored large enough for their spot.
+
 Animated WebP and GIF images play inline in the preview and while presenting. Use the usual image syntax, such as `![](demo.webp)`, with the file in `images/`. Space pauses or resumes animations while presenting; PowerPoint exports automatically convert them to embedded MP4 videos, preserving the slide layout and playback settings. PDF exports capture their first frame.
 
 Each slide supports one image or video. Copy the whole presentation folder when sharing or moving it.
