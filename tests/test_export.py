@@ -26,6 +26,19 @@ def image(path):
                      chunk(b'IEND', b''))
 
 
+def jpeg_size(data):
+    """Width and height from a JPEG's start-of-frame segment."""
+    assert data[:2] == b'\xff\xd8', 'not a JPEG'
+    offset = 2
+    while offset < len(data):
+        marker, length = data[offset + 1], struct.unpack('>H', data[offset + 2:offset + 4])[0]
+        if marker in (0xc0, 0xc1, 0xc2):
+            height, width = struct.unpack('>HH', data[offset + 5:offset + 9])
+            return width, height
+        offset += 2 + length
+    raise AssertionError('JPEG has no start-of-frame segment')
+
+
 class ExportTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -76,10 +89,14 @@ class ExportTests(unittest.TestCase):
             presentation = ET.fromstring(archive.read('ppt/presentation.xml'))
             self.assertEqual(len(presentation.findall('p:sldIdLst/p:sldId', NS)), 2)
             self.assertEqual(presentation.get('autoCompressPictures'), '0')
-            images = [name for name in archive.namelist() if name.endswith('.png')]
+            # Opaque slides are stored as JPEG, at full 4K.
+            self.assertEqual([name for name in archive.namelist() if name.endswith('.png')], [])
+            images = [name for name in archive.namelist() if name.endswith('.jpg')]
             self.assertEqual(len(images), 2)
             for name in images:
-                self.assertEqual(struct.unpack('>II', archive.read(name)[16:24]), (3840, 2160))
+                self.assertEqual(jpeg_size(archive.read(name)), (3840, 2160))
+            types = ET.fromstring(archive.read('[Content_Types].xml'))
+            self.assertIn(('jpg', 'image/jpeg'), [(d.get('Extension'), d.get('ContentType')) for d in types])
             size = presentation.find('p:sldSz', NS)
             self.assertAlmostEqual(int(size.get('cx')) / int(size.get('cy')), 16 / 9, places=5)
             core = ET.fromstring(archive.read('docProps/core.xml'))
