@@ -627,6 +627,15 @@ static void write(const QString &path, const QString &content) {
         QVERIFY(parsed.slides[1].source.contains("---"));
         for (auto &s : parsed.slides)
             QCOMPARE(source.mid(s.start, s.end - s.start), s.source);
+        Deck d;
+        d.editSource(source);
+        for (int position : {0, int(source.indexOf("title")), parsed.slides[0].start - 1, parsed.slides[0].start}) {
+            d.select(2);
+            d.selectAt(position);
+            QCOMPARE(d.selected(), 0);
+        }
+        d.selectAt(parsed.slides[1].start);
+        QCOMPARE(d.selected(), 1);
     }
     void emptyBoundariesAndUnicode() {
         auto p = parseDeck("# Æble 🍎\n---\n\n---\n");
@@ -2133,6 +2142,15 @@ static void write(const QString &path, const QString &content) {
         const double afterInsert = list->property("contentY").toDouble() - list->property("originY").toDouble();
         QVERIFY(qAbs(afterInsert - expected) < 1);
         QVERIFY(afterInsert - beforeInsert <= slideStep);
+        d.editSource("---\ntitle: Test\n---\n\n" + many);
+        d.select(d.count() - 1);
+        QVERIFY(QMetaObject::invokeMethod(window, "openMarkdown"));
+        QTRY_VERIFY(list->property("contentY").toDouble() > list->property("originY").toDouble());
+        QTest::keyClick(window, Qt::Key_Home, Qt::ControlModifier);
+        QCOMPARE(source->property("cursorPosition").toInt(), 0);
+        QCOMPARE(d.selected(), 0);
+        QTRY_VERIFY(qAbs(list->property("contentY").toDouble() - list->property("originY").toDouble()) < 1);
+        QVERIFY(source->hasActiveFocus());
         window->setProperty("allowClose", true);
         window->close();
     }
