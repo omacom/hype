@@ -2133,6 +2133,27 @@ static void write(const QString &path, const QString &content) {
         const double afterInsert = list->property("contentY").toDouble() - list->property("originY").toDouble();
         QVERIFY(qAbs(afterInsert - expected) < 1);
         QVERIFY(afterInsert - beforeInsert <= slideStep);
+        d.editSource("---\ntitle: Test\n---\n\n" + many);
+        d.select(20);
+        QVERIFY(QMetaObject::invokeMethod(window, "openMarkdown"));
+        const int cursor = d.source().indexOf("Test") + 2;
+        source->setProperty("cursorPosition", cursor);
+        QTest::keyClick(window, Qt::Key_Tab);
+        QVERIFY(list->hasActiveFocus());
+        QTest::keyClick(window, Qt::Key_Tab);
+        QVERIFY(source->hasActiveFocus());
+        QCOMPARE(source->property("cursorPosition").toInt(), cursor);
+        QTest::keyClick(window, Qt::Key_Tab);
+        QTest::keyClick(window, Qt::Key_Down);
+        QCOMPARE(d.selected(), 21);
+        QTest::keyClick(window, Qt::Key_Tab);
+        QCOMPARE(source->property("cursorPosition").toInt(), int(d.source().indexOf("# Slide 21")));
+        QTest::keyClick(window, Qt::Key_Tab);
+        QVERIFY(list->hasActiveFocus());
+        d.select(0);
+        QCOMPARE(d.selected(), 0);
+        QTest::keyClick(window, Qt::Key_Tab);
+        QCOMPARE(source->property("cursorPosition").toInt(), int(d.source().indexOf("# Slide 0")));
         window->setProperty("allowClose", true);
         window->close();
     }

@@ -55,6 +55,7 @@ ApplicationWindow {
     property var compressionReturnFocus: null
     property bool allowClose: false
     property int lastSelected: -1
+    property int sourceSelectionBeforeTab: -1
     property int dragIndex: -1
     property int dropIndex: -1
     property real dragY: 0
@@ -80,8 +81,14 @@ ApplicationWindow {
         event.accepted = true
     }
     function switchEditingFocus() {
-        if (slideEditor.activeFocus || sourceEditor.activeFocus) thumbnails.forceActiveFocus()
-        else if (markdown) revealSource(false, sourceFlick.contentY)
+        if (sourceEditor.activeFocus) {
+            sourceSelectionBeforeTab = deck.selected
+            thumbnails.forceActiveFocus()
+        } else if (slideEditor.activeFocus) thumbnails.forceActiveFocus()
+        else if (markdown) {
+            if (deck.selected === sourceSelectionBeforeTab) sourceEditor.forceActiveFocus()
+            else revealSource(false, sourceFlick.contentY, true, true)
+        }
         else slideEditor.forceActiveFocus()
     }
     function editorKey(editor, flick, event) {
@@ -189,13 +196,18 @@ ApplicationWindow {
         else slideEditor.forceActiveFocus()
     }
     function alignSource(focus = true) { revealSource(true, sourceFlick.contentY, focus) }
-    function revealSource(atTop, previousY, focus = true) {
+    function revealSource(atTop, previousY, focus = true, skipLeadingBlankLine = false) {
+        let position = deck.sourcePosition()
+        if (skipLeadingBlankLine) {
+            let end = sourceEditor.text.indexOf("\n", position)
+            if (end >= 0 && sourceEditor.text.slice(position, end).trim() === "") position = end + 1
+        }
         syncingEditor = true
-        sourceEditor.cursorPosition = deck.sourcePosition()
+        sourceEditor.cursorPosition = position
         syncingEditor = false
         if (focus) sourceEditor.forceActiveFocus()
         Qt.callLater(function() {
-            let rect = sourceEditor.positionToRectangle(deck.sourcePosition())
+            let rect = sourceEditor.positionToRectangle(position)
             let viewportHeight = win.contentItem.height - 2 * win.inset - sourceBar.height
             let nextY = previousY
             if (atTop || rect.y < previousY + sourceEditor.topPadding)
