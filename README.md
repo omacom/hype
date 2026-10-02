@@ -139,7 +139,7 @@ Colors and the font choice are saved in the Markdown file. Install the same font
 
 ## Present and export
 
-Click **Present** or press **Ctrl+Space** (or **F5**) to toggle fullscreen presentation. Use the arrows to navigate, Space to play or pause video, and Escape to return to editing.
+Click **Present** or press **Ctrl+Space** (or **F5**) to toggle fullscreen presentation from the selected slide. Press **Shift+F5** to start from the first slide, or return to it while already presenting. Use the arrows to navigate, Space to play or pause video, and Escape to return to editing.
 
 Finished videos hold their last frame. Press Space again to replay from the beginning.
 
@@ -201,6 +201,7 @@ Slide navigation and selection shortcuts apply when the sidebar or preview has f
 | Ctrl+V | Paste text or add and name media |
 | Ctrl+Z / Ctrl+Shift+Z | Undo / redo |
 | Ctrl+Space / F5 | Toggle presentation |
+| Shift+F5 | Start presentation from the first slide |
 | Escape | Leave presentation |
 | Space | Play / pause video while presenting |
 
