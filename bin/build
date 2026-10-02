@@ -3,5 +3,37 @@ set -eu
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 mkdir -p "$ROOT/build"
 cd "$ROOT/build"
-qmake6 "$ROOT/hype.pro"
+
+if [ -n "${HYPE_QMAKE:-}" ]; then
+    build_qmake=$HYPE_QMAKE
+else
+    build_qmake=
+    for candidate in "$ROOT"/build/qt/*/gcc_64/bin/qmake6; do
+        if [ -x "$candidate" ]; then
+            build_qmake=$candidate
+        fi
+    done
+    if [ -z "$build_qmake" ]; then
+        build_qmake=$(command -v qmake6 || true)
+    fi
+fi
+if [ -z "$build_qmake" ]; then
+    printf 'Qt 6.9 or newer is required; qmake6 was not found.\n' >&2
+    exit 1
+fi
+qt_version=$("$build_qmake" -query QT_VERSION)
+qt_major=${qt_version%%.*}
+qt_minor=${qt_version#*.}
+qt_minor=${qt_minor%%.*}
+if [ "$qt_major" -lt 6 ] || { [ "$qt_major" -eq 6 ] && [ "$qt_minor" -lt 9 ]; }; then
+    printf 'Qt 6.9 or newer is required; %s reports Qt %s.\n' "$build_qmake" "$qt_version" >&2
+    exit 1
+fi
+
+"$build_qmake" "$ROOT/hype.pro"
+# Objects built with another Qt version cannot be safely reused.
+if [ -f Makefile ] && [ "$(cat .qmake-used 2>/dev/null || true)" != "$build_qmake" ]; then
+    make clean
+fi
 make -j"$(nproc)"
+printf '%s\n' "$build_qmake" > .qmake-used
