@@ -894,6 +894,85 @@ static void write(const QString &path, const QString &content) {
         QCOMPARE(parseMedia("![position=\"<b>x</b>\"](logo.png)", "/tmp/deck").error,
                  QString("Unknown position"));
     }
+    void largePlacedImagesStayOnTheSlide() {
+        const QRectF slide(0, 0, 1920, 1080);
+        // The margin shrinks to nothing as the box reaches the whole slide.
+        for (const QString &position : mediaPositions())
+            QCOMPARE(mediaRect(parseMedia("![position=" + position + " size=100%](logo.png)", {})),
+                     slide);
+        for (const QString &position : mediaPositions()) {
+            const QRectF rect =
+                mediaRect(parseMedia("![position=" + position + " size=95%](logo.png)", {}));
+            QVERIFY2(slide.contains(rect), qPrintable(position));
+            QCOMPARE(rect.size(), QSizeF(1824, 1026));
+        }
+        // A corner box keeps an equal gap on both of its sides once the margin shrinks.
+        const QRectF corner = mediaRect(parseMedia("![position=bottom-right size=95%](logo.png)", {}));
+        QCOMPARE(1920 - corner.right(), 27.0);
+        QCOMPARE(1080 - corner.bottom(), 27.0);
+    }
+    void placedImageLeavesTextLayoutAlone() {
+        QTemporaryDir tmp;
+        QVERIFY(QDir().mkpath(tmp.path() + "/images"));
+        QImage logo(40, 20, QImage::Format_RGB32);
+        logo.fill(Qt::red);
+        QVERIFY(logo.save(tmp.path() + "/images/logo.png"));
+        Deck deck;
+        QVERIFY(deck.savePath(tmp.path() + "/talk.md"));
+        const QString text = "# Quarterly results\n\n- Revenue up\n- Churn down\n";
+        const QString placed = text + "\n![position=bottom-right size=10%](logo.png)\n";
+        auto render = [&](const QString &source) {
+            QImage image(1920, 1080, QImage::Format_ARGB32_Premultiplied);
+            QPainter p(&image);
+            paintSlide(&p, image.rect(), source, deck.baseDir(), deck.palette());
+            return image;
+        };
+        const QImage plain = render(text), withLogo = render(placed);
+        const QRect box = mediaRect(parseMedia(placed, deck.baseDir())).toAlignedRect();
+        int differences = 0;
+        for (int y = 0; y < 1080; ++y)
+            for (int x = 0; x < 1920; ++x)
+                if (!box.contains(x, y) && plain.pixel(x, y) != withLogo.pixel(x, y))
+                    ++differences;
+        // Same font size, position, and colors as the slide without an image.
+        QCOMPARE(differences, 0);
+    }
+    void placedImageKeepsSlideColors() {
+        QTemporaryDir tmp;
+        QVERIFY(QDir().mkpath(tmp.path() + "/images"));
+        QImage logo(40, 20, QImage::Format_RGB32);
+        logo.fill(Qt::red);
+        QVERIFY(logo.save(tmp.path() + "/images/logo.png"));
+        Deck deck;
+        QVERIFY(deck.savePath(tmp.path() + "/talk.md"));
+        const QString source = "<!-- hype: background=\"#204060\" foreground=\"#f0e0a0\" -->\n"
+                               "# Headline\n\n![position=bottom-right size=10%](logo.png)";
+        QImage slide(1920, 1080, QImage::Format_ARGB32_Premultiplied);
+        QPainter p(&slide);
+        paintSlide(&p, slide.rect(), source, deck.baseDir(), deck.palette());
+        p.end();
+        QCOMPARE(slide.pixelColor(10, 10), QColor("#204060"));
+        QCOMPARE(slide.pixelColor(1850, 1010), QColor(Qt::red));
+        // The headline uses the slide's own text color, not the white used over pictures.
+        bool slideInk = false, white = false;
+        for (int y = 0; y < 1080; y += 2)
+            for (int x = 0; x < 1920; x += 2) {
+                const QColor c = slide.pixelColor(x, y);
+                slideInk = slideInk || c == QColor("#f0e0a0");
+                white = white || (c.red() > 250 && c.green() > 250 && c.blue() > 250);
+            }
+        QVERIFY(slideInk);
+        QVERIFY(!white);
+        // With only a text color set, the theme background stays: no fill matching the red logo.
+        slide.fill(Qt::transparent);
+        p.begin(&slide);
+        paintSlide(&p, slide.rect(),
+                   "<!-- hype: foreground=\"#f0e0a0\" -->\n# Headline\n\n"
+                   "![position=bottom-right size=10%](logo.png)",
+                   deck.baseDir(), deck.palette());
+        p.end();
+        QCOMPARE(slide.pixelColor(10, 10), QColor(deck.palette()["background"].toString()));
+    }
     void placedImageKeepsThemeLayout() {
         QTemporaryDir tmp;
         QVERIFY(QDir().mkpath(tmp.path() + "/images"));
@@ -2396,6 +2475,21 @@ static void write(const QString &path, const QString &content) {
         QVERIFY2(m.error.isEmpty(), qPrintable(m.error));
         QVERIFY(!m.placed());
         QCOMPARE(m.background, QString("white"));
+    }
+    void placementUndoesStepByStep() {
+        Deck d;
+        d.editSource("# Headline\n\n![fit background=white alt=\"Logo\"](logo.png)\n");
+        const QString original = d.source();
+        d.setMediaPosition("bottom-right");
+        const QString placed = d.source();
+        d.setMediaSize(20);
+        QCOMPARE(parseMedia(d.slideSource(), {}).size, 20.0);
+        d.undo();
+        QCOMPARE(d.source(), placed);
+        d.undo();
+        QCOMPARE(d.source(), original); // fit, background, and alt text all come back.
+        d.redo();
+        QCOMPARE(d.source(), placed);
     }
     void replacingPlacedMediaKeepsPlacement() {
         const QString placed = "# Headline\n\n![position=bottom-right size=20% alt=\"Old\"](old.png)\n";
