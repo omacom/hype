@@ -27,6 +27,7 @@
 #include <QProcess>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
+#include <QQmlProperty>
 #include <QQuickStyle>
 #include <QQuickWindow>
 #include <QQuickItemGrabResult>
@@ -704,6 +705,198 @@ static void write(const QString &path, const QString &content) {
         QCOMPARE(d.slideText(), "# One slide");
         d.editSlide("# Changed\n\n");
         QCOMPARE(d.source(), "# Changed\n");
+    }
+    void sourceSelectionRanges() {
+        Deck d;
+        const QString text = QString::fromUtf8("---\r\ntitle: Test\r\n---\r\n\r\n# Ä 😀\r\n\r\n---\r\n\r\n```text\r\n---\r\n```\r\n\r\n---\r\n\r\n");
+        d.editSource(text);
+        QCOMPARE(d.count(), 3);
+        auto selectedText = [&] {
+            return d.source().mid(d.sourceSelectionStart(), d.sourceSelectionEnd() - d.sourceSelectionStart());
+        };
+        QCOMPARE(selectedText(), QString::fromUtf8("\r\n# Ä 😀\r\n\r\n"));
+        QCOMPARE(d.source().left(d.sourceSelectionStart()), QString("---\r\ntitle: Test\r\n---\r\n"));
+        d.select(1);
+        QCOMPARE(selectedText(), QString("\r\n```text\r\n---\r\n```\r\n\r\n"));
+        const int end = d.sourceSelectionEnd();
+        d.extendSelection(0);
+        QCOMPARE(d.sourceSelectionStart(), parseDeck(text).slides.first().start);
+        QCOMPARE(d.sourceSelectionEnd(), end);
+        d.select(2);
+        QCOMPARE(d.sourceSelectionStart(), d.sourcePosition());
+        QCOMPARE(d.sourceSelectionEnd(), text.size());
+        QCOMPARE(selectedText(), QString("\r\n"));
+        d.editSlide("# Empty no longer");
+        QCOMPARE(selectedText(), QString("\n# Empty no longer\n"));
+        d.undo();
+        QCOMPARE(selectedText(), QString("\r\n"));
+        d.editSource("");
+        QCOMPARE(d.sourceSelectionStart(), 0);
+        QCOMPARE(d.sourceSelectionEnd(), 0);
+    }
+    void markdownSelectionOutline() {
+        if (!qEnvironmentVariableIsSet("HYPE_GUI_TESTS"))
+            QSKIP("Set HYPE_GUI_TESTS=1 with local multimedia access");
+        QQuickStyle::setStyle("Basic");
+        qmlRegisterType<SlideItem>("Hype", 1, 0, "SlideCanvas");
+        qmlRegisterType<AppTheme>("Hype", 1, 0, "AppTheme");
+        Deck d;
+        QString text = "---\ntitle: Selection preview\n---\n\n";
+        for (int i = 1; i <= 30; ++i) {
+            if (i > 1) text += "\n---\n\n";
+            text += QString("# Slide %1\n\nNotes belonging to this slide.\n").arg(i);
+        }
+        d.editSource(text);
+        QQmlApplicationEngine engine;
+        engine.rootContext()->setContextProperty("deck", &d);
+        engine.addImageProvider("slides", new Thumbnails(&d));
+        engine.load(QUrl("qrc:/Main.qml"));
+        QVERIFY(!engine.rootObjects().isEmpty());
+        auto window = qobject_cast<QQuickWindow *>(engine.rootObjects().first());
+        QVERIFY(window);
+        window->resize(1100, 700);
+        auto source = window->findChild<QQuickItem *>("sourceEditor");
+        auto list = window->findChild<QQuickItem *>("thumbnails");
+        auto flick = window->findChild<QQuickItem *>("sourceFlick");
+        auto mark = window->findChild<QQuickItem *>("sourceSelection");
+        auto outline = window->findChild<QQuickItem *>("sourceSelectionOutline");
+        auto startButton = window->findChild<QQuickItem *>("sourceSelectionStartButton");
+        auto endButton = window->findChild<QQuickItem *>("sourceSelectionEndButton");
+        auto label = window->findChild<QObject *>("sourceSelectionLabel");
+        QVERIFY(source && list && flick && mark && outline && startButton && endButton && label);
+        QVERIFY(QMetaObject::invokeMethod(window, "openMarkdown"));
+        QTest::qWait(200);
+        QVERIFY(source->hasActiveFocus());
+        QVERIFY(!outline->isVisible());
+        list->forceActiveFocus();
+        const qreal step = list->property("slideStep").toReal();
+        QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, list->mapToScene(QPointF(80, 50)).toPoint());
+        QTest::mouseClick(window, Qt::LeftButton, Qt::ShiftModifier, list->mapToScene(QPointF(80, 2*step+50)).toPoint());
+        QCOMPARE(d.selectionCount(), 3);
+        QTRY_VERIFY(label->property("text").toString().startsWith(QString::fromUtf8("Slides 1–3 selected")));
+        QVERIFY(outline->isVisible());
+        const auto colors = window->property("ui").toMap();
+        QCOMPARE(QQmlProperty::read(outline, "border.color").value<QColor>(), colors["accent"].value<QColor>());
+        QCOMPARE(mark->parentItem(), flick); // The decoration stays in the viewport.
+        QCOMPARE(source->property("selectedText").toString(), QString());
+        d.select(3);
+        d.extendSelection(14);
+        QTest::qWait(100);
+        flick->setProperty("contentY", mark->property("documentTop").toReal() + 120);
+        QTRY_VERIFY(mark->property("above").toBool() && mark->property("below").toBool());
+        QVERIFY(outline->height() <= flick->height() + 16);
+        QVERIFY(outline->y() < 0); // Continued edges have no false top/bottom cap.
+        QVERIFY(outline->y() + outline->height() > flick->height());
+        const int cursor = source->property("cursorPosition").toInt();
+        const QString screenshots = qEnvironmentVariable("HYPE_SELECTION_SCREENSHOTS");
+        if (!screenshots.isEmpty()) QVERIFY(window->grabWindow().save(screenshots + "/range.png"));
+        QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier,
+            startButton->mapToScene(QPointF(startButton->width()/2, startButton->height()/2)).toPoint());
+        QTRY_VERIFY(qAbs(mark->property("rangeTop").toReal() - source->property("topPadding").toReal()) < 1);
+        QRectF firstLine, lastLine, headline;
+        QVERIFY(QMetaObject::invokeMethod(source, "positionToRectangle", Q_RETURN_ARG(QRectF, firstLine),
+            Q_ARG(int, d.sourceSelectionStart())));
+        QVERIFY(QMetaObject::invokeMethod(source, "positionToRectangle", Q_RETURN_ARG(QRectF, lastLine),
+            Q_ARG(int, d.sourceSelectionEnd() - 1)));
+        QCOMPARE(mark->property("documentTop").toReal(), firstLine.y() - 7);
+        QCOMPARE(mark->property("documentBottom").toReal(), lastLine.bottom() + 7);
+        QVERIFY(source->mapToItem(flick, firstLine.topLeft()).y() >= source->property("topPadding").toReal());
+        QVERIFY(QMetaObject::invokeMethod(source, "positionToRectangle", Q_RETURN_ARG(QRectF, headline),
+            Q_ARG(int, int(text.indexOf("# Slide 4\n")))));
+        QTest::qWait(50);
+        const QImage startImage = window->grabWindow();
+        const QRect headlineArea(source->mapToScene(headline.topLeft()).toPoint(), QSize(180, int(headline.height())));
+        int textPixels = 0;
+        for (int y = headlineArea.top(); y < headlineArea.bottom(); ++y)
+            for (int x = headlineArea.left(); x < headlineArea.right(); ++x) {
+                const QColor c = startImage.pixelColor(x, y);
+                textPixels += c.red() > 120 && c.green() > 120 && c.blue() > 120;
+            }
+        QVERIFY2(textPixels > 40, "Start must render the first headline, not just reserve empty space for it");
+        if (!screenshots.isEmpty()) QVERIFY(startImage.save(screenshots + "/start.png"));
+        QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier,
+            endButton->mapToScene(QPointF(endButton->width()/2, endButton->height()/2)).toPoint());
+        QTRY_VERIFY(qAbs(mark->property("rangeBottom").toReal() - flick->height() + source->property("bottomPadding").toReal()) < 1);
+        QCOMPARE(d.selectionFirst(), 3);
+        QCOMPARE(d.selectionLast(), 14);
+        QCOMPARE(source->property("cursorPosition").toInt(), cursor);
+        QCOMPARE(d.source(), text);
+        QVERIFY(list->hasActiveFocus());
+        // Resizing keeps the border inside the viewport.
+        window->resize(950, 600);
+        QTest::qWait(80);
+        QCOMPARE(mark->width(), flick->width());
+        QCOMPARE(outline->width(), flick->width() - 24);
+        d.select(1);
+        QTest::qWait(100);
+        QVERIFY(outline->isVisible());
+        QVERIFY(outline->height() < flick->height());
+        QCOMPARE(QQmlProperty::read(outline, "border.color").value<QColor>(), colors["inactiveSelection"].value<QColor>());
+        QTRY_VERIFY(!startButton->isVisible() && !endButton->isVisible());
+        const qreal viewportHeight = flick->height();
+        flick->setProperty("contentY", mark->property("documentBottom").toReal() + 100);
+        QTRY_VERIFY(startButton->isVisible() && endButton->isVisible());
+        QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier,
+            startButton->mapToScene(QPointF(startButton->width()/2, startButton->height()/2)).toPoint());
+        QTRY_VERIFY(!startButton->isVisible() && !endButton->isVisible());
+        QCOMPARE(flick->height(), viewportHeight);
+        if (!screenshots.isEmpty()) QVERIFY(window->grabWindow().save(screenshots + "/single.png"));
+        // The border is not an input overlay: a click still focuses the editor.
+        const QPoint click = flick->mapToScene(QPointF(120, 60)).toPoint();
+        QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier, click);
+        QVERIFY(source->hasActiveFocus());
+        QVERIFY(!outline->isVisible());
+        // ListView delegates belong to the visual tree, not the window's QObject tree.
+        const auto findFrame = [&](auto &&self, QQuickItem *item) -> QQuickItem * {
+            if (item->objectName() == "sidebarSlideFrame" + QString::number(d.selected())) return item;
+            for (auto child : item->childItems())
+                if (auto found = self(self, child)) return found;
+            return nullptr;
+        };
+        auto selectedFrame = findFrame(findFrame, list);
+        QVERIFY(selectedFrame);
+        QCOMPARE(selectedFrame->property("selectionStroke").value<QColor>(), colors["inactiveSelection"].value<QColor>());
+        QCOMPARE(selectedFrame->property("selectionStrokeWidth").toInt(), 2);
+        if (!screenshots.isEmpty()) QVERIFY(window->grabWindow().save(screenshots + "/editing.png"));
+        list->forceActiveFocus();
+        QCOMPARE(selectedFrame->property("selectionStroke").value<QColor>(), colors["accent"].value<QColor>());
+        QCOMPARE(selectedFrame->property("selectionStrokeWidth").toInt(), 3);
+        QVERIFY(outline->isVisible());
+        source->forceActiveFocus();
+        QCOMPARE(selectedFrame->property("selectionStroke").value<QColor>(), colors["inactiveSelection"].value<QColor>());
+        QVERIFY(!outline->isVisible());
+        const qreal oldBottom = mark->property("documentBottom").toReal();
+        d.editSlide("# Changed\n\nMore lines\nMore lines\nMore lines\nMore lines");
+        QTRY_VERIFY(mark->property("documentBottom").toReal() != oldBottom);
+        d.undo();
+        QTRY_COMPARE(source->property("text").toString(), text);
+        QVERIFY(QMetaObject::invokeMethod(window, "setMode", Q_ARG(QVariant, "visual")));
+        QVERIFY(!mark->isVisible());
+        QVERIFY(QMetaObject::invokeMethod(window, "openMarkdown"));
+        QTRY_VERIFY(mark->isVisible() && !outline->isVisible());
+        list->forceActiveFocus();
+        QVERIFY(outline->isVisible());
+        d.editSlide("# Long line\n\n" + QString(300, 'x'));
+        QTRY_VERIFY(flick->property("contentWidth").toReal() > flick->width() + 80);
+        flick->setProperty("contentX", 80);
+        QCOMPARE(mark->x(), 0);
+        QCOMPARE(outline->x(), 12);
+        d.editSource("");
+        QVERIFY(QMetaObject::invokeMethod(window, "openMarkdown"));
+        list->forceActiveFocus();
+        QTRY_VERIFY(outline->isVisible() && outline->height() > 10);
+        QCOMPARE(d.sourceSelectionStart(), d.sourceSelectionEnd());
+        // Even with an onscreen border, a line under TextArea's top padding
+        // needs a Start jump. No leading blank line may disguise the clipping.
+        d.editSource("# Top line\n\n---\n" + QString("Tail\n").repeated(80));
+        d.select(0);
+        QTest::qWait(80);
+        flick->setProperty("contentY", mark->property("documentTop").toReal());
+        QTRY_VERIFY(startButton->isVisible() && startButton->isEnabled());
+        QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier,
+            startButton->mapToScene(QPointF(startButton->width()/2, startButton->height()/2)).toPoint());
+        QTRY_VERIFY(!startButton->isVisible() && !endButton->isVisible());
+        QCOMPARE(flick->property("contentY").toReal(), 0);
     }
     void slideRangeOperations() {
         Deck d;

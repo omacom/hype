@@ -33,6 +33,8 @@ class Deck : public QAbstractListModel {
     Q_PROPERTY(int selectionFirst READ selectionFirst NOTIFY changed)
     Q_PROPERTY(int selectionLast READ selectionLast NOTIFY changed)
     Q_PROPERTY(int selectionCount READ selectionCount NOTIFY changed)
+    Q_PROPERTY(int sourceSelectionStart READ sourceSelectionStart NOTIFY changed)
+    Q_PROPERTY(int sourceSelectionEnd READ sourceSelectionEnd NOTIFY changed)
     Q_PROPERTY(int count READ count NOTIFY changed)
     Q_PROPERTY(int revision READ revision NOTIFY changed)
     Q_PROPERTY(bool dirty READ dirty NOTIFY changed)
@@ -114,6 +116,8 @@ class Deck : public QAbstractListModel {
     Q_INVOKABLE void dropSelection(int slot);
     Q_INVOKABLE void selectAt(int position);
     Q_INVOKABLE int sourcePosition() const;
+    int sourceSelectionStart() const;
+    int sourceSelectionEnd() const;
     Q_INVOKABLE void editSource(const QString &value);
     Q_INVOKABLE void editSlide(const QString &value);
     Q_INVOKABLE void moveSlide(int from, int to);

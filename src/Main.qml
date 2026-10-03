@@ -188,7 +188,7 @@ ApplicationWindow {
         if (markdown) revealSource(false, previousY)
         else slideEditor.forceActiveFocus()
     }
-    function alignSource(focus = true) { revealSource(true, sourceFlick.contentY, focus) }
+    function alignSource(focus = true) { revealSource(deck.selectionCount === 1, sourceFlick.contentY, focus) }
     function revealSource(atTop, previousY, focus = true) {
         syncingEditor = true
         sourceEditor.cursorPosition = deck.sourcePosition()
@@ -196,7 +196,7 @@ ApplicationWindow {
         if (focus) sourceEditor.forceActiveFocus()
         Qt.callLater(function() {
             let rect = sourceEditor.positionToRectangle(deck.sourcePosition())
-            let viewportHeight = win.contentItem.height - 2 * win.inset - sourceBar.height
+            let viewportHeight = sourceFlick.height
             let nextY = previousY
             if (atTop || rect.y < previousY + sourceEditor.topPadding)
                 nextY = rect.y - sourceEditor.topPadding
@@ -237,7 +237,10 @@ ApplicationWindow {
         }
         function onChanged() {
             win.syncEditors()
-            if (win.dragIndex < 0 && win.lastSelected !== deck.selected) Qt.callLater(thumbnails.revealSelection)
+            if (win.dragIndex < 0 && win.lastSelected !== deck.selected) {
+                Qt.callLater(thumbnails.revealSelection)
+                if (win.markdown && thumbnails.activeFocus) win.alignSource(false)
+            }
             const nextVideo = deck.media.video ? deck.media.url.toString() : ""
             const changedVideo = win.lastSelected !== deck.selected || player.source.toString() !== nextVideo
             win.lastSelected = deck.selected
@@ -503,8 +506,11 @@ ApplicationWindow {
         required property int slide
         required property bool selected
         required property bool hovered
+        property bool selectionActive: true
         property size renderSize: Qt.size(340, 192)
         readonly property bool current: deck.selected === slide
+        readonly property color selectionStroke: selected ? (selectionActive ? win.ui.accent : win.ui.inactiveSelection) : win.ui.border
+        readonly property int selectionStrokeWidth: current && selectionActive ? 3 : selected ? 2 : 1
         color: deck.background; radius: win.rounding
         Image {
             anchors.fill: parent
@@ -520,10 +526,10 @@ ApplicationWindow {
         }
         Rectangle {
             anchors.fill: parent; radius: frame.radius; color: "transparent"
-            border.width: frame.current ? 3 : frame.selected ? 2 : 1
-            border.color: frame.selected ? win.ui.accent : win.ui.border
+            border.width: frame.selectionStrokeWidth
+            border.color: frame.selectionStroke
         }
-        SlideBadge { slide: frame.slide; current: frame.current; hovered: frame.hovered }
+        SlideBadge { slide: frame.slide; current: frame.current; hovered: frame.hovered; active: frame.selectionActive }
     }
     // Names a slide from inside its frame: part of the accent highlight on the
     // current slide, and a quieter tab on whichever slide the pointer is over.
@@ -531,12 +537,13 @@ ApplicationWindow {
         required property int slide
         required property bool current
         required property bool hovered
+        required property bool active
         visible: current || (hovered && win.dragIndex < 0)
         anchors.left: parent.left; anchors.bottom: parent.bottom
         width: badgeLabel.implicitWidth + 12; height: badgeLabel.implicitHeight + 6
-        color: current ? win.ui.accent : win.ui.border
+        color: current ? (active ? win.ui.accent : win.ui.inactiveSelection) : win.ui.border
         topRightRadius: win.softRadius; bottomLeftRadius: win.rounding
-        Label { id: badgeLabel; anchors.centerIn: parent; text: "Slide " + (parent.slide + 1); font.pixelSize: 10; color: parent.current ? win.ui.accentText : win.ui.foreground }
+        Label { id: badgeLabel; anchors.centerIn: parent; text: "Slide " + (parent.slide + 1); font.pixelSize: 10; color: parent.current ? (parent.active ? win.ui.accentText : win.ui.inactiveSelectionText) : win.ui.foreground }
     }
     component AppMenu: Menu {
         id: appMenu
@@ -1075,8 +1082,10 @@ ApplicationWindow {
                         property bool selected: index >= deck.selectionFirst && index <= deck.selectionLast
                         opacity: win.dragIndex >= 0 && selected ? 0.4 : 1
                         SlideFrame {
+                            objectName: "sidebarSlideFrame" + thumbnail.index
                             width: parent.width; height: parent.height
                             slide: thumbnail.index; selected: thumbnail.selected; hovered: thumbnailHover.hovered
+                            selectionActive: !sourceEditor.activeFocus
                         }
                     }
                     Rectangle {
@@ -1257,6 +1266,46 @@ ApplicationWindow {
             Layout.fillWidth: true; Layout.fillHeight: true
             Layout.margins: win.inset; Layout.leftMargin: 0
         EditorToolbar { id: sourceBar; scope: "source."; textInset: sourceEditor.leftPadding; Layout.fillWidth: true }
+        RowLayout {
+            id: sourceSelectionBar; objectName: "sourceSelectionBar"
+            // Keep the viewport stable when the jump controls appear/disappear.
+            Layout.preferredHeight: 28; Layout.minimumHeight: 28; Layout.maximumHeight: 28
+            Layout.fillWidth: true; Layout.leftMargin: 12; Layout.rightMargin: 12
+            spacing: 8
+            Label {
+                objectName: "sourceSelectionLabel"
+                Layout.fillWidth: true; elide: Text.ElideRight
+                text: (deck.selectionCount === 1 ? "Slide " + (deck.selected + 1) :
+                    "Slides " + (deck.selectionFirst + 1) + "–" + (deck.selectionLast + 1)) + " selected" +
+                    (sourceSelection.above && sourceSelection.below ? " · continues above and below" :
+                     sourceSelection.above ? " · continues above" : sourceSelection.below ? " · continues below" : "")
+                color: win.ui.muted; font.pixelSize: 12
+                Accessible.name: text
+            }
+            RowLayout {
+                objectName: "sourceSelectionJumps"
+                visible: sourceSelection.startOutside || sourceSelection.endOutside
+                spacing: 6
+                Label {
+                    text: "Jump to selection's: "
+                    color: win.ui.muted; font.pixelSize: 12
+                }
+                ToolButton {
+                    objectName: "sourceSelectionStartButton"
+                    text: "↑ Start"; font.pixelSize: 12; implicitHeight: 28
+                    focusPolicy: Qt.NoFocus; enabled: sourceSelection.startOutside
+                    Accessible.name: "Show start of selected slides"
+                    onClicked: sourceSelection.revealBoundary(false)
+                }
+                ToolButton {
+                    objectName: "sourceSelectionEndButton"
+                    text: "End ↓"; font.pixelSize: 12; implicitHeight: 28
+                    focusPolicy: Qt.NoFocus; enabled: sourceSelection.endOutside
+                    Accessible.name: "Show end of selected slides"
+                    onClicked: sourceSelection.revealBoundary(true)
+                }
+            }
+        }
         ScrollView {
             id: sourceScroll; objectName: "sourceScroll"
             Layout.fillWidth: true; Layout.fillHeight: true; clip: true
@@ -1268,6 +1317,14 @@ ApplicationWindow {
                         acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
                     target: null
                     onWheel: function(event) { win.scrollEditor(sourceFlick, event) }
+                }
+                SourceSelection {
+                    id: sourceSelection; objectName: "sourceSelection"
+                    parent: sourceFlick; anchors.fill: parent; z: 1
+                    presentation: deck; editor: sourceEditor; flickable: sourceFlick
+                    selectionFocused: thumbnails.activeFocus
+                    inactiveStroke: win.ui.inactiveSelection
+                    accent: win.ui.accent; rounding: win.rounding
                 }
                 TextArea.flickable: TextArea {
                 id: sourceEditor; objectName: "sourceEditor"

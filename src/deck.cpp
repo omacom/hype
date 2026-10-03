@@ -347,6 +347,10 @@ void Deck::selectAt(int position) {
         }
 }
 int Deck::sourcePosition() const { return m_parsed.slides.value(m_selected).start; }
+// Full UTF-16 source range, including blank boundary lines but not the outer
+// separators. End is exclusive; the final slide also owns the document's EOF line.
+int Deck::sourceSelectionStart() const { return m_parsed.slides[selectionFirst()].start; }
+int Deck::sourceSelectionEnd() const { return m_parsed.slides[selectionLast()].end; }
 void Deck::editSource(const QString &s) { apply(s, m_selected); }
 void Deck::editSlide(const QString &s) {
     const auto range = m_parsed.slides.value(m_selected);

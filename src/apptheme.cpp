@@ -48,13 +48,17 @@ void AppTheme::reload() {
     const QColor fg = values.value("foreground", QColor("#c0caf5"));
     const QColor accent = values.value("accent", QColor("#7aa2f7"));
     const QColor selection = values.value("selection", mix(bg, accent, .3));
+    const QColor border = mix(bg, fg, .22);
+    const QColor inactiveSelection = mix(border, accent, .7);
     const QVariantMap colors{{"background", bg},
                              {"foreground", fg},
                              {"accent", accent},
                              {"panel", mix(bg, fg, .025)},
                              {"button", values.value("lighter_background", mix(bg, fg, .08))},
                              {"hover", mix(bg, accent, .22)},
-                             {"border", mix(bg, fg, .22)},
+                             {"border", border},
+                             {"inactiveSelection", inactiveSelection},
+                             {"inactiveSelectionText", contrastInk(inactiveSelection)},
                              {"muted", mix(bg, fg, .62)},
                              {"selection", selection},
                              {"selectionText", contrastInk(selection)},

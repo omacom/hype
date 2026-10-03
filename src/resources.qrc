@@ -1,1 +1,1 @@
-<RCC><qresource prefix="/"><file>Main.qml</file><file>AppIcon.qml</file><file>Markdown.js</file><file>format.md</file><file>skill.md</file></qresource></RCC>
+<RCC><qresource prefix="/"><file>Main.qml</file><file>SourceSelection.qml</file><file>AppIcon.qml</file><file>Markdown.js</file><file>format.md</file><file>skill.md</file></qresource></RCC>
