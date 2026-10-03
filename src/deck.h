@@ -27,18 +27,18 @@ QString setScalar(QString header, const QString &key, const QString &value);
 class Deck : public QAbstractListModel {
     Q_OBJECT
     Q_PROPERTY(QString source READ source NOTIFY changed)
-    Q_PROPERTY(QString slideSource READ slideSource NOTIFY changed)
-    Q_PROPERTY(QString slideText READ slideText NOTIFY changed)
-    Q_PROPERTY(int selected READ selected WRITE select NOTIFY changed)
-    Q_PROPERTY(int selectionFirst READ selectionFirst NOTIFY changed)
-    Q_PROPERTY(int selectionLast READ selectionLast NOTIFY changed)
-    Q_PROPERTY(int selectionCount READ selectionCount NOTIFY changed)
+    Q_PROPERTY(QString slideSource READ slideSource NOTIFY selectionChanged)
+    Q_PROPERTY(QString slideText READ slideText NOTIFY selectionChanged)
+    Q_PROPERTY(int selected READ selected WRITE select NOTIFY selectionChanged)
+    Q_PROPERTY(int selectionFirst READ selectionFirst NOTIFY selectionChanged)
+    Q_PROPERTY(int selectionLast READ selectionLast NOTIFY selectionChanged)
+    Q_PROPERTY(int selectionCount READ selectionCount NOTIFY selectionChanged)
     Q_PROPERTY(int count READ count NOTIFY changed)
     Q_PROPERTY(int revision READ revision NOTIFY changed)
     Q_PROPERTY(bool dirty READ dirty NOTIFY changed)
     Q_PROPERTY(QString path READ path NOTIFY changed)
     Q_PROPERTY(QString title READ title NOTIFY changed)
-    Q_PROPERTY(QString sizeLabel READ sizeLabel NOTIFY changed)
+    Q_PROPERTY(QString sizeLabel READ sizeLabel NOTIFY selectionChanged)
     Q_PROPERTY(QString status READ status NOTIFY statusChanged)
     Q_PROPERTY(bool compressingImage READ compressingImage NOTIFY compressingImageChanged)
     Q_PROPERTY(bool exporting READ exporting NOTIFY exportChanged)
@@ -52,7 +52,7 @@ class Deck : public QAbstractListModel {
     Q_PROPERTY(QColor background READ background NOTIFY changed)
     Q_PROPERTY(QColor foreground READ foreground NOTIFY changed)
     Q_PROPERTY(QColor accent READ accent NOTIFY changed)
-    Q_PROPERTY(QVariantMap media READ media NOTIFY changed)
+    Q_PROPERTY(QVariantMap media READ media NOTIFY selectionChanged)
   public:
     explicit Deck(QObject *parent = nullptr, const QString &exportProgram = {});
     ~Deck() override;
@@ -139,7 +139,8 @@ class Deck : public QAbstractListModel {
     Q_INVOKABLE void setMediaMode(const QString &mode);
     Q_INVOKABLE void setStatus(const QString &status);
   signals:
-    void changed();
+    void changed(); // Document content, path, or saved state; also emits selectionChanged.
+    void selectionChanged(); // Selection range or the selected slide's content/media.
     void statusChanged();
     void opened(bool existing);
     void compressingImageChanged();

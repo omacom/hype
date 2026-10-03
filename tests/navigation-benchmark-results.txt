@@ -1,0 +1,67 @@
+Navigation benchmark, 2026-10-03. All times in milliseconds.
+See navigation-performance.md for the method, environment and limitations.
+Each complete run has 120 transitions in each of three scenarios.
+
+Baseline (complete rerun)
+markdown-cursor key-ms n=120 median=192.877 p95=208.466 max=221.647 mean=193.564 over16ms=120
+markdown-cursor frame-ms n=120 median=198.684 p95=214.687 max=227.542 mean=199.592 over16ms=120
+markdown-sidebar key-ms n=120 median=196.508 p95=217.505 max=233.848 mean=197.575 over16ms=120
+markdown-sidebar frame-ms n=120 median=202.099 p95=223.225 max=239.063 mean=203.240 over16ms=120
+visual-sidebar key-ms n=120 median=197.557 p95=218.933 max=259.795 mean=198.891 over16ms=120
+visual-sidebar frame-ms n=120 median=202.861 p95=225.021 max=265.785 mean=204.609 over16ms=120
+
+A: font picker only
+markdown-cursor key-ms n=120 median=4.083 p95=10.764 max=17.134 mean=4.695 over16ms=1
+markdown-cursor frame-ms n=120 median=9.976 p95=15.627 max=22.735 mean=10.454 over16ms=5
+markdown-sidebar key-ms n=120 median=3.629 p95=9.954 max=15.061 mean=4.618 over16ms=0
+markdown-sidebar frame-ms n=120 median=8.100 p95=16.338 max=21.246 mean=8.832 over16ms=4
+visual-sidebar key-ms n=120 median=4.245 p95=13.172 max=17.367 mean=5.328 over16ms=1
+visual-sidebar frame-ms n=120 median=10.027 p95=18.257 max=23.468 mean=11.060 over16ms=12
+
+B: selection signal only
+markdown-cursor key-ms n=120 median=2.669 p95=5.522 max=13.472 mean=3.071 over16ms=0
+markdown-cursor frame-ms n=120 median=9.778 p95=12.335 max=13.498 mean=10.123 over16ms=0
+markdown-sidebar key-ms n=120 median=2.381 p95=5.033 max=11.822 mean=2.700 over16ms=0
+markdown-sidebar frame-ms n=120 median=8.076 p95=10.979 max=13.158 mean=8.389 over16ms=0
+visual-sidebar key-ms n=120 median=2.569 p95=6.233 max=13.430 mean=3.182 over16ms=0
+visual-sidebar frame-ms n=120 median=10.269 p95=13.452 max=18.825 mean=10.587 over16ms=2
+
+C: B plus hidden preview suppression (rejected)
+markdown-cursor key-ms n=120 median=2.148 p95=4.742 max=5.781 mean=2.432 over16ms=0
+markdown-cursor frame-ms n=120 median=10.053 p95=12.776 max=14.664 mean=10.178 over16ms=0
+markdown-sidebar key-ms n=120 median=2.514 p95=4.787 max=11.219 mean=2.765 over16ms=0
+markdown-sidebar frame-ms n=120 median=9.071 p95=10.842 max=12.488 mean=9.073 over16ms=0
+visual-sidebar key-ms n=120 median=2.303 p95=4.424 max=12.518 mean=2.626 over16ms=0
+visual-sidebar frame-ms n=120 median=9.865 p95=12.525 max=13.450 mean=10.156 over16ms=0
+
+D: combined candidate, run 1
+markdown-cursor key-ms n=120 median=2.257 p95=4.666 max=9.746 mean=2.591 over16ms=0
+markdown-cursor frame-ms n=120 median=10.832 p95=12.953 max=15.081 mean=10.753 over16ms=0
+markdown-sidebar key-ms n=120 median=2.621 p95=5.452 max=8.057 mean=2.855 over16ms=0
+markdown-sidebar frame-ms n=120 median=8.876 p95=11.549 max=12.973 mean=9.125 over16ms=0
+visual-sidebar key-ms n=120 median=2.206 p95=4.169 max=5.088 mean=2.355 over16ms=0
+visual-sidebar frame-ms n=120 median=10.187 p95=13.304 max=14.723 mean=10.323 over16ms=0
+
+D: combined candidate, run 2
+markdown-cursor key-ms n=120 median=2.438 p95=4.331 max=5.592 mean=2.564 over16ms=0
+markdown-cursor frame-ms n=120 median=10.686 p95=12.757 max=14.697 mean=10.618 over16ms=0
+markdown-sidebar key-ms n=120 median=2.418 p95=4.444 max=5.681 mean=2.656 over16ms=0
+markdown-sidebar frame-ms n=120 median=8.905 p95=11.078 max=14.096 mean=8.966 over16ms=0
+visual-sidebar key-ms n=120 median=2.262 p95=5.154 max=6.275 mean=2.574 over16ms=0
+visual-sidebar frame-ms n=120 median=10.360 p95=13.192 max=15.278 mean=10.569 over16ms=0
+
+Final: metadata compatibility retained, run 1
+markdown-cursor key-ms n=120 median=2.313 p95=5.491 max=12.593 mean=2.820 over16ms=0
+markdown-cursor frame-ms n=120 median=10.419 p95=13.043 max=15.802 mean=10.445 over16ms=0
+markdown-sidebar key-ms n=120 median=2.363 p95=4.541 max=6.503 mean=2.502 over16ms=0
+markdown-sidebar frame-ms n=120 median=8.216 p95=11.028 max=12.983 mean=8.562 over16ms=0
+visual-sidebar key-ms n=120 median=2.431 p95=5.290 max=15.606 mean=2.851 over16ms=0
+visual-sidebar frame-ms n=120 median=10.636 p95=14.320 max=21.237 mean=10.779 over16ms=1
+
+Final: metadata compatibility retained, run 2
+markdown-cursor key-ms n=120 median=2.330 p95=5.185 max=11.894 mean=2.674 over16ms=0
+markdown-cursor frame-ms n=120 median=10.012 p95=13.129 max=15.244 mean=10.209 over16ms=0
+markdown-sidebar key-ms n=120 median=2.342 p95=5.473 max=10.992 mean=2.712 over16ms=0
+markdown-sidebar frame-ms n=120 median=8.603 p95=10.805 max=16.564 mean=8.811 over16ms=0
+visual-sidebar key-ms n=120 median=2.047 p95=5.318 max=13.436 mean=2.586 over16ms=0
+visual-sidebar frame-ms n=120 median=9.659 p95=12.832 max=13.756 mean=10.036 over16ms=0

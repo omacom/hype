@@ -137,6 +137,9 @@ QString setScalar(QString header, const QString &key, const QString &value) {
 }
 Deck::Deck(QObject *parent, const QString &exportProgram) : QAbstractListModel(parent),
     m_exportProgram(exportProgram.isEmpty() ? QCoreApplication::applicationFilePath() : exportProgram) {
+    // Document changes also refresh the selected slide; navigation does not
+    // invalidate document-wide bindings (fonts, theme, title, render revision).
+    connect(this, &Deck::changed, this, &Deck::selectionChanged);
     discoverThemes();
     m_source = "---\ntitle: Untitled\ntheme: tokyo-night\n---\n\n# Your next idea\n";
     m_parsed = parseDeck(m_source);
@@ -308,14 +311,14 @@ void Deck::select(int index) {
     if (m_selected == index && m_anchor == index)
         return;
     m_selected = m_anchor = index;
-    emit changed();
+    emit selectionChanged();
 }
 void Deck::extendSelection(int index) {
     index = qBound(0, index, count() - 1);
     if (m_selected == index)
         return;
     m_selected = index;
-    emit changed();
+    emit selectionChanged();
 }
 void Deck::moveSelection(int direction) {
     if (direction < 0 && selectionFirst() > 0)

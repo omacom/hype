@@ -707,7 +707,7 @@ void SlideItem::setDeck(Deck *deck) {
         disconnect(m_deck, nullptr, this, nullptr);
     m_deck = deck;
     if (deck)
-        connect(deck, &Deck::changed, this, [this] { update(); });
+        connect(deck, &Deck::selectionChanged, this, [this] { update(); });
     emit deckChanged();
     update();
 }
@@ -798,7 +798,7 @@ Thumbnails::Thumbnails(Deck *deck) {
     auto timer = new QTimer(this);
     timer->setInterval(60);
     timer->setSingleShot(true);
-    connect(deck, &Deck::changed, this, [this, timer] {
+    connect(deck, &Deck::selectionChanged, this, [this, timer] {
         if (m_stopping->load())
             return;
         ++*m_generation;

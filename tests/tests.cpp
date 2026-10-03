@@ -2246,6 +2246,70 @@ static void write(const QString &path, const QString &content) {
         QVERIFY(!d.importMedia(QUrl::fromLocalFile(tmp.path() + "/source/invalid.png"), true));
         QCOMPARE(d.count(), 2);
     }
+    void navigationKeepsDocumentControlsStable() {
+        if (!qEnvironmentVariableIsSet("HYPE_GUI_TESTS"))
+            QSKIP("Set HYPE_GUI_TESTS=1 with local multimedia access");
+        QQuickStyle::setStyle("Basic");
+        qmlRegisterType<SlideItem>("Hype", 1, 0, "SlideCanvas");
+        qmlRegisterType<AppTheme>("Hype", 1, 0, "AppTheme");
+        Deck d;
+        d.editSource("# One\n\n---\n\n# Two\n\n---\n\n# Three\n");
+        QQmlApplicationEngine engine;
+        engine.rootContext()->setContextProperty("deck", &d);
+        engine.addImageProvider("slides", new Thumbnails(&d));
+        engine.load(QUrl("qrc:/Main.qml"));
+        QVERIFY(!engine.rootObjects().isEmpty());
+        auto window = qobject_cast<QQuickWindow *>(engine.rootObjects().first());
+        QVERIFY(window);
+        auto fonts = window->findChild<QObject *>("fontPicker");
+        auto source = window->findChild<QQuickItem *>("sourceEditor");
+        auto slide = window->findChild<QQuickItem *>("slideEditor");
+        QVERIFY(fonts && source && slide);
+        QTest::qWait(100);
+        QSignalSpy fontListChanges(fonts, SIGNAL(visibleFontsChanged()));
+        QSignalSpy sourceChanges(source, SIGNAL(textChanged()));
+        QSignalSpy documentChanges(&d, &Deck::changed);
+        QVERIFY(fontListChanges.isValid() && sourceChanges.isValid());
+        const QString original = d.source();
+        const int revision = d.revision();
+        d.select(1);
+        QCOMPARE(slide->property("text").toString(), d.slideText());
+        d.extendSelection(2);
+        QCOMPARE(d.selectionCount(), 2);
+        QCOMPARE(d.revision(), revision);
+        QCOMPARE(d.source(), original);
+        QCOMPARE(documentChanges.count(), 0);
+        QCOMPARE(fontListChanges.count(), 0);
+        QCOMPARE(sourceChanges.count(), 0);
+        // Content changes must still synchronize both editors, without rebuilding
+        // the font picker on every typed character.
+        d.select(1);
+        d.editSlide("# Edited");
+        QCOMPARE(source->property("text").toString(), d.source());
+        QCOMPARE(slide->property("text").toString(), d.slideText());
+        QVERIFY(sourceChanges.count() > 0);
+        QCOMPARE(fontListChanges.count(), 0);
+        d.undo();
+        QCOMPARE(source->property("text").toString(), original);
+        d.redo();
+        QCOMPARE(slide->property("text").toString(), QString("# Edited"));
+        QString family = d.fontNames().first();
+        if (family == d.fontName()) family = d.fontNames().last();
+        d.chooseFont(family);
+        QCOMPARE(fonts->property("displayText").toString(), family);
+        QCOMPARE(fonts->property("selectedFont").toString(), family);
+        // Saving only changes path/dirty state; those bindings must also refresh.
+        QTemporaryDir tmp;
+        QVERIFY(d.savePath(tmp.filePath("navigation.md")));
+        QVERIFY(!window->title().contains(QString::fromUtf8(" •")));
+        QCOMPARE(source->property("text").toString(), d.source());
+        QVERIFY(QMetaObject::invokeMethod(window, "openMarkdown"));
+        QTest::qWait(50);
+        source->setProperty("cursorPosition", d.source().size());
+        QCOMPARE(d.selected(), 2);
+        QVERIFY(QMetaObject::invokeMethod(window, "setMode", Q_ARG(QVariant, "visual")));
+        QCOMPARE(slide->property("text").toString(), d.slideText());
+    }
     void fontSelection() {
         Deck d;
         QVERIFY(!d.fontNames().isEmpty());
@@ -2303,6 +2367,95 @@ static void write(const QString &path, const QString &content) {
         QVERIFY(!lateTexture || lateTexture->textureSize().isEmpty());
         provider.shutdown(); // Idempotent for aboutToQuit, scope guard, and destructor.
     }
+    void benchmarkNavigation() {
+        if (!qEnvironmentVariableIsSet("HYPE_NAV_BENCHMARK"))
+            QSKIP("Set HYPE_NAV_BENCHMARK=1 to measure keyboard slide navigation");
+        QQuickStyle::setStyle("Basic");
+        qmlRegisterType<SlideItem>("Hype", 1, 0, "SlideCanvas");
+        qmlRegisterType<AppTheme>("Hype", 1, 0, "AppTheme");
+        Deck d;
+        QString path = qEnvironmentVariable("HYPE_NAV_DECK");
+        if (path.isEmpty()) path = QFINDTESTDATA("fixtures/navigation.md");
+        QVERIFY(d.loadPath(path, false));
+        const auto parsed = parseDeck(d.source());
+        QVERIFY(d.count() >= 3);
+        QQmlApplicationEngine engine;
+        engine.rootContext()->setContextProperty("deck", &d);
+        engine.addImageProvider("slides", new Thumbnails(&d));
+        engine.load(QUrl("qrc:/Main.qml"));
+        QVERIFY(!engine.rootObjects().isEmpty());
+        auto window = qobject_cast<QQuickWindow *>(engine.rootObjects().first());
+        QVERIFY(window);
+        window->resize(1280, 800);
+        auto source = window->findChild<QQuickItem *>("sourceEditor");
+        auto list = window->findChild<QQuickItem *>("thumbnails");
+        QVERIFY(source && list);
+        const QString original = d.source();
+        auto report = [](const QString &scenario, const QString &metric, QList<double> values) {
+            std::sort(values.begin(), values.end());
+            double total = 0;
+            int slow = 0;
+            for (double v : values) { total += v; slow += v > 16.67; }
+            qInfo().noquote() << QString("NAV %1 %2 n=%3 median=%4 p95=%5 max=%6 mean=%7 over16ms=%8")
+                .arg(scenario, metric).arg(values.size())
+                .arg(values[values.size()/2], 0, 'f', 3)
+                .arg(values[qMin(values.size()-1, qsizetype(values.size()*0.95))], 0, 'f', 3)
+                .arg(values.last(), 0, 'f', 3).arg(total/values.size(), 0, 'f', 3).arg(slow);
+        };
+        const QString only = qEnvironmentVariable("HYPE_NAV_SCENARIO");
+        for (const QString &scenario : {QString("markdown-cursor"), QString("markdown-sidebar"), QString("visual-sidebar")}) {
+            if (!only.isEmpty() && only != scenario) continue;
+            const bool markdown = scenario.startsWith("markdown");
+            const bool cursor = scenario.endsWith("cursor");
+            QVERIFY(QMetaObject::invokeMethod(window, "setMode", Q_ARG(QVariant, markdown ? "markdown" : "visual")));
+            if (cursor) source->forceActiveFocus(); else list->forceActiveFocus();
+            d.select(0);
+            QTest::qWait(300);
+            QList<double> dispatch, frame;
+            // Both directions; enough time between keys for the prefetch timer and
+            // one-second metadata caches to run, like held/repeated arrow keys.
+            for (int direction : {1, -1}) {
+                const int limit = qMin(d.count()-1, 60);
+                for (int step = 0; step < limit; ++step) {
+                    const int from = direction > 0 ? step : limit-step;
+                    const int to = from + direction;
+                    d.select(from);
+                    if (cursor) {
+                        // Cross a real separator with one native Up/Down event.
+                        const int boundary = parsed.slides[qMax(from, to)].start;
+                        const int position = direction > 0 ? original.lastIndexOf('\n', boundary-2)+1 : boundary;
+                        source->setProperty("cursorPosition", position);
+                        QCOMPARE(d.selected(), from);
+                    }
+                    QTest::qWait(70);
+                    QEventLoop loop;
+                    QTimer timeout;
+                    timeout.setSingleShot(true);
+                    bool painted = false;
+                    const auto connection = connect(window, &QQuickWindow::frameSwapped, &loop, [&] {
+                        painted = true;
+                        loop.quit();
+                    }, Qt::QueuedConnection);
+                    connect(&timeout, &QTimer::timeout, &loop, &QEventLoop::quit);
+                    QElapsedTimer timer;
+                    timer.start();
+                    QTest::keyClick(window, direction > 0 ? Qt::Key_Down : Qt::Key_Up);
+                    dispatch.append(timer.nsecsElapsed()/1e6);
+                    QCOMPARE(d.selected(), to);
+                    window->update();
+                    timeout.start(2000);
+                    loop.exec();
+                    frame.append(timer.nsecsElapsed()/1e6);
+                    disconnect(connection);
+                    QVERIFY2(painted, "No frame was presented within two seconds");
+                }
+            }
+            report(scenario, "key-ms", dispatch);
+            report(scenario, "frame-ms", frame);
+            QCOMPARE(d.source(), original);
+        }
+    }
+
     void navigationLatency() {
         if (!qEnvironmentVariableIsSet("HYPE_BENCHMARK"))
             QSKIP("Set HYPE_BENCHMARK=1 for navigation timings");
