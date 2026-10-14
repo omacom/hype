@@ -1,3 +1,4 @@
+#include "budget.h"
 #include "apptheme.h"
 #include "deck.h"
 #include "filedialog.h"
@@ -22,6 +23,7 @@
 #include <QMimeData>
 #include <QMediaPlayer>
 #include <QPainter>
+#include <QTextTable>
 #include <QPdfDocument>
 #include <QProcess>
 #include <QQmlApplicationEngine>
@@ -82,7 +84,12 @@ class TestFilePortal : public QDBusVirtualObject {
 class HypeTests : public QObject {
     Q_OBJECT
     QTemporaryDir settingsDirectory;
-    static void write(const QString &path, const QString &content) {
+    // PDF pictures are JPEG, which may move a flat colour by a level or two.
+static bool nearColor(const QColor &got, const QColor &want, int tolerance = 8) {
+    return qAbs(got.red() - want.red()) <= tolerance && qAbs(got.green() - want.green()) <= tolerance &&
+           qAbs(got.blue() - want.blue()) <= tolerance;
+}
+static void write(const QString &path, const QString &content) {
         QFile f(path);
         QVERIFY(f.open(QIODevice::WriteOnly));
         f.write(content.toUtf8());
@@ -1234,15 +1241,21 @@ class HypeTests : public QObject {
         QTRY_COMPARE_WITH_TIMEOUT(player->mediaStatus(), QMediaPlayer::EndOfMedia, 10000);
         QCOMPARE(player->playbackState(), QMediaPlayer::StoppedState);
         QVERIFY(output->isVisible());
-        auto held = output->grabToImage();
-        QVERIFY(held);
-        QTRY_VERIFY(!held->image().isNull());
-        auto heldColor = held->image().pixelColor(held->image().width() / 2, held->image().height() / 2);
-        QVERIFY2(heldColor.red() > 240, qPrintable(heldColor.name()));
-        QTest::qWait(200);
-        held = output->grabToImage();
-        QTRY_VERIFY(!held->image().isNull());
-        QVERIFY(held->image().pixelColor(held->image().width() / 2, held->image().height() / 2).red() > 240);
+        // Reading the held frame back needs a real display: the offscreen platform shows the
+        // video's texture but hands back black. Everything after this runs in both.
+        if (QGuiApplication::platformName() != "offscreen") {
+            auto heldColor = [&]() -> QColor {
+                auto held = output->grabToImage();
+                if (!held || !QTest::qWaitFor([&] { return !held->image().isNull(); }))
+                    return {};
+                return held->image().pixelColor(held->image().width() / 2, held->image().height() / 2);
+            };
+            QVERIFY2(heldColor().red() > 240, qPrintable(heldColor().name()));
+            QTest::qWait(200);
+            QVERIFY2(heldColor().red() > 240, qPrintable(heldColor().name()));
+        } else {
+            qInfo("Held-frame pixels are checked only on a real display.");
+        }
         QTest::keyClick(window, Qt::Key_Space);
         QTRY_COMPARE(player->playbackState(), QMediaPlayer::PlayingState);
         QTRY_VERIFY(frameColor().blue() > 240);
@@ -1505,6 +1518,25 @@ class HypeTests : public QObject {
         QTest::keyClick(window, Qt::Key_Period, Qt::ControlModifier);
         QCOMPARE(window->property("mode").toString(), QString("visual"));
         QTest::keyClick(window, Qt::Key_M, Qt::ControlModifier);
+        QCOMPARE(window->property("mode").toString(), QString("overview"));
+        // The header's two mode buttons do what their shortcuts do, one click each.
+        auto click = [&](const char *name) {
+            auto button = window->findChild<QQuickItem *>(name);
+            QVERIFY(button);
+            QTest::mouseClick(window, Qt::LeftButton, Qt::NoModifier,
+                              button->mapToScene(QPointF(button->width() / 2, button->height() / 2)).toPoint());
+        };
+        click("overviewButton");
+        QCOMPARE(window->property("mode").toString(), QString("visual"));
+        click("modeButton");
+        QCOMPARE(window->property("mode").toString(), QString("markdown"));
+        click("modeButton");
+        QCOMPARE(window->property("mode").toString(), QString("visual"));
+        click("overviewButton");
+        QCOMPARE(window->property("mode").toString(), QString("overview"));
+        click("modeButton"); // From the overview, straight to the other editor.
+        QCOMPARE(window->property("mode").toString(), QString("markdown"));
+        click("overviewButton");
         QCOMPARE(window->property("mode").toString(), QString("overview"));
         QTRY_VERIFY(grid->isVisible());
         QVERIFY(!list->isVisible());
@@ -2216,6 +2248,115 @@ class HypeTests : public QObject {
         QVERIFY(!d.importMedia(QUrl::fromLocalFile(tmp.path() + "/source/invalid.png"), true));
         QCOMPARE(d.count(), 2);
     }
+    void navigationKeepsDocumentControlsStable() {
+        if (!qEnvironmentVariableIsSet("HYPE_GUI_TESTS"))
+            QSKIP("Set HYPE_GUI_TESTS=1 with local multimedia access");
+        QQuickStyle::setStyle("Basic");
+        qmlRegisterType<SlideItem>("Hype", 1, 0, "SlideCanvas");
+        qmlRegisterType<AppTheme>("Hype", 1, 0, "AppTheme");
+        Deck d;
+        d.editSource("# One\n\n---\n\n# Two\n\n---\n\n# Three\n");
+        QQmlApplicationEngine engine;
+        engine.rootContext()->setContextProperty("deck", &d);
+        engine.addImageProvider("slides", new Thumbnails(&d));
+        engine.load(QUrl("qrc:/Main.qml"));
+        QVERIFY(!engine.rootObjects().isEmpty());
+        auto window = qobject_cast<QQuickWindow *>(engine.rootObjects().first());
+        QVERIFY(window);
+        auto fonts = window->findChild<QObject *>("fontPicker");
+        auto source = window->findChild<QQuickItem *>("sourceEditor");
+        auto slide = window->findChild<QQuickItem *>("slideEditor");
+        QVERIFY(fonts && source && slide);
+        QTest::qWait(100);
+        QSignalSpy fontListChanges(fonts, SIGNAL(visibleFontsChanged()));
+        QSignalSpy sourceChanges(source, SIGNAL(textChanged()));
+        QSignalSpy documentChanges(&d, &Deck::changed);
+        QVERIFY(fontListChanges.isValid() && sourceChanges.isValid());
+        const QString original = d.source();
+        const int revision = d.revision();
+        d.select(1);
+        QCOMPARE(slide->property("text").toString(), d.slideText());
+        d.extendSelection(2);
+        QCOMPARE(d.selectionCount(), 2);
+        QCOMPARE(d.revision(), revision);
+        QCOMPARE(d.source(), original);
+        QCOMPARE(documentChanges.count(), 0);
+        QCOMPARE(fontListChanges.count(), 0);
+        QCOMPARE(sourceChanges.count(), 0);
+        // Content changes must still synchronize both editors, without rebuilding
+        // the font picker on every typed character.
+        d.select(1);
+        d.editSlide("# Edited");
+        QCOMPARE(source->property("text").toString(), d.source());
+        QCOMPARE(slide->property("text").toString(), d.slideText());
+        QVERIFY(sourceChanges.count() > 0);
+        QCOMPARE(fontListChanges.count(), 0);
+        d.undo();
+        QCOMPARE(source->property("text").toString(), original);
+        d.redo();
+        QCOMPARE(slide->property("text").toString(), QString("# Edited"));
+        QString family = d.fontNames().first();
+        if (family == d.fontName()) family = d.fontNames().last();
+        d.chooseFont(family);
+        QCOMPARE(fonts->property("displayText").toString(), family);
+        QVERIFY(fontListChanges.count() > 0);
+        // Saving only changes path/dirty state; those bindings must also refresh.
+        QTemporaryDir tmp;
+        QVERIFY(d.savePath(tmp.filePath("navigation.md")));
+        QVERIFY(!window->title().contains(QString::fromUtf8(" •")));
+        QCOMPARE(source->property("text").toString(), d.source());
+        QVERIFY(QMetaObject::invokeMethod(window, "openMarkdown"));
+        QTest::qWait(50);
+        source->setProperty("cursorPosition", d.source().size());
+        QCOMPARE(d.selected(), 2);
+        QVERIFY(QMetaObject::invokeMethod(window, "setMode", Q_ARG(QVariant, "visual")));
+        QCOMPARE(slide->property("text").toString(), d.slideText());
+    }
+    void documentChangesNotifySelectionAfterDocument() {
+        Deck d;
+        QStringList order;
+        connect(&d, &Deck::changed, [&] { order << "changed"; });
+        connect(&d, &Deck::selectionChanged, [&] { order << "selection"; });
+        QSignalSpy fontChanges(&d, &Deck::fontChanged);
+        d.editSource("# One\n\n---\n\n# Two\n");
+        QCOMPARE(order, QStringList({"changed", "selection"}));
+        order.clear();
+        // Identical text only moves the selection.
+        d.editSource(d.source());
+        QCOMPARE(order, QStringList({"selection"}));
+        // Edits that keep the font do not notify the font picker.
+        const int fonts = fontChanges.count();
+        d.editSource(d.source() + "\nMore");
+        QCOMPARE(fontChanges.count(), fonts);
+    }
+    void replacedMediaRefreshesThumbnails() {
+        QTemporaryDir dir;
+        QVERIFY(QDir(dir.path()).mkpath("images"));
+        const QString image = dir.filePath("images/photo.png");
+        auto write = [&](QColor color, int size) {
+            QImage picture(size, size, QImage::Format_RGB32);
+            picture.fill(color);
+            QVERIFY(picture.save(image));
+        };
+        write(Qt::red, 40);
+        const QString path = dir.filePath("presentation.md");
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write("# One\n\n---\n\n![](photo.png)\n");
+        file.close();
+        Deck d;
+        QVERIFY(d.loadPath(path));
+        const QString before = d.renderId(1);
+        const qint64 bytes = d.totalBytes();
+        const int revision = d.revision();
+        QSignalSpy changes(&d, &Deck::changed);
+        write(Qt::blue, 80);
+        QTRY_VERIFY(changes.count() > 0);
+        QVERIFY(d.revision() > revision);
+        QVERIFY(d.renderId(1) != before);
+        QVERIFY(d.totalBytes() != bytes);
+        QCOMPARE(d.dirty(), false);
+    }
     void fontSelection() {
         Deck d;
         QVERIFY(!d.fontNames().isEmpty());
@@ -2325,6 +2466,95 @@ class HypeTests : public QObject {
         QVERIFY(!lateTexture || lateTexture->textureSize().isEmpty());
         provider.shutdown(); // Idempotent for aboutToQuit, scope guard, and destructor.
     }
+    void benchmarkNavigation() {
+        if (!qEnvironmentVariableIsSet("HYPE_NAV_BENCHMARK"))
+            QSKIP("Set HYPE_NAV_BENCHMARK=1 to measure keyboard slide navigation");
+        QQuickStyle::setStyle("Basic");
+        qmlRegisterType<SlideItem>("Hype", 1, 0, "SlideCanvas");
+        qmlRegisterType<AppTheme>("Hype", 1, 0, "AppTheme");
+        Deck d;
+        QString path = qEnvironmentVariable("HYPE_NAV_DECK");
+        if (path.isEmpty()) path = QFINDTESTDATA("fixtures/navigation.md");
+        QVERIFY(d.loadPath(path, false));
+        const auto parsed = parseDeck(d.source());
+        QVERIFY(d.count() >= 3);
+        QQmlApplicationEngine engine;
+        engine.rootContext()->setContextProperty("deck", &d);
+        engine.addImageProvider("slides", new Thumbnails(&d));
+        engine.load(QUrl("qrc:/Main.qml"));
+        QVERIFY(!engine.rootObjects().isEmpty());
+        auto window = qobject_cast<QQuickWindow *>(engine.rootObjects().first());
+        QVERIFY(window);
+        window->resize(1280, 800);
+        auto source = window->findChild<QQuickItem *>("sourceEditor");
+        auto list = window->findChild<QQuickItem *>("thumbnails");
+        QVERIFY(source && list);
+        const QString original = d.source();
+        auto report = [](const QString &scenario, const QString &metric, QList<double> values) {
+            std::sort(values.begin(), values.end());
+            double total = 0;
+            int slow = 0;
+            for (double v : values) { total += v; slow += v > 16.67; }
+            qInfo().noquote() << QString("NAV %1 %2 n=%3 median=%4 p95=%5 max=%6 mean=%7 over16ms=%8")
+                .arg(scenario, metric).arg(values.size())
+                .arg(values[values.size()/2], 0, 'f', 3)
+                .arg(values[qMin(values.size()-1, qsizetype(values.size()*0.95))], 0, 'f', 3)
+                .arg(values.last(), 0, 'f', 3).arg(total/values.size(), 0, 'f', 3).arg(slow);
+        };
+        const QString only = qEnvironmentVariable("HYPE_NAV_SCENARIO");
+        for (const QString &scenario : {QString("markdown-cursor"), QString("markdown-sidebar"), QString("visual-sidebar")}) {
+            if (!only.isEmpty() && only != scenario) continue;
+            const bool markdown = scenario.startsWith("markdown");
+            const bool cursor = scenario.endsWith("cursor");
+            QVERIFY(QMetaObject::invokeMethod(window, "setMode", Q_ARG(QVariant, markdown ? "markdown" : "visual")));
+            if (cursor) source->forceActiveFocus(); else list->forceActiveFocus();
+            d.select(0);
+            QTest::qWait(300);
+            QList<double> dispatch, frame;
+            // Both directions; enough time between keys for the prefetch timer and
+            // one-second metadata caches to run, like held/repeated arrow keys.
+            for (int direction : {1, -1}) {
+                const int limit = qMin(d.count()-1, 60);
+                for (int step = 0; step < limit; ++step) {
+                    const int from = direction > 0 ? step : limit-step;
+                    const int to = from + direction;
+                    d.select(from);
+                    if (cursor) {
+                        // Cross a real separator with one native Up/Down event.
+                        const int boundary = parsed.slides[qMax(from, to)].start;
+                        const int position = direction > 0 ? original.lastIndexOf('\n', boundary-2)+1 : boundary;
+                        source->setProperty("cursorPosition", position);
+                        QCOMPARE(d.selected(), from);
+                    }
+                    QTest::qWait(70);
+                    QEventLoop loop;
+                    QTimer timeout;
+                    timeout.setSingleShot(true);
+                    bool painted = false;
+                    const auto connection = connect(window, &QQuickWindow::frameSwapped, &loop, [&] {
+                        painted = true;
+                        loop.quit();
+                    }, Qt::QueuedConnection);
+                    connect(&timeout, &QTimer::timeout, &loop, &QEventLoop::quit);
+                    QElapsedTimer timer;
+                    timer.start();
+                    QTest::keyClick(window, direction > 0 ? Qt::Key_Down : Qt::Key_Up);
+                    dispatch.append(timer.nsecsElapsed()/1e6);
+                    QCOMPARE(d.selected(), to);
+                    window->update();
+                    timeout.start(2000);
+                    loop.exec();
+                    frame.append(timer.nsecsElapsed()/1e6);
+                    disconnect(connection);
+                    QVERIFY2(painted, "No frame was presented within two seconds");
+                }
+            }
+            report(scenario, "key-ms", dispatch);
+            report(scenario, "frame-ms", frame);
+            QCOMPARE(d.source(), original);
+        }
+    }
+
     void navigationLatency() {
         if (!qEnvironmentVariableIsSet("HYPE_BENCHMARK"))
             QSKIP("Set HYPE_BENCHMARK=1 for navigation timings");
@@ -2697,7 +2927,7 @@ class HypeTests : public QObject {
         QCOMPARE(pdf.load(tmp.path() + "/talk.pdf"), QPdfDocument::Error::None);
         const auto page = pdf.render(0, QSize(320, 180));
         QVERIFY(page.pixelColor(0, 0).blue() > 245);
-        QCOMPARE(page.pixelColor(160, 90), QColor(Qt::green));
+        QVERIFY(nearColor(page.pixelColor(160, 90), QColor(Qt::green)));
         deck.editSlide("![span loop poster=poster.png](demo.mp4)");
         deck.matchImageBackground(true);
         media = parseMedia(deck.slideSource(), deck.baseDir());
@@ -2798,6 +3028,59 @@ class HypeTests : public QObject {
         highlightCode(plain, palette);
         QCOMPARE(plain.toPlainText(), original);
     }
+    void tablesKeepColumnAlignmentAndRules() {
+        Deck deck;
+        QTextDocument doc;
+        layoutSlideText(doc, "| Plan | Price | Seats |\n| --- | :---: | ---: |\n| Basic | $9 | 1 |\n| Team | $29 | 10 |",
+                        deck.palette(), 60, 1660, true, false);
+        QTextTable *table = nullptr;
+        for (auto it = doc.rootFrame()->begin(); !it.atEnd() && !table; ++it)
+            table = qobject_cast<QTextTable *>(it.currentFrame());
+        QVERIFY(table);
+        QCOMPARE(table->rows(), 3);
+        // Sized to its content, not stretched across the slide.
+        QVERIFY2(doc.documentLayout()->frameBoundingRect(table).width() < 1660 / 2,
+                 qPrintable(QString::number(doc.documentLayout()->frameBoundingRect(table).width())));
+        const Qt::Alignment expected[] = {Qt::AlignLeft, Qt::AlignHCenter, Qt::AlignRight};
+        for (int row = 0; row < table->rows(); ++row)
+            for (int column = 0; column < 3; ++column)
+                QCOMPARE(table->cellAt(row, column).firstCursorPosition().blockFormat().alignment() &
+                             Qt::AlignHorizontal_Mask, expected[column]);
+        auto rule = [&](int row) { return table->cellAt(row, 0).format().toTableCellFormat(); };
+        QCOMPARE(rule(0).bottomBorderBrush().color(), QColor(deck.palette()["accent"].toString()));
+        QVERIFY(rule(0).bottomBorder() > rule(1).bottomBorder());
+        QCOMPARE(rule(2).bottomBorder(), 0.0);
+    }
+    void tableCellsKeepExtraSpaces() {
+        Deck deck;
+        auto width = [&](const QString &markdown) {
+            QTextDocument doc;
+            layoutSlideText(doc, markdown, deck.palette(), 60, 1660, true, false);
+            return doc.idealWidth();
+        };
+        const qreal plain = width("| A | B |\n| --- | ---: |\n| x | 1 |");
+        QCOMPARE(width("|A|B|\n|---|---:|\n|x|1|"), plain);
+        QVERIFY(width("| A | B |\n| --- | ---: |\n| x |    1 |") > plain);
+        QVERIFY(width("| A      | B |\n| --- | ---: |\n| x | 1 |") > plain);
+        QTextDocument code;
+        layoutSlideText(code, "| A | B |\n| --- | --- |\n| `a  |  b` | 1 |", deck.palette(), 60, 1660, true, false);
+        QVERIFY(code.toPlainText().contains("a  |  b"));
+    }
+    void tablesWithoutOuterPipesAlignLeft() {
+        Deck deck;
+        QImage table(1920, 1080, QImage::Format_ARGB32);
+        {
+            QPainter painter(&table);
+            paintSlide(&painter, table.rect(), "# Tools\n\nTool | Use\n--- | ---\ncheck | Find problems",
+                       QDir::tempPath(), deck.palette());
+        }
+        // The headline sits above the table, so a left edge near the margin means it was left aligned.
+        int left = table.width();
+        for (int y = 0; y < table.height() / 3; ++y)
+            for (int x = 0; x < left; ++x)
+                if (table.pixelColor(x, y) != table.pixelColor(0, 0)) left = x;
+        QVERIFY2(left < 200, qPrintable(QString::number(left)));
+    }
     void headlineFormattingStaysLocal() {
         Deck deck;
         const QStringList markedWords{"_Ruby_", "*Ruby*", "**Ruby**", "~~Ruby~~", "`Ruby`"};
@@ -2888,6 +3171,21 @@ class HypeTests : public QObject {
         QCOMPARE(render(cr), render(explicitBreaks));
         QCOMPARE(render("`one`\n`two`"), render("`one`\\\n`two`"));
     }
+    void workSizesToTheMachine() {
+        const qint64 mb = 1 << 20, gb = 1LL << 30;
+        // A 32-core workstation with 20 GB free renders on its cap; a 4-core one on its cores.
+        QCOMPARE(budget::fit(32, 20 * gb, 200 * mb, 16, 0.4, 0, 1), 16);
+        QCOMPARE(budget::fit(4, 20 * gb, 200 * mb, 16, 0.4, 0, 1), 4);
+        // A small machine is held to what its free memory fits, never below the minimum.
+        QCOMPARE(budget::fit(32, 2 * gb, 200 * mb, 16, 0.6, 0, 1), 6);
+        QCOMPARE(budget::fit(32, 512 * mb, 200 * mb, 16, 0.4, 0, 1), 1);
+        // A 4K encoder's fixed cost leaves a 2 GB machine one thread, a big one many.
+        QCOMPARE(budget::fit(32, 2 * gb, 100 * mb, 16, 0.6, 1200 * mb, 1), 1);
+        QCOMPARE(budget::fit(32, 20 * gb, 100 * mb, 16, 0.6, 1200 * mb, 1), 16);
+        // Unknown memory falls back to the core count.
+        QCOMPARE(budget::fit(32, -1, 200 * mb, 16, 0.4, 0, 1), 16);
+        QVERIFY(budget::availableBytes() > 0);
+    }
     void pdfPreserves4kDetailAndReusesImages() {
         QTemporaryDir tmp;
         QVERIFY(QDir().mkpath(tmp.path() + "/images"));
@@ -2909,15 +3207,20 @@ class HypeTests : public QObject {
         QCOMPARE(pdf.pageCount(), 2);
         const auto rendered = pdf.render(0, QSize(3840, 2160));
         QVERIFY(!rendered.isNull());
-        // One-pixel red/blue stripes catch both the old 2560px cap and JPEG loss.
-        for (int x = 100; x < 300; ++x)
-            QCOMPARE(rendered.pixelColor(x, 100), detail.pixelColor(x, 100));
+        // One-pixel red/blue stripes catch the old 2560px cap: every stripe must survive at
+        // 4K. JPEG is allowed to shift each channel by a few levels, not to blur stripes.
+        for (int x = 100; x < 300; ++x) {
+            const QColor got = rendered.pixelColor(x, 100), want = detail.pixelColor(x, 100);
+            QVERIFY2(qAbs(got.red() - want.red()) < 24 && qAbs(got.green() - want.green()) < 24 &&
+                     qAbs(got.blue() - want.blue()) < 24,
+                     qPrintable(QString("x=%1 got %2 want %3").arg(x).arg(got.name(), want.name())));
+        }
         QVERIFY(QFileInfo(tmp.path() + "/two.pdf").size() <
                 QFileInfo(tmp.path() + "/one.pdf").size() + 5000);
         QFile file(tmp.path() + "/two.pdf");
         QVERIFY(file.open(QIODevice::ReadOnly));
         const auto bytes = file.readAll();
-        QVERIFY(!bytes.contains("/DCTDecode"));
+        QVERIFY(bytes.contains("/DCTDecode")); // Pictures are JPEG, at full 4K.
         QVERIFY(bytes.contains("/Width 3840"));
         QVERIFY(bytes.contains("/Height 2160"));
         // A portrait in Span must embed only its visible center, not hidden pixels.
@@ -2938,8 +3241,8 @@ class HypeTests : public QObject {
         QPdfDocument croppedPdf;
         QCOMPARE(croppedPdf.load(tmp.path() + "/crop.pdf"), QPdfDocument::Error::None);
         const auto croppedPage = croppedPdf.render(0, QSize(384, 216));
-        QCOMPARE(croppedPage.pixelColor(190, 1), QColor(Qt::red));
-        QCOMPARE(croppedPage.pixelColor(190, 214), QColor(Qt::red));
+        QVERIFY(nearColor(croppedPage.pixelColor(190, 1), QColor(Qt::red)));
+        QVERIFY(nearColor(croppedPage.pixelColor(190, 214), QColor(Qt::red)));
     }
     void renderAndPdf() {
         QTemporaryDir tmp;
@@ -2951,6 +3254,16 @@ class HypeTests : public QObject {
         QImage image(tmp.path() + "/render/slide-001.png");
         QCOMPARE(image.size(), QSize(1920, 1080));
         QCOMPARE(image.pixelColor(0, 0), d.background());
+        // Rendering for PowerPoint stores opaque slides as JPEG and names them so.
+        QVERIFY(d.renderImages(tmp.path() + "/powerpoint", 1920, true));
+        QVERIFY(!QFile::exists(tmp.path() + "/powerpoint/slide-001.png"));
+        QImageReader jpeg(tmp.path() + "/powerpoint/slide-001.jpg");
+        QCOMPARE(jpeg.format(), QByteArray("jpeg"));
+        QFile manifest(tmp.path() + "/powerpoint/slides.json");
+        QVERIFY(manifest.open(QIODevice::ReadOnly));
+        QCOMPARE(QJsonDocument::fromJson(manifest.readAll())["slides"][0]["image"].toString(), QString("slide-001.jpg"));
+        QVERIFY(nearColor(QImage(tmp.path() + "/powerpoint/slide-001.jpg").pixelColor(0, 0), d.background()));
+        QVERIFY(d.exportPptx(tmp.path() + "/talk.pptx"));
         QVERIFY(d.exportPdf(tmp.path() + "/talk.pdf"));
         QPdfDocument pdf;
         QCOMPARE(pdf.load(tmp.path() + "/talk.pdf"), QPdfDocument::Error::None);

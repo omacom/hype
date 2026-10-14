@@ -64,6 +64,8 @@ puts "Code is highlighted when you name the language"
 - `# Headline` is big. Lists, quotes, tables, and inline `code` work.
 - `*asterisks*` are italic, `**double**` is bold, `_underscores_` underline.
 - Ordinary line breaks stay visible on the slide.
+- Tables use `| pipes |`; `:---:` centers a column and `---:` aligns it right.
+  More than one space beside a cell's text pads it.
 - `<!-- comments -->` are hidden from the slide; use them for speaker notes.
 - A `---` inside a code fence does not split the slide.
 

@@ -4,7 +4,7 @@ QT += core gui qml quick quickcontrols2 multimedia concurrent dbus
 CONFIG += c++17 release ltcg exceptions_off
 TARGET = hype
 TEMPLATE = app
-HEADERS += src/deck.h src/renderer.h
+HEADERS += src/deck.h src/renderer.h src/budget.h
 SOURCES += src/main.cpp src/deck.cpp src/renderer.cpp
 RESOURCES += src/resources.qrc
 

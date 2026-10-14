@@ -174,10 +174,6 @@ ApplicationWindow {
     property string editingMode: "visual"
     function toggleOverview() { setMode(overview ? editingMode : "overview") }
     function toggleSource() { setMode(markdown && !overview ? "visual" : "markdown") }
-    function cycleMode(step) {
-        const modes = ["overview", "visual", "markdown"]
-        setMode(modes[(modes.indexOf(mode) + step + modes.length) % modes.length])
-    }
     // Moves the selected slides by whole rows in the overview, one slide elsewhere.
     function moveSlides(delta) {
         if (Math.abs(delta) === 1) deck.moveSelection(delta)
@@ -213,9 +209,13 @@ ApplicationWindow {
             sourceFlick.contentY = Math.max(0, Math.min(maxY, nextY))
         })
     }
-    function syncEditors() {
+    function syncSourceEditor() {
         syncingEditor = true
         if (sourceEditor.text !== deck.source) sourceEditor.text = deck.source
+        syncingEditor = false
+    }
+    function syncEditors() {
+        syncingEditor = true
         if (!editingSlide && slideEditor.text !== deck.slideText) slideEditor.text = deck.slideText
         syncingEditor = false
         if (lastSelected !== deck.selected) {
@@ -223,7 +223,7 @@ ApplicationWindow {
             Qt.callLater(function() { slideScroll.contentItem.contentY = 0 })
         }
     }
-    Component.onCompleted: { syncEditors(); lastSelected = deck.selected; Qt.callLater(thumbnails.revealSelection); if (deck.path !== "") focusForDeck(true) }
+    Component.onCompleted: { syncSourceEditor(); syncEditors(); lastSelected = deck.selected; Qt.callLater(thumbnails.revealSelection); if (deck.path !== "") focusForDeck(true) }
     Connections {
         target: deck
         function onCompressingImageChanged() {
@@ -239,7 +239,8 @@ ApplicationWindow {
             pasteName.text = name
             pasteDialog.open()
         }
-        function onChanged() {
+        function onChanged() { win.syncSourceEditor() }
+        function onSelectionChanged() {
             win.syncEditors()
             if (win.dragIndex < 0 && win.lastSelected !== deck.selected) Qt.callLater(thumbnails.revealSelection)
             const nextVideo = deck.media.video ? deck.media.url.toString() : ""
@@ -765,11 +766,18 @@ ApplicationWindow {
                 }
                 ToolTip.visible: hovered; ToolTip.text: "Font: " + deck.fontName
             }
+            // Two switches, like their shortcuts: the overview on or off, and slides or source.
+            ToolbarIconButton {
+                objectName: "overviewButton"; iconName: "overview"
+                ink: win.overview ? win.ui.accent : win.ui.muted
+                description: (win.overview ? "Leave the overview" : "Overview") + " (Ctrl+M)"
+                onClicked: win.toggleOverview()
+            }
             ToolbarIconButton {
                 objectName: "modeButton"
-                iconName: win.mode
-                description: (win.overview ? "Overview · Switch to Visual" : win.markdown ? "Markdown · Switch to Overview" : "Visual · Switch to Markdown") + "  ·  Ctrl+M overview, Ctrl+. source"
-                onClicked: win.cycleMode(1)
+                iconName: win.editingMode
+                description: (win.editingMode === "markdown" ? "Markdown · Switch to Visual" : "Visual · Switch to Markdown") + " (Ctrl+.)"
+                onClicked: win.overview ? win.setMode(win.editingMode === "markdown" ? "visual" : "markdown") : win.toggleSource()
             }
             ToolbarIconButton {
                 objectName: "fileButton"; iconName: "file"; ink: deck.dirty ? win.ui.accent : win.ui.muted
@@ -909,7 +917,13 @@ ApplicationWindow {
             }
             Connections {
                 target: deck
-                function onSelectedChanged() { if (win.overview && win.dragIndex < 0) Qt.callLater(overviewGrid.revealSelection) }
+                // Follow the selection to another slide, not every edit that leaves it in place.
+                property int revealed: -1
+                function onSelectionChanged() {
+                    if (revealed === deck.selected) return
+                    revealed = deck.selected
+                    if (win.overview && win.dragIndex < 0) Qt.callLater(overviewGrid.revealSelection)
+                }
             }
             delegate: Item {
                 id: tile; required property int index
@@ -992,7 +1006,7 @@ ApplicationWindow {
             }
         }
         Rectangle {
-            visible: !win.presenting && !win.overview; Layout.preferredWidth: 227; Layout.fillHeight: true; color: win.ui.panel
+            visible: !win.presenting && !win.overview; Layout.preferredWidth: 232; Layout.fillHeight: true; color: win.ui.panel
             ColumnLayout {
                 anchors.fill: parent; anchors.margins: win.inset; spacing: 10
                 ListView {
@@ -1005,7 +1019,7 @@ ApplicationWindow {
                     property int hoveredSlide: -1
                     property int wheelDirection: 0
                     property real wheelRemainder: 0
-                    readonly property real thumbnailHeight: 108
+                    readonly property real thumbnailHeight: 108 // A 192 × 108 thumbnail: the sidebar is exactly 16:9 wide plus its insets.
                     readonly property real slideStep: thumbnailHeight + spacing
                     property real scrollBeforeReset: -1
                     function revealSelection() {
