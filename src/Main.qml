@@ -112,7 +112,8 @@ ApplicationWindow {
         if (page) {
             let amount = Math.max(40, flick.height - 40) * (event.key === Qt.Key_PageDown ? 1 : -1)
             let rect = editor.positionToRectangle(position)
-            position = editor.positionAt(rect.x, Math.max(0, rect.y + rect.height / 2 + amount))
+            let targetY = rect.y + rect.height / 2 + amount
+            position = targetY <= editor.topPadding ? 0 : editor.positionAt(rect.x, targetY)
             scroll += amount
         } else if (event.key === Qt.Key_Home) {
             position = control || position === 0 ? 0 : editor.text.lastIndexOf("\n", position - 1) + 1
