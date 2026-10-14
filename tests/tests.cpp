@@ -2345,12 +2345,14 @@ static void write(const QString &path, const QString &content) {
         Deck d;
         QVERIFY(d.loadPath(path));
         const QString before = d.renderId(1);
+        const qint64 bytes = d.totalBytes();
         const int revision = d.revision();
         QSignalSpy changes(&d, &Deck::changed);
         write(Qt::blue, 80);
         QTRY_VERIFY(changes.count() > 0);
         QVERIFY(d.revision() > revision);
         QVERIFY(d.renderId(1) != before);
+        QVERIFY(d.totalBytes() != bytes);
         QCOMPARE(d.dirty(), false);
     }
     void fontSelection() {

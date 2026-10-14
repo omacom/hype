@@ -155,6 +155,7 @@ Deck::Deck(QObject *parent, const QString &exportProgram) : QAbstractListModel(p
         watchMedia();
         m_renderIds.clear();
         m_mediaCache.clear();
+        m_sizeClock.invalidate();
         ++m_revision;
         notifyChanged();
     });
