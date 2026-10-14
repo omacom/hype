@@ -38,7 +38,7 @@ class Deck : public QAbstractListModel {
     Q_PROPERTY(bool dirty READ dirty NOTIFY changed)
     Q_PROPERTY(QString path READ path NOTIFY changed)
     Q_PROPERTY(QString title READ title NOTIFY changed)
-    Q_PROPERTY(QString sizeLabel READ sizeLabel NOTIFY selectionChanged)
+    Q_PROPERTY(QString sizeLabel READ sizeLabel NOTIFY changed)
     Q_PROPERTY(QString status READ status NOTIFY statusChanged)
     Q_PROPERTY(bool compressingImage READ compressingImage NOTIFY compressingImageChanged)
     Q_PROPERTY(bool exporting READ exporting NOTIFY exportChanged)
@@ -46,7 +46,7 @@ class Deck : public QAbstractListModel {
     Q_PROPERTY(QString exportStatus READ exportStatus NOTIFY exportChanged)
     Q_PROPERTY(bool exportFailed READ exportFailed NOTIFY exportChanged)
     Q_PROPERTY(QStringList fontNames READ fontNames CONSTANT)
-    Q_PROPERTY(QString fontName READ fontName NOTIFY changed)
+    Q_PROPERTY(QString fontName READ fontName NOTIFY fontChanged)
     Q_PROPERTY(QStringList themeNames READ themeNames CONSTANT)
     Q_PROPERTY(QString themeName READ themeName NOTIFY changed)
     Q_PROPERTY(QColor background READ background NOTIFY changed)
@@ -139,8 +139,9 @@ class Deck : public QAbstractListModel {
     Q_INVOKABLE void setMediaMode(const QString &mode);
     Q_INVOKABLE void setStatus(const QString &status);
   signals:
-    void changed(); // Document content, path, or saved state; also emits selectionChanged.
+    void changed(); // Document content, path, saved state, or media files; always followed by selectionChanged.
     void selectionChanged(); // Selection range or the selected slide's content/media.
+    void fontChanged();
     void statusChanged();
     void opened(bool existing);
     void compressingImageChanged();
@@ -174,8 +175,9 @@ class Deck : public QAbstractListModel {
     int m_selected = 0, m_anchor = 0, m_revision = 0;
     QVector<State> m_undo, m_redo;
     QMap<QString, QString> m_themes;
-    QFileSystemWatcher m_watcher;
-    QTimer m_reloadTimer;
+    QFileSystemWatcher m_watcher, m_mediaWatcher;
+    QTimer m_reloadTimer, m_mediaTimer;
+    QString m_notifiedFont;
     bool m_externalChange = false;
     QString m_recoveryDirectory, m_checkpointSource, m_checkpointPath;
     QTimer m_autosaveTimer, m_autosaveDeadline;
@@ -207,5 +209,7 @@ class Deck : public QAbstractListModel {
     bool restoreSnapshot(const QByteArray &bytes, bool opening);
     void discoverThemes();
     void watch();
+    void watchMedia();
+    void notifyChanged();
     void reloadExternal(const QString &disk);
 };

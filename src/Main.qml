@@ -513,9 +513,7 @@ ApplicationWindow {
         color: deck.background; radius: win.rounding
         Image {
             anchors.fill: parent
-            // Refresh the two affected thumbnails on selection, including media
-            // replaced on disk, without invalidating every cached thumbnail.
-            source: "image://slides/" + (deck.revision, frame.current, deck.renderId(frame.slide))
+            source: "image://slides/" + (deck.revision, deck.renderId(frame.slide))
             asynchronous: true; retainWhileLoading: true; cache: true
             sourceSize: frame.renderSize; fillMode: Image.PreserveAspectCrop; clip: true
         }
@@ -725,11 +723,9 @@ ApplicationWindow {
             ComboBox {
                 id: fonts; objectName: "fontPicker"
                 property bool showNotoVariants: false
-                // Unrelated document edits must not rebuild the font list.
-                readonly property string selectedFont: deck.fontName
                 readonly property var visibleFonts: deck.fontNames.filter(function(name) {
                     return showNotoVariants || !name.startsWith("Noto ") ||
-                        ["Noto Sans", "Noto Serif", "Noto Sans Mono", selectedFont].indexOf(name) >= 0
+                        ["Noto Sans", "Noto Serif", "Noto Sans Mono", deck.fontName].indexOf(name) >= 0
                 })
                 model: visibleFonts.concat([showNotoVariants ? "Fewer Noto fonts" : "More Noto fonts…"])
                 currentIndex: visibleFonts.indexOf(deck.fontName)
@@ -921,7 +917,13 @@ ApplicationWindow {
             }
             Connections {
                 target: deck
-                function onSelectionChanged() { if (win.overview && win.dragIndex < 0) Qt.callLater(overviewGrid.revealSelection) }
+                // Follow the selection to another slide, not every edit that leaves it in place.
+                property int revealed: -1
+                function onSelectionChanged() {
+                    if (revealed === deck.selected) return
+                    revealed = deck.selected
+                    if (win.overview && win.dragIndex < 0) Qt.callLater(overviewGrid.revealSelection)
+                }
             }
             delegate: Item {
                 id: tile; required property int index

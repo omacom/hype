@@ -2297,7 +2297,7 @@ static void write(const QString &path, const QString &content) {
         if (family == d.fontName()) family = d.fontNames().last();
         d.chooseFont(family);
         QCOMPARE(fonts->property("displayText").toString(), family);
-        QCOMPARE(fonts->property("selectedFont").toString(), family);
+        QVERIFY(fontListChanges.count() > 0);
         // Saving only changes path/dirty state; those bindings must also refresh.
         QTemporaryDir tmp;
         QVERIFY(d.savePath(tmp.filePath("navigation.md")));
@@ -2309,6 +2309,49 @@ static void write(const QString &path, const QString &content) {
         QCOMPARE(d.selected(), 2);
         QVERIFY(QMetaObject::invokeMethod(window, "setMode", Q_ARG(QVariant, "visual")));
         QCOMPARE(slide->property("text").toString(), d.slideText());
+    }
+    void documentChangesNotifySelectionAfterDocument() {
+        Deck d;
+        QStringList order;
+        connect(&d, &Deck::changed, [&] { order << "changed"; });
+        connect(&d, &Deck::selectionChanged, [&] { order << "selection"; });
+        QSignalSpy fontChanges(&d, &Deck::fontChanged);
+        d.editSource("# One\n\n---\n\n# Two\n");
+        QCOMPARE(order, QStringList({"changed", "selection"}));
+        order.clear();
+        // Identical text only moves the selection.
+        d.editSource(d.source());
+        QCOMPARE(order, QStringList({"selection"}));
+        // Edits that keep the font do not notify the font picker.
+        const int fonts = fontChanges.count();
+        d.editSource(d.source() + "\nMore");
+        QCOMPARE(fontChanges.count(), fonts);
+    }
+    void replacedMediaRefreshesThumbnails() {
+        QTemporaryDir dir;
+        QVERIFY(QDir(dir.path()).mkpath("images"));
+        const QString image = dir.filePath("images/photo.png");
+        auto write = [&](QColor color, int size) {
+            QImage picture(size, size, QImage::Format_RGB32);
+            picture.fill(color);
+            QVERIFY(picture.save(image));
+        };
+        write(Qt::red, 40);
+        const QString path = dir.filePath("presentation.md");
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write("# One\n\n---\n\n![](photo.png)\n");
+        file.close();
+        Deck d;
+        QVERIFY(d.loadPath(path));
+        const QString before = d.renderId(1);
+        const int revision = d.revision();
+        QSignalSpy changes(&d, &Deck::changed);
+        write(Qt::blue, 80);
+        QTRY_VERIFY(changes.count() > 0);
+        QVERIFY(d.revision() > revision);
+        QVERIFY(d.renderId(1) != before);
+        QCOMPARE(d.dirty(), false);
     }
     void fontSelection() {
         Deck d;
