@@ -1,4 +1,5 @@
 #include "renderer.h"
+#include "budget.h"
 #include "images.h"
 #include "math.h"
 #include "syntax.h"
@@ -431,6 +432,56 @@ static QString preserveLineBreaks(QString markdown) {
     }
     return lines.join('\n');
 }
+static const QRegularExpression &tableDelimiter() {
+    // A delimiter row, with or without outer pipes: | --- | :-: | or --- | ---:
+    static const QRegularExpression re("^ {0,3}(?=[^\\n]*\\|)\\|? *:?-+:? *(?:\\| *:?-+:? *)*\\|? *$",
+                                       QRegularExpression::MultilineOption);
+    return re;
+}
+// Markdown trims table cells. Keep the one space each side that reads as
+// separation, and turn any more into non-breaking spaces that pad the cell.
+static QString padTableCells(const QString &markdown) {
+    QStringList lines = markdown.split('\n');
+    const QStringList visible = outsideCode(markdown).split('\n');
+    auto pad = [&](int index) {
+        QString &line = lines[index];
+        const QString &mask = visible[index];
+        QList<int> pipes;
+        for (int i = 0; i < mask.size(); ++i)
+            if (mask[i] == '|' && (i == 0 || mask[i - 1] != '\\'))
+                pipes.append(i);
+        if (pipes.isEmpty())
+            return;
+        if (pipes.first() > 0 && !mask.left(pipes.first()).trimmed().isEmpty())
+            pipes.prepend(-1);
+        if (pipes.last() < mask.size() - 1 && !mask.mid(pipes.last() + 1).trimmed().isEmpty())
+            pipes.append(mask.size());
+        // Work from the end so earlier positions stay valid.
+        for (int c = pipes.size() - 1; c > 0; --c) {
+            int start = pipes[c - 1] + 1, end = pipes[c];
+            if (line.mid(start, end - start).trimmed().isEmpty())
+                continue;
+            int trailing = 0, leading = 0;
+            while (line[end - 1 - trailing] == ' ')
+                ++trailing;
+            while (line[start + leading] == ' ')
+                ++leading;
+            if (trailing > 1)
+                line.replace(end - trailing, trailing - 1, QString(trailing - 1, QChar::Nbsp));
+            if (leading > 1)
+                line.replace(start + 1, leading - 1, QString(leading - 1, QChar::Nbsp));
+        }
+    };
+    for (int i = 1; i < lines.size(); ++i) {
+        if (!tableDelimiter().match(visible[i]).hasMatch() || !visible[i - 1].contains('|'))
+            continue;
+        pad(i - 1);
+        for (int row = i + 1; row < lines.size() && visible[row].contains('|') &&
+                              !visible[row].trimmed().isEmpty(); ++row)
+            pad(row);
+    }
+    return lines.join('\n');
+}
 static void sizeSlideText(QTextDocument &doc, const QVariantMap &palette, qreal fontSize,
                           qreal width, bool centered, bool code) {
     // A null page size suspends layout while every format below changes; the
@@ -453,7 +504,9 @@ static void sizeSlideText(QTextDocument &doc, const QVariantMap &palette, qreal 
         QTextCursor cursor(block);
         QTextBlockFormat bf = block.blockFormat();
         int level = bf.headingLevel();
-        bf.setAlignment(centered ? Qt::AlignHCenter : Qt::AlignLeft);
+        // Table cells keep the alignment their column's delimiter asked for.
+        if (!cursor.currentTable())
+            bf.setAlignment(centered ? Qt::AlignHCenter : Qt::AlignLeft);
         bf.setTopMargin(level ? fontSize * 0.15 : 0);
         bf.setBottomMargin(fontSize * 0.22);
         bf.setLineHeight(115, QTextBlockFormat::ProportionalHeight);
@@ -512,10 +565,38 @@ static void sizeSlideText(QTextDocument &doc, const QVariantMap &palette, qreal 
         if (auto table = qobject_cast<QTextTable *>(it.currentFrame())) {
             auto fmt = table->format();
             fmt.setBorder(0);
-            fmt.setCellPadding(fontSize * 0.2);
-            fmt.setCellSpacing(fontSize * 0.1);
-            fmt.setWidth(QTextLength(QTextLength::PercentageLength, 100));
+            fmt.setBorderCollapse(true);
+            fmt.setCellPadding(fontSize * 0.25);
+            fmt.setCellSpacing(0);
+            // Size to the content rather than the slide, so columns stay close enough to read across.
+            fmt.setWidth(QTextLength());
+            fmt.setAlignment(centered ? Qt::AlignHCenter : Qt::AlignLeft);
             table->setFormat(fmt);
+            // Qt aligns body cells by the delimiter row but leaves the header at the default.
+            for (int column = 0; table->rows() > 1 && column < table->columns(); ++column) {
+                QTextCursor header = table->cellAt(0, column).firstCursorPosition();
+                auto bf = header.blockFormat();
+                bf.setAlignment(table->cellAt(1, column).firstCursorPosition().blockFormat().alignment());
+                header.setBlockFormat(bf);
+            }
+            // A gap between columns, a firm rule under the header and faint ones between rows.
+            QColor rule(palette["foreground"].toString());
+            rule.setAlphaF(0.2);
+            for (int row = 0; row < table->rows(); ++row)
+                for (int column = 0; column < table->columns(); ++column) {
+                    auto cell = table->cellAt(row, column);
+                    auto cf = cell.format().toTableCellFormat();
+                    if (column)
+                        cf.setLeftPadding(fontSize * 0.8);
+                    if (column + 1 < table->columns())
+                        cf.setRightPadding(fontSize * 0.8);
+                    if (row + 1 < table->rows()) {
+                        cf.setBottomBorder(row ? fontSize * 0.03 : fontSize * 0.06);
+                        cf.setBottomBorderStyle(QTextFrameFormat::BorderStyle_Solid);
+                        cf.setBottomBorderBrush(row ? rule : QColor(palette["accent"].toString()));
+                    }
+                    cell.setFormat(cf);
+                }
         }
     doc.setTextWidth(width);
 }
@@ -524,7 +605,7 @@ void layoutSlideText(QTextDocument &doc, const QString &markdown, const QVariant
     doc.setUndoRedoEnabled(false);
     const QVector<MathSpan> math = findMath(markdown);
     const QString source = math.isEmpty() ? markdown : markdownWithMath(markdown, math);
-    doc.setMarkdown(preserveLineBreaks(source), QTextDocument::MarkdownDialectGitHub);
+    doc.setMarkdown(preserveLineBreaks(padTableCells(source)), QTextDocument::MarkdownDialectGitHub);
     if (!math.isEmpty())
         materializeMath(doc, math, QColor(palette.value("foreground", "#ffffff").toString()));
     sizeSlideText(doc, palette, fontSize, width, centered, code);
@@ -661,8 +742,10 @@ void paintSlide(QPainter *p, const QRectF &target, const QString &source, const 
         bool quote = text.startsWith('>');
         bool list = text.contains(
             QRegularExpression("^\\s*(?:[-*+] |[0-9]+[.)] )", QRegularExpression::MultilineOption));
-        bool table = text.contains(QRegularExpression("\\|[ :|-]+\\|"));
-        bool centered = !(code || quote || list || table);
+        bool table = text.contains(tableDelimiter());
+        // A table alone on its slide sits in the middle; beside other text it lines up with it.
+        const bool tableOnly = table && !text.split('\n').filter(QRegularExpression("^(?!.*\\|).*\\S")).size();
+        bool centered = tableOnly || !(code || quote || list || table);
         const QString alignment = slideProperty(source, "alignment");
         if (alignment == "left")
             centered = false;
@@ -670,7 +753,7 @@ void paintSlide(QPainter *p, const QRectF &target, const QString &source, const 
             centered = true;
         bool stack = (text.contains('\n') || text.contains('\r')) && !text.startsWith('#') &&
                      !quote && !list && !code;
-        qreal low = 8, high = code ? 56 : quote ? 64 : list ? 72 : table ? 60 : stack ? 128 : 76;
+        qreal low = 8, high = code ? 56 : quote ? 64 : list || table ? 72 : stack ? 128 : 76;
         if (media.video && !media.span)
             high = 48;
         QTextDocument doc;
@@ -726,7 +809,7 @@ void SlideItem::setDeck(Deck *deck) {
         disconnect(m_deck, nullptr, this, nullptr);
     m_deck = deck;
     if (deck)
-        connect(deck, &Deck::changed, this, [this] { update(); });
+        connect(deck, &Deck::selectionChanged, this, [this] { update(); });
     emit deckChanged();
     update();
 }
@@ -776,7 +859,11 @@ static QImage renderedSlide(const QString &id, QSize *size, const QSize &request
                id.endsWith("/background"));
     p.end();
     // Room for the slides around the selection at full size, or a whole deck of thumbnails.
-    renders.put(key, image, stageSized(dimensions) ? 14 : 400);
+    // Full-size frames reach 33 MB at 2x, so keep as many as a twentieth of free memory holds.
+    int frames = 14;
+    if (const qint64 free = budget::availableBytes(); free > 0)
+        frames = int(qBound(qint64(4), free / 20 / qMax(qint64(1), qint64(image.sizeInBytes())), qint64(14)));
+    renders.put(key, image, stageSized(dimensions) ? frames : 400);
     if (size)
         *size = image.size();
     return image;
@@ -803,16 +890,17 @@ class SlideResponse : public QQuickImageResponse {
 }
 
 Thumbnails::Thumbnails(Deck *deck) {
-    // Full-size renders are the slow ones; give the stage and its prefetches most of the cores.
+    // Full-size renders are the slow ones; give the stage and its prefetches most of the cores,
+    // as far as memory allows: each full-size render holds about 100 MB while it works.
     const int cores = QThread::idealThreadCount();
     m_thumbnails.setMaxThreadCount(qBound(2, cores / 4, 4));
-    m_previews.setMaxThreadCount(qBound(2, cores / 2, 6));
+    m_previews.setMaxThreadCount(qMin(qBound(2, cores / 2, 6), budget::workers(100LL << 20, 6, 0.2, 0, 2)));
     m_cached.setMaxThreadCount(1);
     m_videos.setMaxThreadCount(2);
     auto timer = new QTimer(this);
     timer->setInterval(60);
     timer->setSingleShot(true);
-    connect(deck, &Deck::changed, this, [this, timer] {
+    connect(deck, &Deck::selectionChanged, this, [this, timer] {
         if (m_stopping->load())
             return;
         ++*m_generation;

@@ -1,4 +1,5 @@
 #include "deck.h"
+#include "budget.h"
 #include "animationexport.h"
 #include "filedialog.h"
 #include "images.h"
@@ -34,6 +35,7 @@
 #include <QThreadPool>
 #include <QtConcurrentRun>
 #include <atomic>
+#include <malloc.h>
 #include <cerrno>
 #include <climits>
 #include <csignal>
@@ -144,6 +146,19 @@ Deck::Deck(QObject *parent, const QString &exportProgram) : QAbstractListModel(p
     m_reloadTimer.setInterval(50);
     connect(&m_watcher, &QFileSystemWatcher::fileChanged, &m_reloadTimer, qOverload<>(&QTimer::start));
     connect(&m_watcher, &QFileSystemWatcher::directoryChanged, &m_reloadTimer, qOverload<>(&QTimer::start));
+    // Thumbnails cache by slide source, so a picture replaced on disk needs its own refresh.
+    m_mediaTimer.setSingleShot(true);
+    m_mediaTimer.setInterval(100);
+    connect(&m_mediaWatcher, &QFileSystemWatcher::fileChanged, &m_mediaTimer, qOverload<>(&QTimer::start));
+    connect(&m_mediaWatcher, &QFileSystemWatcher::directoryChanged, &m_mediaTimer, qOverload<>(&QTimer::start));
+    connect(&m_mediaTimer, &QTimer::timeout, this, [this] {
+        watchMedia();
+        m_renderIds.clear();
+        m_mediaCache.clear();
+        m_sizeClock.invalidate();
+        ++m_revision;
+        notifyChanged();
+    });
     connect(&m_reloadTimer, &QTimer::timeout, this, [this] {
         QFile file(m_path);
         if (m_path.isEmpty())
@@ -202,9 +217,13 @@ static int followSlide(const QVector<Slide> &before, const QVector<Slide> &after
 // undo restores the old text.
 void Deck::reloadExternal(const QString &disk) {
     const int selected = followSlide(m_parsed.slides, parseDeck(disk).slides, m_selected);
+    const bool unchanged = disk == m_source;
     m_saved = disk;
     m_externalChange = false;
     apply(disk, selected);
+    // Matching text leaves the source alone, but the saved state changed.
+    if (unchanged)
+        notifyChanged();
     setStatus("Reloaded external changes.");
 }
 int Deck::rowCount(const QModelIndex &parent) const { return parent.isValid() ? 0 : count(); }
@@ -248,7 +267,7 @@ void Deck::apply(const QString &source, int selected, bool history, int anchor,
     if (source == m_source && !structure) {
         m_anchor = qBound(0, anchor < 0 ? selected : anchor, count() - 1);
         m_selected = qBound(0, selected, count() - 1);
-        emit changed();
+        emit selectionChanged();
         return;
     }
     if (history) {
@@ -297,7 +316,7 @@ void Deck::apply(const QString &source, int selected, bool history, int anchor,
     else
         for (int i : modified)
             emit dataChanged(index(i), index(i));
-    emit changed();
+    notifyChanged();
     if (!m_parsed.error.isEmpty())
         setStatus(m_parsed.error);
 }
@@ -306,14 +325,14 @@ void Deck::select(int index) {
     if (m_selected == index && m_anchor == index)
         return;
     m_selected = m_anchor = index;
-    emit changed();
+    emit selectionChanged();
 }
 void Deck::extendSelection(int index) {
     index = qBound(0, index, count() - 1);
     if (m_selected == index)
         return;
     m_selected = index;
-    emit changed();
+    emit selectionChanged();
 }
 void Deck::moveSelection(int direction) {
     if (direction < 0 && selectionFirst() > 0)
@@ -513,7 +532,7 @@ QString Deck::sizeLabel() const {
     return QLocale().formattedDataSize(totalBytes(), 0, QLocale::DataSizeSIFormat);
 }
 QStringList Deck::fontNames() const { return QFontDatabase::families(); }
-QString Deck::fontName() const { return scalar(m_parsed.header, "font", "JetBrains Mono"); }
+QString Deck::fontName() const { return palette()["font"].toString(); }
 void Deck::chooseFont(const QString &family) {
     if (!fontNames().contains(family) || family == fontName())
         return;
@@ -615,6 +634,41 @@ void Deck::watch() {
         m_watcher.addPath(m_path);
     // The directory reveals a file that was replaced or recreated.
     m_watcher.addPath(QFileInfo(m_path).absolutePath());
+    watchMedia();
+}
+// Watch the media folders, for files added or replaced, and each file in them, for writes in place.
+void Deck::watchMedia() {
+    const QStringList watched = m_mediaWatcher.files() + m_mediaWatcher.directories();
+    QStringList paths;
+    if (!m_path.isEmpty())
+        for (const char *folder : {"images", "videos"}) {
+            const QDir dir(QDir(baseDir()).filePath(folder));
+            if (!dir.exists())
+                continue;
+            paths.append(dir.absolutePath());
+            for (const QString &name : dir.entryList(QDir::Files))
+                paths.append(dir.absoluteFilePath(name));
+        }
+    QStringList stale, added;
+    for (const QString &path : watched)
+        if (!paths.contains(path))
+            stale.append(path);
+    for (const QString &path : paths)
+        if (!watched.contains(path))
+            added.append(path);
+    if (!stale.isEmpty())
+        m_mediaWatcher.removePaths(stale);
+    if (!added.isEmpty())
+        m_mediaWatcher.addPaths(added);
+}
+// Every document change also refreshes the selected slide, after the document's own listeners.
+void Deck::notifyChanged() {
+    emit changed();
+    emit selectionChanged();
+    if (const QString font = fontName(); font != m_notifiedFont) {
+        m_notifiedFont = font;
+        emit fontChanged();
+    }
 }
 QString Deck::dialogDirectory() const {
     QSettings settings(QSettings::IniFormat, QSettings::UserScope, "hype", "hype");
@@ -647,6 +701,7 @@ bool Deck::reopenLastPresentation() {
     m_saved.clear();
     apply(QString(), 0, false);
     m_externalChange = true;
+    notifyChanged();
     setStatus("The last presentation is missing. Use Save As to recover it to a new file.");
     return false;
 }
@@ -664,7 +719,7 @@ bool Deck::loadPath(const QString &path, bool remember) {
     m_redo.clear();
     m_externalChange = false;
     watch();
-    emit changed();
+    notifyChanged();
     setStatus("Opened " + title());
     if (remember)
         rememberPresentation(m_path);
@@ -739,7 +794,7 @@ bool Deck::savePath(const QString &path) {
     m_saved = m_source;
     m_externalChange = false;
     watch();
-    emit changed();
+    notifyChanged();
     setStatus("Saved");
     rememberPresentation(m_path);
     if (!m_recoveryDirectory.isEmpty())
@@ -864,6 +919,7 @@ void Deck::newDeck() {
     m_undo.clear();
     m_redo.clear();
     watch();
+    notifyChanged();
     if (!m_recoveryDirectory.isEmpty()) {
         m_checkpointSource.clear();
         checkpoint();
@@ -1329,8 +1385,9 @@ bool Deck::exportPdf(const QString &path) {
         writer.setPageMargins(QMarginsF(0, 0, 0, 0));
         writer.setResolution(288); // 3840 × 2160 raster budget; text remains vector.
         writer.setTitle(title());
+        // Pictures go in as high-quality JPEG. At 4K the loss is invisible, and the export
+        // is three times faster and a fifth of the size of lossless PNG.
         QPainter painter(&writer);
-        painter.setRenderHint(QPainter::LosslessImageRendering);
         if (!painter.isActive()) {
             setStatus("Could not initialize PDF painter");
             return false;
@@ -1364,7 +1421,7 @@ static bool opaque(const QImage &image) {
     }
     return true;
 }
-bool Deck::renderImages(const QString &directory, int width, bool convertAnimations) {
+bool Deck::renderImages(const QString &directory, int width, bool powerPoint) {
     if (!validateStructure("export"))
         return false;
     for (int i = 0; i < count(); ++i) {
@@ -1379,40 +1436,66 @@ bool Deck::renderImages(const QString &directory, int width, bool convertAnimati
     // cores, while this thread converts media and reports progress in slide order.
     // Each worker holds a full-size frame, so a few suffice.
     QThreadPool stills;
-    stills.setMaxThreadCount(qBound(1, QThread::idealThreadCount(), 8));
+    // Each worker holds a 4K canvas, its opaque copy and the decoded source: about 200 MB.
+    // A 4K video encode needs well over a gigabyte of its own. With room for both, convert
+    // media while the slides render; on a small machine, render first and convert after,
+    // so the two peaks never add up.
+    bool converts = false;
+    for (int i = 0; powerPoint && !converts && i < count(); ++i)
+        converts = !parseMedia(slide(i), baseDir()).path.isEmpty();
+    const bool overlap = !converts || budget::availableBytes() < 0 || budget::availableBytes() > (6LL << 30);
+    stills.setMaxThreadCount(budget::workers(200LL << 20, 16, overlap ? 0.4 : 0.6));
     std::atomic_bool stopped = false;
     const auto stop = qScopeGuard([&] {
         stopped = true;
         stills.waitForDone();
     });
-    auto stillName = [](int i) { return QString("slide-%1.png").arg(i + 1, 3, 10, QChar('0')); };
-    using Still = std::pair<bool, QString>; // Saved, and any rendering warning.
+    struct Still { QString name, warning; bool saved = false; };
     QList<QFuture<Still>> rendered;
     for (int i = 0; i < count(); ++i)
         rendered << QtConcurrent::run(&stills, [&stopped, source = slide(i), base = baseDir(), colors = palette(),
-                                                width, path = directory + "/" + stillName(i)]() -> Still {
+                                                width, directory, powerPoint, i]() -> Still {
             if (stopped)
-                return {false, {}};
+                return {};
             QImage image(width, width * 9 / 16, QImage::Format_ARGB32_Premultiplied);
             image.fill(Qt::transparent);
             QPainter p(&image);
-            QString warning;
-            paintSlide(&p, image.rect(), source, base, colors, &warning);
+            Still still;
+            paintSlide(&p, image.rect(), source, base, colors, &still.warning);
             p.end();
-            return {opaque(image) ? image.convertToFormat(QImage::Format_RGB32).save(path) : image.save(path), warning};
+            // PowerPoint slides go in as high-quality JPEG, as PDF pictures do: at 4K the loss
+            // is invisible, and the file is a fraction of the size. A slide with transparency
+            // stays PNG, and so does every image a plain render hands back.
+            const bool jpeg = powerPoint && opaque(image);
+            still.name = QString("slide-%1.%2").arg(i + 1, 3, 10, QChar('0')).arg(jpeg ? "jpg" : "png");
+            const QString path = directory + "/" + still.name;
+            if (jpeg)
+                still.saved = image.convertToFormat(QImage::Format_RGB32).save(path, "JPEG", 92);
+            else
+                still.saved = opaque(image) ? image.convertToFormat(QImage::Format_RGB32).save(path) : image.save(path);
+            return still;
         });
+    if (!overlap) {
+        const double portion = 0.8;
+        while (!stills.waitForDone(100)) {
+            const auto done = std::count_if(rendered.cbegin(), rendered.cend(), [](const auto &f) { return f.isFinished(); });
+            emit exportAdvanced(portion * done / count(), QString("Exporting slide %1 of %2").arg(qMin<qsizetype>(count(), done + 1)).arg(count()));
+        }
+        // Return the workers' freed canvases to the system before the encoder starts.
+        malloc_trim(0);
+    }
     QJsonArray slides;
     QHash<QString, QString> convertedVideos;
     for (int i = 0; i < count(); ++i) {
-        const double portion = convertAnimations ? 0.8 : 1.0;
+        const double portion = powerPoint ? 0.8 : 1.0;
         auto progress = [this, i, portion](double fraction, const QString &stage) {
             emit exportAdvanced(portion * (i + fraction) / count(),
                 QString("%1 slide %2 of %3").arg(stage).arg(i + 1).arg(count()));
         };
         progress(0, "Exporting");
-        const auto [saved, warning] = rendered[i].result();
-        const QString name = stillName(i);
-        if (!saved) {
+        const Still still = rendered[i].result();
+        const QString name = still.name, warning = still.warning;
+        if (!still.saved) {
             setStatus("Could not save rendered slide");
             return false;
         }
@@ -1420,7 +1503,7 @@ bool Deck::renderImages(const QString &directory, int width, bool convertAnimati
         QJsonObject entry{{"image", name}, {"warning", warning}};
         if (media.video) {
             entry["video"] = media.path;
-            if (convertAnimations) {
+            if (powerPoint) {
                 QString error;
                 auto movie = convertedVideos.value(media.path);
                 if (movie.isEmpty())
@@ -1442,7 +1525,7 @@ bool Deck::renderImages(const QString &directory, int width, bool convertAnimati
             entry["loop"] = media.loop;
             entry["muted"] = media.muted;
         }
-        if (convertAnimations && !media.video && !media.path.isEmpty()) {
+        if (powerPoint && !media.video && !media.path.isEmpty()) {
             QImageReader reader(media.path);
             if (reader.supportsAnimation() && reader.imageCount() > 1) {
                 const QString movie = QString("animation-%1.mp4").arg(i + 1);
@@ -1487,7 +1570,13 @@ bool Deck::renderImages(const QString &directory, int width, bool convertAnimati
     return true;
 }
 bool Deck::exportPptx(const QString &path) {
-    QTemporaryDir temp;
+    // Render beside the destination, not in /tmp: /tmp is usually RAM-backed, and a deck's
+    // 4K slide images and converted videos would otherwise sit in memory until packaged.
+    QTemporaryDir temp(QFileInfo(path).absoluteDir().filePath(".hype-render-XXXXXX"));
+    if (!temp.isValid()) {
+        setStatus("Could not prepare the export: " + temp.errorString());
+        return false;
+    }
     if (!renderImages(temp.path(), 3840, true))
         return false;
     QString error;

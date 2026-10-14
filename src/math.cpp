@@ -263,7 +263,7 @@ bool mathAlphabetAvailable() {
         QFont font("Noto Sans Math");
         font.setPixelSize(32);
         const QRawFont raw = QRawFont::fromFont(font);
-        return raw.isValid() && raw.supportsCharacter(QChar(0x1D44E));
+        return raw.isValid() && raw.supportsCharacter(char32_t(0x1D44E));
     }();
     return has;
 }
@@ -480,10 +480,8 @@ struct Parser {
             return false;
         const int save = i;
         const QString got = command();
-        if (got == name)
-            return true;
         i = save;
-        return false;
+        return got == name;
     }
 
     Node glyph(const QString &text, int cls, int alphabet = 0) {

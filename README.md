@@ -18,7 +18,7 @@ Then open **Hype** from the app launcher, or run `hype` in a terminal.
 
 Open Hype from your app launcher. It reopens your last presentation; use **Ctrl+N** to start a new one, or **Ctrl+O** to choose a Markdown file.
 
-In **Visual** mode, select a slide in the sidebar and write its Markdown below the preview. Changes appear as you type. Drag the divider to give the preview or editor more room. The mode button shows the current mode as a grid, slide, or `#` icon; click it to step through **Overview**, **Visual**, and **Markdown**. **Ctrl+M** flips the overview on and off, returning to the mode you came from, and **Ctrl+.** flips the Markdown source. Markdown mode edits the whole presentation, with the same formatting bar on top.
+In **Visual** mode, select a slide in the sidebar and write its Markdown below the preview. Changes appear as you type. Drag the divider to give the preview or editor more room. Two buttons in the top bar switch modes. The grid button, or **Ctrl+M**, turns the **Overview** on and off, returning to the mode you came from. The button beside it shows a slide in **Visual** mode and `#` in **Markdown** mode; click it, or press **Ctrl+.**, to switch between them. Markdown mode edits the whole presentation, with the same formatting bar on top.
 
 **Overview** mode fills the window with a grid of every slide. Select, rearrange, duplicate, and delete slides there as you would in the sidebar; the up and down arrows move by a row. Double-click a slide or press **Enter** to open it in Visual mode.
 
@@ -69,6 +69,15 @@ end
 Headlines are big by default. Quotes, lists, tables, and inline `code` work too. Ordinary line breaks stay visible on the slide. Code blocks fit the slide and use syntax highlighting when you specify a language, such as `ruby`, `rust`, `javascript`, `bash`, or `json`.
 
 Inline math sits in the sentence as `$E=mc^2$`. A displayed equation uses `$$` on its own, and may run across lines. Prices stay prices: `I bought a $1000 laptop and a $50 keyboard` is not an equation. Write `\$` for a literal dollar sign. Math inside code is left as written.
+
+Tables use GitHub's pipe syntax. Colons in the line under the header align a column: `:---` left, `:---:` center, `---:` right. Extra spaces around a cell's text pad it, so `|  100,000 |` keeps its leading space.
+
+```markdown
+| Plan | Price | Seats |
+| --- | :---: | ---: |
+| Basic | $9 | 1 |
+| Team | $29 | 10 |
+```
 
 The single-slide editor hides the blank lines around slide separators, leaving just your content to edit.
 
@@ -145,11 +154,11 @@ Click **Present** or press **Ctrl+Space** (or **F5**) to toggle fullscreen prese
 
 Finished videos hold their last frame. Press Space again to replay from the beginning.
 
-Choose **Export as PDF** or **Export as PowerPoint** from the file menu in the top bar, or press **Ctrl+E** for PDF and **Ctrl+Shift+E** for PowerPoint, to share your presentation. Both exports are built into Hype. PowerPoint renders slides and converted animations at 4K (3840 × 2160). Slides preserve the rendered appearance rather than exposing editable text and shapes; the receiving computer does not need your fonts installed. Videos are embedded, and animated WebP/GIF images are converted to MP4 automatically without changing the original files. PDF captures still slides.
+Choose **Export as PDF** or **Export as PowerPoint** from the file menu in the top bar, or press **Ctrl+E** for PDF and **Ctrl+Shift+E** for PowerPoint, to share your presentation. Both exports are built into Hype. PowerPoint renders slides and converted animations at 4K (3840 × 2160), storing slides as high-quality JPEG like the pictures in a PDF. Slides preserve the rendered appearance rather than exposing editable text and shapes; the receiving computer does not need your fonts installed. Videos are embedded, and animated WebP/GIF images are converted to MP4 automatically without changing the original files. PDF captures still slides.
 
 Export runs in the background. The top bar shows progress through rendering, video conversion, and packaging under the presentation name, with a **Cancel export** button. You can keep editing; the export uses the presentation as it was when you started. Failed or cancelled exports leave an existing file intact.
 
-PDF keeps text as vectors and sizes embedded images for their visible area at 4K, omitting unused pixels outside spanning crops. Images use lossless compression to preserve fine detail. Photo-heavy PDFs can be larger than JPEG-compressed exports because they avoid additional compression artifacts.
+PDF keeps text as vectors and sizes embedded images for their visible area at 4K, omitting unused pixels outside spanning crops. Images are stored as high-quality JPEG, which keeps exports fast and small; at 4K the compression is not visible.
 
 PowerPoint export automatically converts other video formats, including WebM, to H.264 MP4 with AAC audio, leaving your originals untouched. Compatible MP4s are embedded directly. Use `fit` for videos that aren’t 16:9. Video autoplay and looping may vary between presentation apps; playback in Microsoft PowerPoint has not yet been verified.
 

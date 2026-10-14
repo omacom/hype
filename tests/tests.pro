@@ -4,7 +4,7 @@ TEMPLATE = app
 TARGET = hype-tests
 INCLUDEPATH += ../src
 SOURCES += tests.cpp ../src/deck.cpp ../src/renderer.cpp
-HEADERS += ../src/deck.h ../src/renderer.h
+HEADERS += ../src/deck.h ../src/renderer.h ../src/budget.h
 RESOURCES += ../src/resources.qrc
 
 SOURCES += ../src/syntax.cpp
