@@ -68,6 +68,15 @@ end
 
 Headlines are big by default. Quotes, lists, tables, and inline `code` work too. Ordinary line breaks stay visible on the slide. Code blocks fit the slide and use syntax highlighting when you specify a language, such as `ruby`, `rust`, `javascript`, `bash`, or `json`.
 
+Tables use GitHub's pipe syntax. Colons in the line under the header align a column: `:---` left, `:---:` center, `---:` right. Extra spaces around a cell's text pad it, so `|  100,000 |` keeps its leading space.
+
+```markdown
+| Plan | Price | Seats |
+| --- | :---: | ---: |
+| Basic | $9 | 1 |
+| Team | $29 | 10 |
+```
+
 The single-slide editor hides the blank lines around slide separators, leaving just your content to edit.
 
 ## Add images and video

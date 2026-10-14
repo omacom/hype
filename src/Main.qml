@@ -209,9 +209,13 @@ ApplicationWindow {
             sourceFlick.contentY = Math.max(0, Math.min(maxY, nextY))
         })
     }
-    function syncEditors() {
+    function syncSourceEditor() {
         syncingEditor = true
         if (sourceEditor.text !== deck.source) sourceEditor.text = deck.source
+        syncingEditor = false
+    }
+    function syncEditors() {
+        syncingEditor = true
         if (!editingSlide && slideEditor.text !== deck.slideText) slideEditor.text = deck.slideText
         syncingEditor = false
         if (lastSelected !== deck.selected) {
@@ -219,7 +223,7 @@ ApplicationWindow {
             Qt.callLater(function() { slideScroll.contentItem.contentY = 0 })
         }
     }
-    Component.onCompleted: { syncEditors(); lastSelected = deck.selected; Qt.callLater(thumbnails.revealSelection); if (deck.path !== "") focusForDeck(true) }
+    Component.onCompleted: { syncSourceEditor(); syncEditors(); lastSelected = deck.selected; Qt.callLater(thumbnails.revealSelection); if (deck.path !== "") focusForDeck(true) }
     Connections {
         target: deck
         function onCompressingImageChanged() {
@@ -235,7 +239,8 @@ ApplicationWindow {
             pasteName.text = name
             pasteDialog.open()
         }
-        function onChanged() {
+        function onChanged() { win.syncSourceEditor() }
+        function onSelectionChanged() {
             win.syncEditors()
             if (win.dragIndex < 0 && win.lastSelected !== deck.selected) {
                 Qt.callLater(thumbnails.revealSelection)
@@ -919,7 +924,13 @@ ApplicationWindow {
             }
             Connections {
                 target: deck
-                function onSelectedChanged() { if (win.overview && win.dragIndex < 0) Qt.callLater(overviewGrid.revealSelection) }
+                // Follow the selection to another slide, not every edit that leaves it in place.
+                property int revealed: -1
+                function onSelectionChanged() {
+                    if (revealed === deck.selected) return
+                    revealed = deck.selected
+                    if (win.overview && win.dragIndex < 0) Qt.callLater(overviewGrid.revealSelection)
+                }
             }
             delegate: Item {
                 id: tile; required property int index

@@ -27,14 +27,14 @@ QString setScalar(QString header, const QString &key, const QString &value);
 class Deck : public QAbstractListModel {
     Q_OBJECT
     Q_PROPERTY(QString source READ source NOTIFY changed)
-    Q_PROPERTY(QString slideSource READ slideSource NOTIFY changed)
-    Q_PROPERTY(QString slideText READ slideText NOTIFY changed)
-    Q_PROPERTY(int selected READ selected WRITE select NOTIFY changed)
-    Q_PROPERTY(int selectionFirst READ selectionFirst NOTIFY changed)
-    Q_PROPERTY(int selectionLast READ selectionLast NOTIFY changed)
-    Q_PROPERTY(int selectionCount READ selectionCount NOTIFY changed)
-    Q_PROPERTY(int sourceSelectionStart READ sourceSelectionStart NOTIFY changed)
-    Q_PROPERTY(int sourceSelectionEnd READ sourceSelectionEnd NOTIFY changed)
+    Q_PROPERTY(QString slideSource READ slideSource NOTIFY selectionChanged)
+    Q_PROPERTY(QString slideText READ slideText NOTIFY selectionChanged)
+    Q_PROPERTY(int selected READ selected WRITE select NOTIFY selectionChanged)
+    Q_PROPERTY(int selectionFirst READ selectionFirst NOTIFY selectionChanged)
+    Q_PROPERTY(int selectionLast READ selectionLast NOTIFY selectionChanged)
+    Q_PROPERTY(int selectionCount READ selectionCount NOTIFY selectionChanged)
+    Q_PROPERTY(int sourceSelectionStart READ sourceSelectionStart NOTIFY selectionChanged)
+    Q_PROPERTY(int sourceSelectionEnd READ sourceSelectionEnd NOTIFY selectionChanged)
     Q_PROPERTY(int count READ count NOTIFY changed)
     Q_PROPERTY(int revision READ revision NOTIFY changed)
     Q_PROPERTY(bool dirty READ dirty NOTIFY changed)
@@ -48,13 +48,13 @@ class Deck : public QAbstractListModel {
     Q_PROPERTY(QString exportStatus READ exportStatus NOTIFY exportChanged)
     Q_PROPERTY(bool exportFailed READ exportFailed NOTIFY exportChanged)
     Q_PROPERTY(QStringList fontNames READ fontNames CONSTANT)
-    Q_PROPERTY(QString fontName READ fontName NOTIFY changed)
+    Q_PROPERTY(QString fontName READ fontName NOTIFY fontChanged)
     Q_PROPERTY(QStringList themeNames READ themeNames CONSTANT)
     Q_PROPERTY(QString themeName READ themeName NOTIFY changed)
     Q_PROPERTY(QColor background READ background NOTIFY changed)
     Q_PROPERTY(QColor foreground READ foreground NOTIFY changed)
     Q_PROPERTY(QColor accent READ accent NOTIFY changed)
-    Q_PROPERTY(QVariantMap media READ media NOTIFY changed)
+    Q_PROPERTY(QVariantMap media READ media NOTIFY selectionChanged)
   public:
     explicit Deck(QObject *parent = nullptr, const QString &exportProgram = {});
     ~Deck() override;
@@ -143,7 +143,9 @@ class Deck : public QAbstractListModel {
     Q_INVOKABLE void setMediaMode(const QString &mode);
     Q_INVOKABLE void setStatus(const QString &status);
   signals:
-    void changed();
+    void changed(); // Document content, path, saved state, or media files; always followed by selectionChanged.
+    void selectionChanged(); // Selection range or the selected slide's content/media.
+    void fontChanged();
     void statusChanged();
     void opened(bool existing);
     void compressingImageChanged();
@@ -177,8 +179,9 @@ class Deck : public QAbstractListModel {
     int m_selected = 0, m_anchor = 0, m_revision = 0;
     QVector<State> m_undo, m_redo;
     QMap<QString, QString> m_themes;
-    QFileSystemWatcher m_watcher;
-    QTimer m_reloadTimer;
+    QFileSystemWatcher m_watcher, m_mediaWatcher;
+    QTimer m_reloadTimer, m_mediaTimer;
+    QString m_notifiedFont;
     bool m_externalChange = false;
     QString m_recoveryDirectory, m_checkpointSource, m_checkpointPath;
     QTimer m_autosaveTimer, m_autosaveDeadline;
@@ -210,5 +213,7 @@ class Deck : public QAbstractListModel {
     bool restoreSnapshot(const QByteArray &bytes, bool opening);
     void discoverThemes();
     void watch();
+    void watchMedia();
+    void notifyChanged();
     void reloadExternal(const QString &disk);
 };
