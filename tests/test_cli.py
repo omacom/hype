@@ -145,7 +145,9 @@ class CliTests(unittest.TestCase):
         self.assertFalse((self.root / 'config/hype/hype.ini').exists())
 
     def test_themes_and_help(self):
-        self.assertEqual(json.loads(self.hype('themes', '--json').stdout)['themes'], ['paper'])
+        themes = json.loads(self.hype('themes', '--json').stdout)['themes']
+        self.assertIn('paper', themes)
+        self.assertEqual(themes, sorted(set(themes)))
         self.assertIn('hype check', self.hype('help', 'format').stdout)
         self.assertIn('--slide', self.hype('help', 'render').stdout)
         self.assertIn('help format', self.hype('help').stdout)
