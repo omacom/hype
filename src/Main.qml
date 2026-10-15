@@ -1548,6 +1548,11 @@ ApplicationWindow {
                     }
                     Image { anchors.fill: parent; source: visible ? "image://slides/" + (deck.revision, deck.renderId(deck.selected)) + "/overlay" : ""; asynchronous: true; retainWhileLoading: true; sourceSize: Qt.size(1920,1080); visible: animation.active || (video.visible && deck.media.span) }
                     Button { visible: deck.media.video && !win.presenting; anchors.centerIn: parent; text: player.playbackState === MediaPlayer.PlayingState ? "Pause" : "▶ Play"; onClicked: win.toggleVideo() }
+                    MouseArea {
+                        anchors.fill: parent
+                        enabled: win.presenting
+                        onClicked: deck.select(deck.selected + 1)
+                    }
                 }
                 DropArea { anchors.fill: parent; onDropped: function(drop) { if (drop.hasUrls) for (let i = 0; i < drop.urls.length; ++i) { if (!deck.importMedia(drop.urls[i], i > 0)) break } } }
             }
