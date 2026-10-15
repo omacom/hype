@@ -27,6 +27,8 @@ QRectF mediaImageRect(const Media &media, const QSizeF &image);
 QString withReplacedMedia(const QString &source, const QString &file);
 QImage softenedImage(const QImage &image, const QSizeF &slideSize);
 QString withMedia(const QString &source, const QString &reference);
+// Text inside <!-- comments -->, skipping hype: directives. Empty when there are none.
+QString speakerNotes(const QString &source);
 QString withMediaDirectives(const QString &source, const QStringList &remove,
                             const QStringList &add);
 QString speakerNotes(const QString &source);

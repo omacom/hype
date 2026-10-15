@@ -145,6 +145,20 @@ static QString assetPath(const QString &base, QString file, bool video) {
                                    ? file
                                    : (video ? "videos/" : "images/") + file);
 }
+QString speakerNotes(const QString &source) {
+    QString notes;
+    auto matches = QRegularExpression("<!--([\\s\\S]*?)-->").globalMatch(outsideCode(source));
+    while (matches.hasNext()) {
+        const QString body = matches.next().captured(1).trimmed();
+        if (body.isEmpty() || body.startsWith(QLatin1String("hype:")))
+            continue;
+        if (!notes.isEmpty())
+            notes += QLatin1Char('\n');
+        notes += body;
+    }
+    return notes;
+}
+
 QString withMedia(const QString &source, const QString &reference) {
     QString visible = outsideCode(source);
     auto comments = QRegularExpression("<!--[\\s\\S]*?-->").globalMatch(visible);

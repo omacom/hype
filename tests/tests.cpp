@@ -121,6 +121,11 @@ static void write(const QString &path, const QString &content) {
         QVERIFY(settingsDirectory.isValid());
         QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, settingsDirectory.path());
     }
+    void readsSpeakerNotes() {
+        QCOMPARE(speakerNotes("# Title\n\n<!-- Say this slowly -->\n"), QString("Say this slowly"));
+        QCOMPARE(speakerNotes("<!-- hype: span -->\n# Title\n"), QString());
+        QCOMPARE(speakerNotes("<!-- First -->\n<!-- Second -->\n"), QString("First\nSecond"));
+    }
     void portalFileDialogs() {
         if (!qEnvironmentVariableIsSet("HYPE_PORTAL_TESTS"))
             QSKIP("Run with HYPE_PORTAL_TESTS=1 under dbus-run-session");

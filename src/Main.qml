@@ -1481,9 +1481,26 @@ ApplicationWindow {
             Item {
                 id: stage; objectName: "stage"; SplitView.fillHeight: true; SplitView.minimumHeight: 160; focus: true
                 property real margin: win.presenting ? 0 : 32
-                property real slideWidth: Math.min(width-margin*2,(height-margin*2)*16/9)
+                property real notesReserve: win.presenting && deck.notes !== "" ? 88 : 0
+                property real slideWidth: Math.min(width-margin*2,(height-margin*2-notesReserve)*16/9)
+                Text {
+                    visible: stage.notesReserve > 0
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.bottom: parent.bottom
+                    anchors.margins: 24
+                    text: deck.notes
+                    color: win.ui.foreground
+                    wrapMode: Text.Wrap
+                    font.pixelSize: 20
+                    maximumLineCount: 3
+                    elide: Text.ElideRight
+                }
                 Item {
-                    id: slideFrame; objectName: "slideFrame"; width: stage.slideWidth; height: width*9/16; anchors.centerIn: parent
+                    id: slideFrame; objectName: "slideFrame"; width: stage.slideWidth; height: width*9/16
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    anchors.verticalCenter: parent.verticalCenter
+                    anchors.verticalCenterOffset: -stage.notesReserve / 2
                     // Keep the fast thumbnail behind the full render. Even if it remains visible
                     // briefly after loading, it cannot cover the sharp image once that is ready.
                     Image {
