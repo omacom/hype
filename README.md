@@ -68,6 +68,15 @@ end
 
 Headlines are big by default. Quotes, lists, tables, and inline `code` work too. Ordinary line breaks stay visible on the slide. Code blocks fit the slide and use syntax highlighting when you specify a language, such as `ruby`, `rust`, `javascript`, `bash`, or `json`.
 
+Tables use GitHub's pipe syntax. Colons in the line under the header align a column: `:---` left, `:---:` center, `---:` right. Extra spaces around a cell's text pad it, so `|  100,000 |` keeps its leading space.
+
+```markdown
+| Plan | Price | Seats |
+| --- | :---: | ---: |
+| Basic | $9 | 1 |
+| Team | $29 | 10 |
+```
+
 The single-slide editor hides the blank lines around slide separators, leaving just your content to edit.
 
 ## Group images with editable labels
@@ -181,6 +190,21 @@ For videos, choose **Background → Blurred first frame**, or write `![fit backg
 
 **Background → Match image edges** also works with videos: `![fit background=auto](portrait.mp4)`. It samples the edges of the first frame and keeps that background color during playback, even with a custom poster. Selecting it switches spanning videos to fit.
 
+To put a small image such as a logo in a corner, choose **Place** from the **Layout** menu and pick a position, then choose a **Size**. You can also write it in the brackets: `![position=bottom-right size=10%](logo.png)`. Positions are `top-left`, `top`, `top-right`, `left`, `center`, `right`, `bottom-left`, `bottom`, and `bottom-right`. The size is the share of the slide the image may fill, from 1% to 100%, and defaults to 10% (Small). A placed image keeps its shape and sits just inside the slide edge. The slide's text and theme colors stay as they are, without darkening or white lettering. Placement works with still and animated images, not videos, and replaces `fit`, `span`, and background choices; choosing **Fit** or **Span** removes it. Pasting or dropping a new image onto a placed slide keeps its position and size, so swapping a logo is one step. Pasted images retain enough detail to enlarge them later.
+
+To draw something yourself, write SVG in an `svg` code block. It takes the place of the slide's image, stays sharp, and stays vector in PDF. Name the theme's colors as `var(--accent)`, `var(--foreground)`, and so on, and the drawing follows the theme; shapes and text without colors of their own take the theme's text color, and text takes the presentation's font:
+
+````markdown
+# Requests per second
+
+```svg
+<svg viewBox="0 0 300 120">
+  <rect x="20" y="60" width="60" height="60" fill="var(--dark-foreground)"/>
+  <rect x="120" y="20" width="60" height="100" fill="var(--accent)"/>
+</svg>
+```
+````
+
 Animated WebP and GIF images play inline in the preview and while presenting. Use the usual image syntax, such as `![](demo.webp)`, with the file in `images/`. Space pauses or resumes animations while presenting; PowerPoint exports automatically convert them to embedded MP4 videos, preserving the slide layout and playback settings. PDF exports capture their first frame.
 
 Each slide supports one image or video. Copy the whole presentation folder when sharing or moving it.
@@ -197,7 +221,7 @@ Colors and the font choice are saved in the Markdown file. Another computer runn
 
 ## Present and export
 
-Click **Present** or press **Ctrl+Space** (or **F5**) to toggle fullscreen presentation. Use the arrows to navigate, Space to play or pause video, and Escape to return to editing.
+Click **Present** or press **Ctrl+Space** (or **F5**) to toggle fullscreen presentation from the selected slide. Press **Shift+F5** to start from the first slide, or return to it while already presenting. Click the slide to go to the next one. Use the arrows to navigate, Space to play or pause video, and Escape to return to editing.
 
 Finished videos hold their last frame. Press Space again to replay from the beginning.
 
@@ -248,12 +272,16 @@ Slide navigation and selection shortcuts apply when the sidebar or preview has f
 | Ctrl+H / Ctrl+K / Ctrl+/ | Headline / code block / hidden comment |
 | ? / F1 | Show all shortcuts (F1 also works while typing) |
 | Tab / Shift+Tab | Switch between sidebar and Markdown input |
-| Arrow keys | Previous / next slide; up and down move by a row in Overview |
+| Arrow keys | Previous / next slide when the slide list has focus; up and down move by a row in Overview |
 | Enter | Open the selected slide from Overview |
 | Page Up / Page Down | Jump five slides, or five rows in Overview |
-| Home / End | First / last slide |
+| Home / End | First / last slide when focused in a slides list; start / end of line in a text box |
 | Ctrl+Up or Ctrl+Left | Move selected slides earlier (Ctrl+Up by a row in Overview) |
 | Ctrl+Down or Ctrl+Right | Move selected slides later (Ctrl+Down by a row in Overview) |
+| Ctrl+Page Up / Ctrl+Page Down | Move selected slides five places earlier / later, including in Overview |
+| Ctrl+Home / Ctrl+End | Move selected slides to the beginning / end |
+| Ctrl+Up / Ctrl+Down while typing | Move to a previous or next slide without moving it |
+| Ctrl+Page Up / Ctrl+Page Down while typing | Move to a slide five earlier or later |
 | Shift+arrows / Shift+click | Extend the slide selection |
 | Ctrl+Enter | Add a slide |
 | Ctrl+D | Duplicate selected slides |
@@ -261,10 +289,18 @@ Slide navigation and selection shortcuts apply when the sidebar or preview has f
 | Ctrl+V | Paste text or add and name media |
 | Ctrl+Z / Ctrl+Shift+Z | Undo / redo |
 | Ctrl+Space / F5 | Toggle presentation |
+| Shift+F5 | Start presentation from the first slide |
 | Escape | Leave presentation |
 | Space | Play / pause video while presenting |
 
-The mouse wheel over the sidebar selects the previous or next slide. Home/End jumps to the first/last slide throughout Visual mode, including its input field. In full Markdown mode, Home/End moves within the current line. In either editor, Page Up/Down scrolls a page; Ctrl+Home/End goes to the start/end of the text.
+With more than one display, Hype sends the slides fullscreen to an external display
+and opens Presenter View on the laptop display with the current slide, next slide,
+and any speaker notes written as `<!-- comments -->`. If Hype is already on an
+external display, that display remains the audience display. Navigate from either
+display with the presentation shortcuts. Connecting or disconnecting a display ends
+the show and returns to the editor on a connected display.
+
+The mouse wheel over the sidebar selects the previous or next slide. Home/End jumps to the first/last slide when the focus is in the slides list (Visual mode or Overview) and moves to the start/end of the line when a text box has focus. Page Up/Down scrolls a page; Ctrl+Home/End goes to the start/end of the text. Slide movement shortcuts work when the sidebar, preview, or Overview has focus; they leave the selected slides together and stop at the deck boundaries. While typing, Ctrl+Up/Down navigates one slide and Ctrl+Page Up/Page Down navigates five, keeping the text editor focused.
 
 ## Run from source
 
@@ -275,4 +311,15 @@ To build Hype yourself, install a C++17 compiler, make, Qt 6.9 or newer, FFmpeg,
 ./build/hype open examples/welcome.md
 ```
 
+`bin/build` uses a Qt toolchain under `build/qt/` when present, then falls back to `qmake6` on your PATH. It checks for Qt 6.9 or newer before compiling. Set `HYPE_QMAKE=/path/to/qmake6` to select a different toolchain.
+
 For a launcher entry that rebuilds this checkout when opened, run `./bin/install-dev` and choose **Hype (Development)**.
+
+Run `./bin/test` for the regression suite. After building the tests, the presenter
+check can also run with two virtual displays:
+
+```sh
+HYPE_GUI_TESTS=1 QT_QPA_PLATFORMTHEME=generic QT_STYLE_OVERRIDE=Fusion \
+  QT_QPA_PLATFORM="offscreen:configfile=$PWD/tests/fixtures/presenter-screens.json" \
+  ./build/tests/hype-tests presenterViewUsesSeparateScreens
+```

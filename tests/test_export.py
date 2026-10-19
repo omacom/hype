@@ -26,11 +26,9 @@ def image(path):
                      chunk(b'IEND', b''))
 
 
-def image_size(data):
-    """Width and height of a PNG, or of a JPEG from its start-of-frame marker."""
-    if data[:8] == b'\x89PNG\r\n\x1a\n':
-        return struct.unpack('>II', data[16:24])
-    assert data[:2] == b'\xff\xd8', 'neither PNG nor JPEG'
+def jpeg_size(data):
+    """Width and height from a JPEG's start-of-frame segment."""
+    assert data[:2] == b'\xff\xd8', 'not a JPEG'
     offset = 2
     while offset < len(data):
         marker, length = data[offset + 1], struct.unpack('>H', data[offset + 2:offset + 4])[0]
@@ -38,7 +36,7 @@ def image_size(data):
             height, width = struct.unpack('>HH', data[offset + 5:offset + 9])
             return width, height
         offset += 2 + length
-    raise AssertionError('JPEG without a frame header')
+    raise AssertionError('JPEG has no start-of-frame segment')
 
 
 class ExportTests(unittest.TestCase):
@@ -91,12 +89,14 @@ class ExportTests(unittest.TestCase):
             presentation = ET.fromstring(archive.read('ppt/presentation.xml'))
             self.assertEqual(len(presentation.findall('p:sldIdLst/p:sldId', NS)), 2)
             self.assertEqual(presentation.get('autoCompressPictures'), '0')
-            # Opaque slides are stored as JPEG; a slide with transparency would stay PNG.
-            images = [name for name in archive.namelist() if name.startswith('ppt/media/')
-                      and name.endswith(('.png', '.jpg'))]
+            # Opaque slides are stored as JPEG, at full 4K.
+            self.assertEqual([name for name in archive.namelist() if name.endswith('.png')], [])
+            images = [name for name in archive.namelist() if name.endswith('.jpg')]
             self.assertEqual(len(images), 2)
             for name in images:
-                self.assertEqual(image_size(archive.read(name)), (3840, 2160))
+                self.assertEqual(jpeg_size(archive.read(name)), (3840, 2160))
+            types = ET.fromstring(archive.read('[Content_Types].xml'))
+            self.assertIn(('jpg', 'image/jpeg'), [(d.get('Extension'), d.get('ContentType')) for d in types])
             size = presentation.find('p:sldSz', NS)
             self.assertAlmostEqual(int(size.get('cx')) / int(size.get('cy')), 16 / 9, places=5)
             core = ET.fromstring(archive.read('docProps/core.xml'))
@@ -259,6 +259,17 @@ class ExportTests(unittest.TestCase):
         movie, xml, _ = self.extracted_movie()
         self.assert_color(self.movie_pixel(movie, 0.25, 10, 10), (0, 0, 191))
         self.assertEqual(xml.find('.//p:video/p:cMediaNode/p:cTn', NS).get('repeatCount'), 'indefinite')
+
+    def test_placed_animation_keeps_its_corner(self):
+        self.animation('gif')
+        self.export('# Headline\n\n![position=bottom-right size=20%](demo.gif)\n')
+        movie, _, _ = self.extracted_movie()
+        # On a 192x108 frame the 20% box ends 3px from the edges; the 35x27 GIF is 28x22.
+        self.assert_color(self.movie_pixel(movie, 0.05, 180, 100), (255, 0, 0))  # Undarkened.
+        self.assert_color(self.movie_pixel(movie, 0.25, 180, 100), (0, 0, 255))
+        corner = self.movie_pixel(movie, 0.05, 150, 100)
+        self.assertLess(corner[0], 100, corner)  # Left of the image is the theme background.
+        self.assert_color(self.movie_pixel(movie, 0.05, 5, 5), corner)  # No darkening overlay.
 
     def test_animation_conversion_failure_preserves_export(self):
         self.export('# Original\n')

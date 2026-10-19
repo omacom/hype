@@ -48,6 +48,8 @@ ApplicationWindow {
     }
     property bool syncingEditor: false
     property bool editingSlide: false
+    // Remember intentional focus changes; moving the window may briefly clear activeFocus.
+    property string focusedEditor: ""
     property bool presenting: false
     readonly property bool popupOpen: pasteDialog.visible || compressionDialog.visible || googleFonts.visible ||
         historyDialog.visible || closeDialog.visible || shortcutsOverlay.visible || lookPicker.visible || fonts.popup.visible ||
@@ -56,15 +58,110 @@ ApplicationWindow {
     property var compressionReturnFocus: null
     property bool allowClose: false
     property int lastSelected: -1
+    // Front matter and boundary blank lines have no position in the slide editor.
+    property int sourceOnlyCursor: -1
     property int dragIndex: -1
     property int dropIndex: -1
     property real dragY: 0
     property real dragX: 0
     property int dragScroll: 0
+    property var presentationReturnScreen: null
+    property int presentationReturnVisibility: Window.Windowed
+    property rect presentationReturnGeometry: Qt.rect(0, 0, 0, 0)
     function togglePresent() {
         presenting = !presenting
-        if (presenting) { win.showFullScreen(); stage.forceActiveFocus() }
-        else { player.stop(); win.showNormal() }
+        if (presenting) {
+            win.focusedEditor = ""
+            // Window.screen follows the window as it moves. Save a stable display wrapper.
+            const displays = Qt.application.screens
+            const current = displays.find(screen => sameScreen(screen, win.screen)) || win.screen
+            presentationReturnScreen = current
+            presentationReturnVisibility = win.visibility
+            presentationReturnGeometry = Qt.rect(win.x, win.y, win.width, win.height)
+            const screens = presentationScreens(current, displays)
+            // Set the output before mapping fullscreen, and move within virtual desktops too.
+            win.hide()
+            win.screen = screens.audience
+            win.x = screens.audience.virtualX
+            win.y = screens.audience.virtualY
+            win.showFullScreen()
+            if (screens.notes) {
+                presenterWindow.screen = screens.notes
+                presenterWindow.x = screens.notes.virtualX
+                presenterWindow.y = screens.notes.virtualY
+                presenterWindow.showFullScreen()
+                Qt.callLater(function() { presenterWindow.requestActivate() })
+            } else stage.forceActiveFocus()
+        } else {
+            presenterWindow.hide()
+            player.stop()
+            // Clear fullscreen before restoring the editor's output and geometry.
+            // Remap only after both are set, since showNormal restores Qt's own saved geometry.
+            win.hide()
+            win.showNormal()
+            win.hide()
+            if (presentationReturnScreen) win.screen = presentationReturnScreen
+            if (presentationReturnGeometry.width > 0) {
+                win.x = presentationReturnGeometry.x
+                win.y = presentationReturnGeometry.y
+                win.width = presentationReturnGeometry.width
+                win.height = presentationReturnGeometry.height
+            }
+            if (presentationReturnVisibility === Window.Maximized) win.showMaximized()
+            else win.showNormal()
+            Qt.callLater(function() {
+                win.requestActivate()
+                stage.forceActiveFocus()
+            })
+        }
+    }
+    function isBuiltInScreen(screen) {
+        const name = screen && screen.name ? screen.name.toLowerCase() : ""
+        return name.indexOf("edp") >= 0 || name.indexOf("lvds") >= 0 || name.indexOf("dsi") >= 0
+    }
+    function sameScreen(a, b) {
+        // Window.screen and Qt.application.screens wrap the same display in
+        // distinct objects, so identity comparison never matches between them.
+        return !!a && !!b && a.name === b.name && a.virtualX === b.virtualX && a.virtualY === b.virtualY
+    }
+    Connections {
+        target: Qt.application
+        // A removed presenter display must never move private notes onto the audience display.
+        function onScreensChanged() {
+            if (!win.presenting) return
+            const screens = Qt.application.screens
+            if (screens.length && !screens.some(screen => win.sameScreen(screen, win.presentationReturnScreen))) {
+                const screen = screens[0]
+                win.presentationReturnScreen = screen
+                win.presentationReturnGeometry = Qt.rect(screen.virtualX, screen.virtualY,
+                    Math.min(win.presentationReturnGeometry.width, screen.width),
+                    Math.min(win.presentationReturnGeometry.height, screen.height))
+            }
+            win.togglePresent()
+        }
+    }
+    // Pure so tests can pass fake screens. Picks the audience screen and the
+    // presenter screen, which is null without a second display.
+    function presentationScreens(current, screens) {
+        const other = function(accept) {
+            for (let i = 0; i < screens.length; ++i)
+                if (!sameScreen(screens[i], current) && accept(screens[i])) return screens[i]
+            return null
+        }
+        let audience = current
+        if (screens.length > 1 && isBuiltInScreen(current)) {
+            // Connector names normally expose laptop panels as eDP/LVDS/DSI. Prefer
+            // HDMI explicitly, then any non-built-in output (including USB-C/DP docks).
+            audience = other(s => s.name.toLowerCase().indexOf("hdmi") >= 0)
+                || other(s => !isBuiltInScreen(s)) || other(s => true) || current
+        }
+        const notes = sameScreen(audience, current)
+            ? other(s => isBuiltInScreen(s)) || other(s => true) : current
+        return { audience: audience, notes: notes }
+    }
+    function presentFromBeginning() {
+        deck.select(0)
+        if (!presenting) togglePresent()
     }
     function toggleVideo() {
         if (player.playbackState === MediaPlayer.PlayingState) player.pause()
@@ -82,7 +179,7 @@ ApplicationWindow {
     }
     function switchEditingFocus() {
         if (slideEditor.activeFocus || sourceEditor.activeFocus) thumbnails.forceActiveFocus()
-        else if (markdown) revealSource(false, sourceFlick.contentY)
+        else if (markdown) restoreSource(sourceEditor.cursorPosition)
         else slideEditor.forceActiveFocus()
     }
     function editorKey(editor, flick, event) {
@@ -96,16 +193,25 @@ ApplicationWindow {
             return
         }
         let control = event.modifiers & Qt.ControlModifier
-        if (!win.markdown && editor === slideEditor && event.modifiers === Qt.NoModifier &&
-            (event.key === Qt.Key_Home || event.key === Qt.Key_End)) {
-            event.accepted = true
-            deck.select(event.key === Qt.Key_Home ? 0 : deck.count - 1)
-            return
-        }
         if (control && event.key === Qt.Key_Z) {
             event.accepted = true
             event.modifiers & Qt.ShiftModifier ? deck.redo() : deck.undo()
             return
+        }
+        // Keypad navigation keys carry KeypadModifier as well as ControlModifier.
+        if (control && !(event.modifiers & (Qt.ShiftModifier | Qt.AltModifier | Qt.MetaModifier))) {
+            let delta = 0
+            if (event.key === Qt.Key_Up) delta = -1
+            else if (event.key === Qt.Key_Down) delta = 1
+            else if (event.key === Qt.Key_PageUp) delta = -5
+            else if (event.key === Qt.Key_PageDown) delta = 5
+            if (delta) {
+                event.accepted = true
+                let previous = deck.selected
+                deck.select(deck.selected + delta)
+                if (editor === sourceEditor && deck.selected !== previous) alignSource(false, delta)
+                return
+            }
         }
         let position = editor.cursorPosition
         let scroll = flick.contentY
@@ -161,20 +267,39 @@ ApplicationWindow {
     }
     function openMarkdown() { setMarkdownMode(true) }
     function setMarkdownMode(value) { setMode(value ? "markdown" : "visual") }
-    function setMode(name) {
+    function slideTextPosition() {
+        // The slide editor omits boundary blank lines, but preserves indentation.
+        return deck.sourcePosition() + deck.slideSource.indexOf(deck.slideText)
+    }
+    function setMode(name) { changeMode(name, false) }
+    function changeMode(name, preserveEditing) {
+        const switchingEditors = preserveEditing && !overview && name !== "overview"
+        const editorFocused = sourceEditor.activeFocus || slideEditor.activeFocus
+        const position = switchingEditors && markdown
+            ? sourceEditor.cursorPosition - slideTextPosition() : slideEditor.cursorPosition
+        focusedEditor = ""
         overview = name === "overview"
         if (!overview) editingMode = name
         markdown = name === "markdown"
         if (overview) {
             overviewGrid.forceActiveFocus()
             Qt.callLater(overviewGrid.revealSelection)
+        } else if (switchingEditors) {
+            if (markdown) restoreSource(
+                sourceOnlyCursor >= 0 ? sourceOnlyCursor : slideTextPosition() + position, false)
+            else {
+                slideEditor.cursorPosition = Math.max(0, Math.min(slideEditor.length, position))
+                sourceOnlyCursor = slideEditor.cursorPosition === position ? -1 : sourceEditor.cursorPosition
+            }
+            const focusTarget = editorFocused ? (markdown ? sourceEditor : slideEditor) : thumbnails
+            focusTarget.forceActiveFocus()
         } else if (markdown) alignSource()
         else stage.forceActiveFocus()
     }
     // Ctrl+M flips between the overview and whichever editing mode you came from.
     property string editingMode: "visual"
     function toggleOverview() { setMode(overview ? editingMode : "overview") }
-    function toggleSource() { setMode(markdown && !overview ? "visual" : "markdown") }
+    function toggleSource() { changeMode(markdown && !overview ? "visual" : "markdown", true) }
     // Moves the selected slides by whole rows in the overview, one slide elsewhere.
     function moveSlides(delta) {
         if (Math.abs(delta) === 1) deck.moveSelection(delta)
@@ -189,17 +314,49 @@ ApplicationWindow {
         if (markdown) revealSource(false, previousY)
         else slideEditor.forceActiveFocus()
     }
-    function alignSource(focus = true) { revealSource(true, sourceFlick.contentY, focus) }
-    function revealSource(atTop, previousY, focus = true) {
+    function restoreSource(position, focus = true) { revealSource(false, sourceFlick.contentY, focus, 0, position) }
+    function alignSource(focus = true, navigationDelta = 0) { revealSource(true, sourceFlick.contentY, focus, navigationDelta, slideTextPosition()) }
+    function revealSource(atTop, previousY, focus = true, navigationDelta = 0, position = deck.sourcePosition()) {
+        let start = deck.sourcePosition()
+        let cursor = position
+        let scrollPosition = position
+        let endPosition
+        if (navigationDelta) {
+            cursor = start
+            scrollPosition = start
+            endPosition = deck.sourceEndPosition()
+            if (endPosition === sourceEditor.length && endPosition > 0 && sourceEditor.text[endPosition - 1] === "\n")
+                --endPosition
+            else if (sourceEditor.text.slice(endPosition, endPosition + 3) === "---")
+                ++endPosition // At column zero, Qt measures the preceding blank line.
+            // The parsed slide begins after its --- line, usually on an empty line.
+            let endOfFirstLine = sourceEditor.text.indexOf("\n", start)
+            if (endOfFirstLine >= 0 && sourceEditor.text.slice(start, endOfFirstLine).trim() === "")
+                cursor = endOfFirstLine + 1
+            if (start > 0)
+                scrollPosition = sourceEditor.text.lastIndexOf("\n", start - 2) + 1
+            if (sourceEditor.text.slice(scrollPosition, scrollPosition + 3) === "---")
+                ++scrollPosition
+        }
         syncingEditor = true
-        sourceEditor.cursorPosition = deck.sourcePosition()
+        sourceEditor.cursorPosition = cursor
         syncingEditor = false
         if (focus) sourceEditor.forceActiveFocus()
         Qt.callLater(function() {
-            let rect = sourceEditor.positionToRectangle(deck.sourcePosition())
-            let viewportHeight = win.contentItem.height - 2 * win.inset - sourceBar.height
+            let rect = sourceEditor.positionToRectangle(scrollPosition)
+            let viewportHeight = sourceFlick.height
             let nextY = previousY
-            if (atTop || rect.y < previousY + sourceEditor.topPadding)
+            if (navigationDelta) {
+                let endRect = sourceEditor.positionToRectangle(endPosition)
+                let bottom = endRect.y + endRect.height
+                let topInset = sourceEditor.topPadding + 2
+                let bottomInset = sourceEditor.bottomPadding + 2
+                if (bottom - rect.y > viewportHeight - topInset - bottomInset ||
+                    rect.y - topInset < previousY)
+                    nextY = rect.y - topInset
+                else if (bottom + bottomInset > previousY + viewportHeight)
+                    nextY = bottom + bottomInset - viewportHeight
+            } else if (atTop || rect.y < previousY + sourceEditor.topPadding)
                 nextY = rect.y - sourceEditor.topPadding
             else if (rect.y + rect.height > previousY + viewportHeight - sourceEditor.bottomPadding)
                 nextY = rect.y + rect.height + sourceEditor.bottomPadding - viewportHeight
@@ -210,17 +367,26 @@ ApplicationWindow {
             sourceFlick.contentY = Math.max(0, Math.min(maxY, nextY))
         })
     }
+    function syncSourceEditor() {
+        syncingEditor = true
+        if (sourceEditor.text !== deck.source) {
+            sourceOnlyCursor = -1
+            sourceEditor.text = deck.source
+        }
+        syncingEditor = false
+    }
     function syncEditors() {
         syncingEditor = true
-        if (sourceEditor.text !== deck.source) sourceEditor.text = deck.source
         if (!editingSlide && slideEditor.text !== deck.slideText) slideEditor.text = deck.slideText
-        syncingEditor = false
         if (lastSelected !== deck.selected) {
+            sourceOnlyCursor = -1
             slideEditor.cursorPosition = 0
+            if (!sourceEditor.activeFocus) sourceEditor.cursorPosition = slideTextPosition()
             Qt.callLater(function() { slideScroll.contentItem.contentY = 0 })
         }
+        syncingEditor = false
     }
-    Component.onCompleted: { syncEditors(); lastSelected = deck.selected; Qt.callLater(thumbnails.revealSelection); if (deck.path !== "") focusForDeck(true) }
+    Component.onCompleted: { syncSourceEditor(); syncEditors(); lastSelected = deck.selected; Qt.callLater(thumbnails.revealSelection); if (deck.path !== "") focusForDeck(true) }
     Connections {
         target: deck
         function onCompressingImageChanged() {
@@ -236,7 +402,8 @@ ApplicationWindow {
             pasteName.text = name
             pasteDialog.open()
         }
-        function onChanged() {
+        function onChanged() { win.syncSourceEditor() }
+        function onSelectionChanged() {
             win.syncEditors()
             if (win.dragIndex < 0 && win.lastSelected !== deck.selected) Qt.callLater(thumbnails.revealSelection)
             const nextVideo = deck.media.video ? deck.media.url.toString() : ""
@@ -255,13 +422,121 @@ ApplicationWindow {
             thumbnails.scrollBeforeReset = thumbnails.contentY - thumbnails.originY
         }
         function onModelReset() { Qt.callLater(thumbnails.revealSelection) }
-        function onOpened(existing) { Qt.callLater(function() { win.focusForDeck(existing) }) }
+        function onOpened(existing) { win.sourceOnlyCursor = -1; Qt.callLater(function() { win.focusForDeck(existing) }) }
     }
     onPresentingChanged: { if (presenting && deck.media.video && deck.media.autoplay) player.play() }
     onClosing: function(close) {
         if (!allowClose && !deck.flushAutosave() && deck.dirty) {
             close.accepted = false
+            if (presenting) togglePresent()
             closeDialog.open()
+            return
+        }
+        if (presenting) {
+            presenting = false
+            presenterWindow.hide()
+            player.stop()
+        }
+    }
+    ApplicationWindow {
+        id: presenterWindow; objectName: "presenterWindow"
+        visible: false; minimumWidth: 800; minimumHeight: 520
+        title: deck.title + " — Presenter View"
+        color: win.ui.background
+        palette.window: win.ui.panel; palette.base: win.ui.background; palette.text: win.ui.foreground
+        palette.windowText: win.ui.foreground; palette.button: win.ui.button; palette.buttonText: win.ui.foreground
+        palette.highlight: win.ui.selection; palette.highlightedText: win.ui.selectionText
+        onClosing: function(close) {
+            if (win.presenting) {
+                close.accepted = false
+                win.togglePresent()
+            }
+        }
+
+        ColumnLayout {
+            anchors.fill: parent; anchors.margins: 28; spacing: 22
+            RowLayout {
+                Layout.fillWidth: true; spacing: 16
+                Label {
+                    text: deck.title; color: win.ui.foreground; font.pixelSize: 22; font.bold: true
+                    Layout.fillWidth: true; elide: Text.ElideRight
+                }
+                Label {
+                    text: "Slide " + (deck.selected + 1) + " of " + deck.count
+                    color: win.ui.muted; font.pixelSize: 16
+                }
+                Button {
+                    text: "End show"
+                    onClicked: win.togglePresent()
+                    contentItem: Text { text: parent.text; color: win.ui.foreground; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                    background: Rectangle { color: parent.hovered ? win.ui.hover : win.ui.button; radius: win.softRadius; border.color: win.ui.border }
+                }
+            }
+            RowLayout {
+                Layout.fillWidth: true; Layout.preferredHeight: presenterWindow.height * 0.42; spacing: 22
+                ColumnLayout {
+                    Layout.fillWidth: true; Layout.fillHeight: true; Layout.preferredWidth: 2
+                    Label { text: "CURRENT"; color: win.ui.muted; font.pixelSize: 12; font.bold: true }
+                    Item {
+                        Layout.fillWidth: true; Layout.fillHeight: true
+                        Rectangle {
+                            anchors.centerIn: parent
+                            width: Math.min(parent.width, parent.height * 16 / 9)
+                            height: width * 9 / 16
+                            color: deck.background; border.color: win.ui.border
+                            Image {
+                                anchors.fill: parent
+                                source: "image://slides/" + (deck.revision, deck.renderId(deck.selected))
+                                asynchronous: true; retainWhileLoading: true; cache: true
+                                sourceSize: Qt.size(960, 540)
+                            }
+                        }
+                    }
+                }
+                ColumnLayout {
+                    Layout.fillWidth: true; Layout.fillHeight: true; Layout.preferredWidth: 1
+                    Label { text: "NEXT"; color: win.ui.muted; font.pixelSize: 12; font.bold: true }
+                    Item {
+                        Layout.fillWidth: true; Layout.fillHeight: true
+                        Rectangle {
+                            anchors.centerIn: parent
+                            width: Math.min(parent.width, parent.height * 16 / 9)
+                            height: width * 9 / 16
+                            color: deck.background; border.color: win.ui.border
+                            Image {
+                                anchors.fill: parent
+                                source: deck.selected + 1 < deck.count
+                                    ? "image://slides/" + (deck.revision, deck.renderId(deck.selected + 1)) : ""
+                                asynchronous: true; retainWhileLoading: true; cache: true
+                                sourceSize: Qt.size(640, 360)
+                            }
+                            Label {
+                                anchors.centerIn: parent; visible: deck.selected + 1 >= deck.count
+                                text: "End of presentation"; color: win.ui.muted; font.pixelSize: 16
+                            }
+                        }
+                    }
+                }
+            }
+            Rectangle { Layout.fillWidth: true; height: 1; color: win.ui.border }
+            Label { text: "SPEAKER NOTES"; color: win.ui.muted; font.pixelSize: 12; font.bold: true }
+            ScrollView {
+                Layout.fillWidth: true; Layout.fillHeight: true; clip: true
+                background: Rectangle { color: win.ui.panel; radius: win.rounding; border.color: win.ui.border }
+                TextArea {
+                    objectName: "presenterNotes"; readOnly: true; selectByMouse: true
+                    text: deck.speakerNotes || "No speaker notes for this slide."
+                    color: deck.speakerNotes ? win.ui.foreground : win.ui.muted
+                    font.pixelSize: 24; wrapMode: TextEdit.Wrap
+                    leftPadding: 24; rightPadding: 24; topPadding: 20; bottomPadding: 20
+                    background: null
+                }
+            }
+            Label {
+                Layout.fillWidth: true
+                text: "←/→ change slide   ·   Space plays media   ·   Esc ends the show"
+                color: win.ui.muted; font.pixelSize: 13; horizontalAlignment: Text.AlignHCenter
+            }
         }
     }
     Dialog {
@@ -842,31 +1117,36 @@ ApplicationWindow {
     Shortcut { sequence: "Ctrl+/"; enabled: win.canFormat; onActivated: win.formatSlide("comment") }
     Shortcut { sequences: ["Return", "Enter"]; enabled: !win.popupOpen && !deck.compressingImage && win.overview && !win.presenting; onActivated: win.focusMarkdown() }
     Shortcut { enabled: !win.popupOpen && !deck.compressingImage; sequence: "Ctrl+N"; onActivated: deck.newDeck() }
-    Shortcut { enabled: !win.popupOpen && !deck.compressingImage; sequences: ["F5", "Ctrl+Space"]; autoRepeat: false; onActivated: win.togglePresent() }
-    Shortcut { sequence: "Escape"; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting); onActivated: win.togglePresent() }
+    Shortcut { enabled: !win.popupOpen && !deck.compressingImage; sequences: ["F5", "Ctrl+Space"]; context: win.presenting ? Qt.ApplicationShortcut : Qt.WindowShortcut; autoRepeat: false; onActivated: win.togglePresent() }
+    Shortcut { enabled: !win.popupOpen && !deck.compressingImage; sequence: "Shift+F5"; context: win.presenting ? Qt.ApplicationShortcut : Qt.WindowShortcut; autoRepeat: false; onActivated: win.presentFromBeginning() }
+    Shortcut { sequence: "Escape"; context: Qt.ApplicationShortcut; enabled: !win.popupOpen && !deck.compressingImage && win.presenting; onActivated: win.togglePresent() }
     Shortcut { sequence: "Ctrl+Z"; enabled: !win.popupOpen && !deck.compressingImage && (!slideEditor.activeFocus && !sourceEditor.activeFocus); onActivated: deck.undo() }
     Shortcut { sequence: "Ctrl+Shift+Z"; enabled: !win.popupOpen && !deck.compressingImage && (!slideEditor.activeFocus && !sourceEditor.activeFocus); onActivated: deck.redo() }
     Shortcut { sequence: "Ctrl+D"; enabled: !win.popupOpen && !deck.compressingImage && (!slideEditor.activeFocus && !sourceEditor.activeFocus); onActivated: deck.duplicateSlide() }
     Shortcut { enabled: !win.popupOpen && !deck.compressingImage; sequence: "Ctrl+Return"; onActivated: { win.addSlide() } }
     Shortcut { enabled: !win.popupOpen && !deck.compressingImage && !win.presenting && deck.templateName !== ""; sequences: ["Ctrl+Shift+Return", "Ctrl+Shift+Enter"]; onActivated: templateSlidesDialog.open() }
     Shortcut { sequence: "Delete"; enabled: !win.popupOpen && !deck.compressingImage && (!slideEditor.activeFocus && !sourceEditor.activeFocus); onActivated: deck.deleteSlide() }
-    Shortcut { sequence: "Right"; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!slideEditor.activeFocus && !sourceEditor.activeFocus)); onActivated: deck.select(deck.selected + 1) }
+    Shortcut { sequence: "Right"; context: win.presenting ? Qt.ApplicationShortcut : Qt.WindowShortcut; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!slideEditor.activeFocus && !sourceEditor.activeFocus)); onActivated: deck.select(deck.selected + 1) }
     Shortcut { sequence: "Ctrl+Right"; enabled: !win.popupOpen && !deck.compressingImage && !win.presenting && !slideEditor.activeFocus && !sourceEditor.activeFocus; onActivated: win.moveSlides(1) }
     Shortcut { sequence: "Shift+Right"; enabled: !win.popupOpen && !deck.compressingImage && !win.presenting && !slideEditor.activeFocus && !sourceEditor.activeFocus; onActivated: { deck.extendSelection(deck.selected + 1); if (win.markdown) win.alignSource(false) } }
-    Shortcut { sequence: "Down"; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!slideEditor.activeFocus && !sourceEditor.activeFocus)); onActivated: deck.select(deck.selected + (win.presenting ? 1 : win.rowStep)) }
+    Shortcut { sequence: "Down"; context: win.presenting ? Qt.ApplicationShortcut : Qt.WindowShortcut; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!slideEditor.activeFocus && !sourceEditor.activeFocus)); onActivated: deck.select(deck.selected + (win.presenting ? 1 : win.rowStep)) }
     Shortcut { sequence: "Ctrl+Down"; enabled: !win.popupOpen && !deck.compressingImage && !win.presenting && !slideEditor.activeFocus && !sourceEditor.activeFocus; onActivated: win.moveSlides(win.rowStep) }
     Shortcut { sequence: "Shift+Down"; enabled: !win.popupOpen && !deck.compressingImage && !win.presenting && !slideEditor.activeFocus && !sourceEditor.activeFocus; onActivated: { deck.extendSelection(deck.selected + win.rowStep); if (win.markdown) win.alignSource(false) } }
-    Shortcut { sequence: "Left"; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!slideEditor.activeFocus && !sourceEditor.activeFocus)); onActivated: deck.select(deck.selected + -1) }
+    Shortcut { sequence: "Left"; context: win.presenting ? Qt.ApplicationShortcut : Qt.WindowShortcut; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!slideEditor.activeFocus && !sourceEditor.activeFocus)); onActivated: deck.select(deck.selected + -1) }
     Shortcut { sequence: "Ctrl+Left"; enabled: !win.popupOpen && !deck.compressingImage && !win.presenting && !slideEditor.activeFocus && !sourceEditor.activeFocus; onActivated: win.moveSlides(-1) }
     Shortcut { sequence: "Shift+Left"; enabled: !win.popupOpen && !deck.compressingImage && !win.presenting && !slideEditor.activeFocus && !sourceEditor.activeFocus; onActivated: { deck.extendSelection(deck.selected + -1); if (win.markdown) win.alignSource(false) } }
-    Shortcut { sequence: "Up"; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!slideEditor.activeFocus && !sourceEditor.activeFocus)); onActivated: deck.select(deck.selected + (win.presenting ? -1 : -win.rowStep)) }
+    Shortcut { sequence: "Up"; context: win.presenting ? Qt.ApplicationShortcut : Qt.WindowShortcut; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!slideEditor.activeFocus && !sourceEditor.activeFocus)); onActivated: deck.select(deck.selected + (win.presenting ? -1 : -win.rowStep)) }
     Shortcut { sequence: "Ctrl+Up"; enabled: !win.popupOpen && !deck.compressingImage && !win.presenting && !slideEditor.activeFocus && !sourceEditor.activeFocus; onActivated: win.moveSlides(-win.rowStep) }
     Shortcut { sequence: "Shift+Up"; enabled: !win.popupOpen && !deck.compressingImage && !win.presenting && !slideEditor.activeFocus && !sourceEditor.activeFocus; onActivated: { deck.extendSelection(deck.selected + -win.rowStep); if (win.markdown) win.alignSource(false) } }
-    Shortcut { sequence: "PgDown"; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!slideEditor.activeFocus && !sourceEditor.activeFocus)); onActivated: deck.select(deck.selected + 5 * win.rowStep) }
-    Shortcut { sequence: "PgUp"; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!slideEditor.activeFocus && !sourceEditor.activeFocus)); onActivated: deck.select(deck.selected - 5 * win.rowStep) }
-    Shortcut { sequence: "Home"; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!win.markdown && !slideEditor.activeFocus)); onActivated: deck.select(0) }
-    Shortcut { sequence: "End"; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!win.markdown && !slideEditor.activeFocus)); onActivated: deck.select(deck.count - 1) }
-    Shortcut { sequence: "Space"; enabled: !win.popupOpen && !deck.compressingImage && win.presenting && (deck.media.video || animation.active); autoRepeat: false; onActivated: { if (animation.item) animation.item.paused = !animation.item.paused; else win.toggleVideo() } }
+    Shortcut { sequence: "PgDown"; context: win.presenting ? Qt.ApplicationShortcut : Qt.WindowShortcut; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!slideEditor.activeFocus && !sourceEditor.activeFocus)); onActivated: deck.select(deck.selected + 5 * win.rowStep) }
+    Shortcut { sequence: "PgUp"; context: win.presenting ? Qt.ApplicationShortcut : Qt.WindowShortcut; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!slideEditor.activeFocus && !sourceEditor.activeFocus)); onActivated: deck.select(deck.selected - 5 * win.rowStep) }
+    Shortcut { sequence: "Ctrl+PgDown"; enabled: !win.popupOpen && !deck.compressingImage && !win.presenting && !slideEditor.activeFocus && !sourceEditor.activeFocus; onActivated: win.moveSlides(5) }
+    Shortcut { sequence: "Ctrl+PgUp"; enabled: !win.popupOpen && !deck.compressingImage && !win.presenting && !slideEditor.activeFocus && !sourceEditor.activeFocus; onActivated: win.moveSlides(-5) }
+    Shortcut { sequence: "Home"; context: win.presenting ? Qt.ApplicationShortcut : Qt.WindowShortcut; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!win.markdown && !slideEditor.activeFocus)); onActivated: deck.select(0) }
+    Shortcut { sequence: "End"; context: win.presenting ? Qt.ApplicationShortcut : Qt.WindowShortcut; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!win.markdown && !slideEditor.activeFocus)); onActivated: deck.select(deck.count - 1) }
+    Shortcut { sequence: "Ctrl+Home"; enabled: !win.popupOpen && !deck.compressingImage && !win.presenting && !slideEditor.activeFocus && !sourceEditor.activeFocus; onActivated: win.moveSlides(-deck.count) }
+    Shortcut { sequence: "Ctrl+End"; enabled: !win.popupOpen && !deck.compressingImage && !win.presenting && !slideEditor.activeFocus && !sourceEditor.activeFocus; onActivated: win.moveSlides(deck.count) }
+    Shortcut { sequence: "Space"; context: Qt.ApplicationShortcut; enabled: !win.popupOpen && !deck.compressingImage && win.presenting && (deck.media.video || animation.active); autoRepeat: false; onActivated: { if (animation.item) animation.item.paused = !animation.item.paused; else win.toggleVideo() } }
     Shortcut { sequence: "Ctrl+V"; enabled: !win.popupOpen && !deck.compressingImage && (!slideEditor.activeFocus && !sourceEditor.activeFocus); onActivated: deck.pasteMedia() }
     component ToolbarIconButton: ToolButton {
         id: toolbarButton
@@ -928,8 +1208,11 @@ ApplicationWindow {
         required property int slide
         required property bool selected
         required property bool hovered
+        property bool selectionActive: true
         property size renderSize: Qt.size(340, 192)
         readonly property bool current: deck.selected === slide
+        readonly property color selectionStroke: selected ? (selectionActive ? win.ui.accent : win.ui.inactiveSelection) : win.ui.border
+        readonly property int selectionStrokeWidth: current && selectionActive ? 3 : selected ? 2 : 1
         color: deck.background; radius: win.rounding
         Image {
             anchors.fill: parent
@@ -945,10 +1228,10 @@ ApplicationWindow {
         }
         Rectangle {
             anchors.fill: parent; radius: frame.radius; color: "transparent"
-            border.width: frame.current ? 3 : frame.selected ? 2 : 1
-            border.color: frame.selected ? win.ui.accent : win.ui.border
+            border.width: frame.selectionStrokeWidth
+            border.color: frame.selectionStroke
         }
-        SlideBadge { slide: frame.slide; current: frame.current; hovered: frame.hovered }
+        SlideBadge { slide: frame.slide; current: frame.current; hovered: frame.hovered; active: frame.selectionActive }
     }
     // Names a slide from inside its frame: part of the accent highlight on the
     // current slide, and a quieter tab on whichever slide the pointer is over.
@@ -956,12 +1239,13 @@ ApplicationWindow {
         required property int slide
         required property bool current
         required property bool hovered
+        required property bool active
         visible: current || (hovered && win.dragIndex < 0)
         anchors.left: parent.left; anchors.bottom: parent.bottom
         width: badgeLabel.implicitWidth + 12; height: badgeLabel.implicitHeight + 6
-        color: current ? win.ui.accent : win.ui.border
+        color: current ? (active ? win.ui.accent : win.ui.inactiveSelection) : win.ui.border
         topRightRadius: win.softRadius; bottomLeftRadius: win.rounding
-        Label { id: badgeLabel; anchors.centerIn: parent; text: "Slide " + (parent.slide + 1); font.pixelSize: 10; color: parent.current ? win.ui.accentText : win.ui.foreground }
+        Label { id: badgeLabel; anchors.centerIn: parent; text: "Slide " + (parent.slide + 1); font.pixelSize: 10; color: parent.current ? (parent.active ? win.ui.accentText : win.ui.inactiveSelectionText) : win.ui.foreground }
     }
     component AppMenu: Menu {
         id: appMenu
@@ -988,14 +1272,18 @@ ApplicationWindow {
         property bool destructive: false
         readonly property color ink: destructive ? win.ui.error : win.ui.foreground
         implicitHeight: 32
-        implicitWidth: leftPadding + itemLabel.implicitWidth + (hint ? 28 + itemHint.implicitWidth : 0) + rightPadding
+        implicitWidth: leftPadding + itemLabel.implicitWidth + (hint ? 28 + itemHint.implicitWidth : 0) + (subMenu ? 28 : 0) + rightPadding
         leftPadding: menu && menu.hasChecks ? 32 : 12; rightPadding: 12; topPadding: 0; bottomPadding: 0
         font.pixelSize: 13
         indicator: AppIcon {
             x: 10; anchors.verticalCenter: parent.verticalCenter; width: 14; height: 14
             visible: appMenuItem.checkable && appMenuItem.checked; name: "check"; color: win.ui.accent
         }
-        arrow: null
+        arrow: AppIcon {
+            x: parent.width - width - 10; anchors.verticalCenter: parent.verticalCenter; width: 14; height: 14
+            visible: !!appMenuItem.subMenu; name: "chevron-right"; color: win.ui.muted
+            opacity: appMenuItem.enabled ? 1 : 0.4
+        }
         contentItem: Item {
             opacity: appMenuItem.enabled ? 1 : 0.4
             Label { id: itemLabel; anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter; text: appMenuItem.text; font: appMenuItem.font; color: appMenuItem.ink }
@@ -1037,20 +1325,43 @@ ApplicationWindow {
                 AppMenu {
                     hasChecks: true
                     id: mediaMenu; objectName: editorBar.scope + "mediaMenu"; y: parent.height + 4
-                    AppMenuItem { text: "Fit"; checkable: true; checked: !deck.media.span; onTriggered: deck.setMediaMode("fit") }
+                    readonly property bool placed: !!deck.media.position
+                    AppMenuItem { text: "Fit"; checkable: true; checked: !deck.media.span && !mediaMenu.placed; onTriggered: deck.setMediaMode("fit") }
                     AppMenuItem { text: "Span"; checkable: true; checked: deck.media.span; onTriggered: deck.setMediaMode("span") }
+                    AppMenu {
+                        id: placeMenu; objectName: editorBar.scope + "placeMenu"
+                        title: "Place"; hasChecks: true; enabled: !deck.media.video
+                        Instantiator {
+                            model: deck.mediaPositions
+                            delegate: AppMenuItem {
+                                // "bottom-right" reads as "Bottom right".
+                                text: modelData.charAt(0).toUpperCase() + modelData.slice(1).replace("-", " ")
+                                checkable: true; checked: deck.media.position === modelData
+                                onTriggered: deck.setMediaPosition(modelData)
+                            }
+                            onObjectAdded: (index, item) => placeMenu.insertItem(index, item)
+                            onObjectRemoved: (index, item) => placeMenu.removeItem(item)
+                        }
+                    }
+                    AppMenu {
+                        objectName: editorBar.scope + "sizeMenu"
+                        title: "Size"; hasChecks: true; enabled: mediaMenu.placed
+                        AppMenuItem { text: "Small (10%)"; checkable: true; checked: deck.media.size === 10; onTriggered: deck.setMediaSize(10) }
+                        AppMenuItem { text: "Medium (20%)"; checkable: true; checked: deck.media.size === 20; onTriggered: deck.setMediaSize(20) }
+                        AppMenuItem { text: "Large (35%)"; checkable: true; checked: deck.media.size === 35; onTriggered: deck.setMediaSize(35) }
+                    }
                     AppMenuSeparator {}
-                    AppMenuItem { text: "Title above media"; checkable: true; checked: deck.media.layout === "title"; onTriggered: deck.setMediaMode("title") }
-                    AppMenuItem { text: "Text beside media"; checkable: true; checked: deck.media.layout === "split"; onTriggered: deck.setMediaMode("split") }
-                    AppMenuItem { text: "Caption below media"; checkable: true; checked: deck.media.layout === "caption"; onTriggered: deck.setMediaMode("caption") }
-                    AppMenuItem { text: "Caption below right half"; checkable: true; checked: deck.media.layout === "caption-right"; onTriggered: deck.setMediaMode("caption-right") }
-                    AppMenuItem { text: "All text over media"; checkable: true; checked: !deck.media.layout || deck.media.layout === "overlay"; onTriggered: deck.setMediaMode("overlay") }
+                    AppMenuItem { text: "Title above media"; enabled: !mediaMenu.placed; checkable: true; checked: deck.media.layout === "title"; onTriggered: deck.setMediaMode("title") }
+                    AppMenuItem { text: "Text beside media"; enabled: !mediaMenu.placed; checkable: true; checked: deck.media.layout === "split"; onTriggered: deck.setMediaMode("split") }
+                    AppMenuItem { text: "Caption below media"; enabled: !mediaMenu.placed; checkable: true; checked: deck.media.layout === "caption"; onTriggered: deck.setMediaMode("caption") }
+                    AppMenuItem { text: "Caption below right half"; enabled: !mediaMenu.placed; checkable: true; checked: deck.media.layout === "caption-right"; onTriggered: deck.setMediaMode("caption-right") }
+                    AppMenuItem { text: "All text over media"; enabled: !mediaMenu.placed; checkable: true; checked: !deck.media.layout || deck.media.layout === "overlay"; onTriggered: deck.setMediaMode("overlay") }
                     AppMenuSeparator {}
-                    AppMenuItem { text: "Match image edges"; checkable: true; checked: deck.media.background === "auto"; onTriggered: deck.matchImageBackground(true) }
-                    AppMenuItem { text: deck.media.video ? "Blurred first frame" : "Blurred image"; checkable: true; checked: deck.media.background === "blur"; onTriggered: deck.setMediaBackground("blur") }
-                    AppMenuItem { text: "White"; checkable: true; checked: deck.media.background === "white"; onTriggered: deck.setMediaBackground("white") }
-                    AppMenuItem { text: "Black"; checkable: true; checked: deck.media.background === "black"; onTriggered: deck.setMediaBackground("black") }
-                    AppMenuItem { text: "Use theme color"; checkable: true; checked: deck.media.background === "theme"; onTriggered: deck.matchImageBackground(false) }
+                    AppMenuItem { text: "Match image edges"; enabled: !mediaMenu.placed; checkable: true; checked: deck.media.background === "auto"; onTriggered: deck.matchImageBackground(true) }
+                    AppMenuItem { text: deck.media.video ? "Blurred first frame" : "Blurred image"; enabled: !mediaMenu.placed; checkable: true; checked: deck.media.background === "blur"; onTriggered: deck.setMediaBackground("blur") }
+                    AppMenuItem { objectName: editorBar.scope + "whiteBackgroundItem"; text: "White"; enabled: !mediaMenu.placed; checkable: true; checked: deck.media.background === "white"; onTriggered: deck.setMediaBackground("white") }
+                    AppMenuItem { text: "Black"; enabled: !mediaMenu.placed; checkable: true; checked: deck.media.background === "black"; onTriggered: deck.setMediaBackground("black") }
+                    AppMenuItem { text: "Use theme color"; enabled: !mediaMenu.placed; checkable: true; checked: deck.media.background === "theme"; onTriggered: deck.matchImageBackground(false) }
                 }
             }
         }
@@ -1177,6 +1488,7 @@ ApplicationWindow {
             }
             ToolbarIconButton {
                 objectName: "modeButton"
+                focusPolicy: Qt.NoFocus
                 iconName: win.editingMode
                 description: (win.editingMode === "markdown" ? "Markdown · Switch to Visual" : "Visual · Switch to Markdown") + " (Ctrl+.)"
                 onClicked: win.overview ? win.setMode(win.editingMode === "markdown" ? "visual" : "markdown") : win.toggleSource()
@@ -1217,7 +1529,7 @@ ApplicationWindow {
         readonly property var groups: [
             { title: "Presentation", keys: [
                 ["Ctrl+N", "New presentation"], ["Ctrl+O", "Open"], ["Ctrl+S", "Save"], ["Ctrl+Shift+S", "Save as"],
-                ["Ctrl+E", "Export as PDF"], ["Ctrl+Shift+E", "Export as PowerPoint"], ["Ctrl+Space / F5", "Present"], ["Esc", "Stop presenting"],
+                ["Ctrl+E", "Export as PDF"], ["Ctrl+Shift+E", "Export as PowerPoint"], ["Ctrl+Space / F5", "Present"], ["Shift+F5", "Present from first slide"], ["Esc", "Stop presenting"],
                 ["Space", "Play or pause video while presenting"] ] },
             { title: "View", keys: [
                 ["Ctrl+M", "Overview on or off"], ["Ctrl+.", "Markdown source on or off"],
@@ -1225,13 +1537,15 @@ ApplicationWindow {
                 ["? / F1", "Show these shortcuts"] ] },
             { title: "Slides", keys: [
                 ["Arrows", "Previous or next slide, by row in Overview"], ["Page Up / Page Down", "Jump five slides, or five rows in Overview"],
-                ["Home / End", "First or last slide"], ["Shift+Arrows", "Extend the selection"],
-                ["Ctrl+Arrows", "Move selected slides"], ["Ctrl+Enter", "Add a slide"], ["Ctrl+Shift+Enter", "Add a slide from the template"],
+                ["Home / End", "First or last slide when focused in Slides list"], ["Shift+Arrows", "Extend the selection"],
+                ["Ctrl+Arrows", "Move selected slides"], ["Ctrl+Page Up / Page Down", "Move selected slides five places"],
+                ["Ctrl+Home / End", "Move selected slides to first or last"], ["Ctrl+Enter", "Add a slide"], ["Ctrl+Shift+Enter", "Add a slide from the template"],
                 ["Ctrl+D", "Duplicate"], ["Delete", "Delete"] ] },
             { title: "Editing", keys: [
                 ["Ctrl+B", "Bold"], ["Ctrl+I", "Italic"], ["Ctrl+U", "Underline"], ["Ctrl+H", "Headline"], ["Ctrl+K", "Code block"],
+                ["Ctrl+Up / Down", "Previous or next slide"], ["Ctrl+Page Up / Page Down", "Jump five slides"],
                 ["Ctrl+/", "Comment, hidden on slide"],
-                ["Ctrl+Z", "Undo"], ["Ctrl+Shift+Z", "Redo"], ["Ctrl+V", "Paste text, or add and name media"] ] }
+                ["Home / End", "Start or end of the line"], ["Ctrl+Z", "Undo"], ["Ctrl+Shift+Z", "Redo"], ["Ctrl+V", "Paste text, or add and name media"] ] }
         ]
         contentItem: ColumnLayout {
             spacing: 22; focus: true
@@ -1321,7 +1635,13 @@ ApplicationWindow {
             }
             Connections {
                 target: deck
-                function onSelectedChanged() { if (win.overview && win.dragIndex < 0) Qt.callLater(overviewGrid.revealSelection) }
+                // Follow the selection to another slide, not every edit that leaves it in place.
+                property int revealed: -1
+                function onSelectionChanged() {
+                    if (revealed === deck.selected) return
+                    revealed = deck.selected
+                    if (win.overview && win.dragIndex < 0) Qt.callLater(overviewGrid.revealSelection)
+                }
             }
             delegate: Item {
                 id: tile; required property int index
@@ -1409,6 +1729,7 @@ ApplicationWindow {
                 anchors.fill: parent; anchors.margins: win.inset; spacing: 10
                 ListView {
                     id: thumbnails; objectName: "thumbnails"; Layout.fillWidth: true; Layout.fillHeight: true; clip: true
+                    onActiveFocusChanged: if (activeFocus) win.focusedEditor = ""
                     model: deck; spacing: 10; currentIndex: deck.selected
                     cacheBuffer: height * 2
                     highlightFollowsCurrentItem: false
@@ -1484,8 +1805,11 @@ ApplicationWindow {
                         property bool selected: index >= deck.selectionFirst && index <= deck.selectionLast
                         opacity: win.dragIndex >= 0 && selected ? 0.4 : 1
                         SlideFrame {
+                            objectName: "sidebarSlideFrame" + thumbnail.index
                             width: parent.width; height: parent.height
                             slide: thumbnail.index; selected: thumbnail.selected; hovered: thumbnailHover.hovered
+                            // Keep selection visible but quiet while keyboard focus is in the editor.
+                            selectionActive: thumbnails.activeFocus || stage.activeFocus
                         }
                     }
                     Rectangle {
@@ -1569,22 +1893,24 @@ ApplicationWindow {
                 property real slideWidth: Math.min(width-margin*2,(height-margin*2)*16/9)
                 Item {
                     id: slideFrame; objectName: "slideFrame"; width: stage.slideWidth; height: width*9/16; anchors.centerIn: parent
-                    Image {
-                        id: slidePreview; objectName: "slidePreview"; anchors.fill: parent
-                        source: "image://slides/" + (deck.revision, deck.renderId(deck.selected)) + (animation.active ? "/background" : "")
-                        asynchronous: true; retainWhileLoading: true; cache: true; sourceSize: Qt.size(1920, 1080)
-                        property int shownSlide: -1
-                        onStatusChanged: if (status === Image.Ready) shownSlide = deck.selected
-                    }
-                    // Moving to a slide whose full render is not ready yet shows its sidebar
-                    // thumbnail at once, soft but correct, until the sharp one arrives. Edits to
-                    // the current slide keep the previous sharp frame instead, so typing never blurs.
+                    // Keep the fast thumbnail behind the full render. Even if it remains visible
+                    // briefly after loading, it cannot cover the sharp image once that is ready.
                     Image {
                         objectName: "slideQuickPreview"; anchors.fill: parent
                         visible: slidePreview.status === Image.Loading && slidePreview.shownSlide !== deck.selected && status === Image.Ready
                         // The same URL and size as the sidebar thumbnail, so it comes from Qt's pixmap cache.
                         source: "image://slides/" + (deck.revision, deck.renderId(deck.selected))
                         asynchronous: true; cache: true; sourceSize: Qt.size(340, 192)
+                    }
+                    Image {
+                        id: slidePreview; objectName: "slidePreview"; anchors.fill: parent
+                        source: "image://slides/" + (deck.revision, deck.renderId(deck.selected)) + (animation.active ? "/background" : "")
+                        asynchronous: true; retainWhileLoading: true; cache: true; sourceSize: Qt.size(1920, 1080)
+                        property int shownSlide: -1
+                        // On a new slide, let its thumbnail show while this render loads. Edits to
+                        // the same slide retain the previous sharp frame until the new one is ready.
+                        visible: status === Image.Ready || shownSlide === deck.selected
+                        onStatusChanged: if (status === Image.Ready) shownSlide = deck.selected
                     }
                     Loader {
                         id: animation; objectName: "animationLoader"
@@ -1603,8 +1929,12 @@ ApplicationWindow {
                             paused: !autoplay
                             onAutoplayChanged: paused = !autoplay
                             fillMode: deck.media.span ? Image.PreserveAspectCrop : Image.PreserveAspectFit
+                            // Placed images hug their corner or edge, matching the rendered slide.
+                            readonly property int alignment: deck.media.alignment || Qt.AlignCenter
+                            horizontalAlignment: alignment & Qt.AlignHorizontal_Mask
+                            verticalAlignment: alignment & Qt.AlignVertical_Mask
                             clip: true
-                            layer.enabled: !!deck.media.title && deck.media.layout !== "split" && deck.media.layout !== "caption" && deck.media.layout !== "caption-right"
+                            layer.enabled: !!deck.media.title && !deck.media.position && deck.media.layout !== "split" && deck.media.layout !== "caption" && deck.media.layout !== "caption-right"
                             layer.effect: MultiEffect {
                                 blurEnabled: true
                                 blurMax: 4
@@ -1627,6 +1957,11 @@ ApplicationWindow {
                     }
                     Image { anchors.fill: parent; source: visible ? "image://slides/" + (deck.revision, deck.renderId(deck.selected)) + "/overlay" : ""; asynchronous: true; retainWhileLoading: true; sourceSize: Qt.size(1920,1080); visible: animation.active || (video.visible && (deck.media.span || deck.media.layout === "title" || deck.media.layout === "split" || deck.media.layout === "caption" || deck.media.layout === "caption-right")) }
                     Button { visible: deck.media.video && !win.presenting; anchors.centerIn: parent; text: player.playbackState === MediaPlayer.PlayingState ? "Pause" : "▶ Play"; onClicked: win.toggleVideo() }
+                    MouseArea {
+                        anchors.fill: parent
+                        enabled: win.presenting
+                        onClicked: deck.select(deck.selected + 1)
+                    }
                 }
                 DropArea { anchors.fill: parent; onDropped: function(drop) { if (drop.hasUrls) for (let i = 0; i < drop.urls.length; ++i) { if (!deck.importMedia(drop.urls[i], i > 0)) break } } }
             }
@@ -1635,62 +1970,79 @@ ApplicationWindow {
                 visible: !win.presenting; spacing: 0
                 SplitView.preferredHeight: 250; SplitView.minimumHeight: 140
                 SplitView.maximumHeight: workspace.height * 0.65
-            EditorToolbar { id: slideBar; Layout.fillWidth: true }
-            ScrollView {
-                id: slideScroll; objectName: "slideScroll"
-                Layout.fillWidth: true; Layout.fillHeight: true; clip: true
-                WheelHandler {
-                        acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
-                    target: null
-                    onWheel: function(event) { win.scrollEditor(slideScroll.contentItem, event) }
-                }
-                TextArea {
-                    id: slideEditor; objectName: "slideEditor"; persistentSelection: true; textFormat: TextEdit.PlainText; color: win.ui.foreground; selectionColor: win.ui.selection; selectedTextColor: win.ui.selectionText; font.family: "JetBrains Mono"; font.pixelSize: 16
-                    wrapMode: TextEdit.Wrap; leftPadding: 24; topPadding: 16; placeholderText: "# Your headline"
-                    onTextChanged: {
-                        if (!win.syncingEditor && activeFocus) {
-                            const previousCount = deck.count
-                            win.editingSlide = true
-                            deck.editSlide(text)
-                            win.editingSlide = false
-                            if (deck.count !== previousCount) win.syncEditors()
+                EditorToolbar { id: slideBar; Layout.fillWidth: true }
+                Rectangle {
+                    objectName: "slideEditorFrame"
+                    Layout.fillWidth: true; Layout.fillHeight: true
+                    color: win.ui.background; radius: win.softRadius
+                    readonly property color focusStroke: win.focusedEditor === "slide" && !win.popupOpen ? win.ui.inactiveSelection : win.ui.border
+                    border.color: focusStroke; border.width: 1
+                    ScrollView {
+                        id: slideScroll; objectName: "slideScroll"
+                        anchors.fill: parent; anchors.margins: 1; clip: true
+                        WheelHandler {
+                            acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+                            target: null
+                            onWheel: function(event) { win.scrollEditor(slideScroll.contentItem, event) }
+                        }
+                        TextArea {
+                            id: slideEditor; objectName: "slideEditor"; persistentSelection: true; textFormat: TextEdit.PlainText; color: win.ui.foreground; selectionColor: win.ui.selection; selectedTextColor: win.ui.selectionText; font.family: "JetBrains Mono"; font.pixelSize: 16
+                            onActiveFocusChanged: if (activeFocus) win.focusedEditor = "slide"
+                            wrapMode: TextEdit.Wrap; leftPadding: 24; topPadding: 16; placeholderText: "# Your headline"
+                            onTextChanged: {
+                                if (!win.syncingEditor && activeFocus) {
+                                    const previousCount = deck.count
+                                    win.editingSlide = true
+                                    deck.editSlide(text)
+                                    win.editingSlide = false
+                                    if (deck.count !== previousCount) win.syncEditors()
+                                }
+                            }
+                            onCursorPositionChanged: { if (!win.syncingEditor && activeFocus) win.sourceOnlyCursor = -1 }
+                            Keys.onPressed: function(event) { win.editorKey(slideEditor, slideScroll.contentItem, event) }
                         }
                     }
-                    Keys.onPressed: function(event) { win.editorKey(slideEditor, slideScroll.contentItem, event) }
                 }
-            }
             }
         }
         ColumnLayout {
             visible: win.markdown && !win.overview && !win.presenting; spacing: 0
             Layout.fillWidth: true; Layout.fillHeight: true
             Layout.margins: win.inset; Layout.leftMargin: 0
-        EditorToolbar { id: sourceBar; scope: "source."; textInset: sourceEditor.leftPadding; Layout.fillWidth: true }
-        ScrollView {
-            id: sourceScroll; objectName: "sourceScroll"
-            Layout.fillWidth: true; Layout.fillHeight: true; clip: true
-            background: Rectangle { color: win.ui.background }
-            Flickable {
-                id: sourceFlick; objectName: "sourceFlick"
-                clip: true; boundsBehavior: Flickable.StopAtBounds
-                WheelHandler {
-                        acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
-                    target: null
-                    onWheel: function(event) { win.scrollEditor(sourceFlick, event) }
+            EditorToolbar { id: sourceBar; scope: "source."; textInset: sourceEditor.leftPadding; Layout.fillWidth: true }
+            Rectangle {
+                objectName: "sourceEditorFrame"
+                Layout.fillWidth: true; Layout.fillHeight: true
+                color: win.ui.background; radius: win.softRadius
+                readonly property color focusStroke: win.focusedEditor === "source" && !win.popupOpen ? win.ui.inactiveSelection : win.ui.border
+                border.color: focusStroke; border.width: 1
+                ScrollView {
+                    id: sourceScroll; objectName: "sourceScroll"
+                    anchors.fill: parent; anchors.margins: 1; clip: true
+                    background: Rectangle { color: win.ui.background }
+                    Flickable {
+                        id: sourceFlick; objectName: "sourceFlick"
+                        clip: true; boundsBehavior: Flickable.StopAtBounds
+                        WheelHandler {
+                            acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+                            target: null
+                            onWheel: function(event) { win.scrollEditor(sourceFlick, event) }
+                        }
+                        TextArea.flickable: TextArea {
+                            id: sourceEditor; objectName: "sourceEditor"
+                            onActiveFocusChanged: if (activeFocus) win.focusedEditor = "source"
+                            persistentSelection: true
+                            textFormat: TextEdit.PlainText
+                            color: win.ui.foreground; selectionColor: win.ui.selection; selectedTextColor: win.ui.selectionText
+                            font.family: "JetBrains Mono"; font.pixelSize: 18
+                            wrapMode: TextEdit.NoWrap; leftPadding: 32; topPadding: 30; bottomPadding: 30
+                            onTextChanged: { if (!win.syncingEditor && activeFocus && text !== deck.source) deck.editSource(text) }
+                            onCursorPositionChanged: { if (!win.syncingEditor && activeFocus) deck.selectAt(cursorPosition) }
+                            Keys.onPressed: function(event) { win.editorKey(sourceEditor, sourceFlick, event) }
+                        }
+                    }
                 }
-                TextArea.flickable: TextArea {
-                id: sourceEditor; objectName: "sourceEditor"
-                persistentSelection: true
-                textFormat: TextEdit.PlainText
-                color: win.ui.foreground; selectionColor: win.ui.selection; selectedTextColor: win.ui.selectionText
-                font.family: "JetBrains Mono"; font.pixelSize: 18
-                wrapMode: TextEdit.NoWrap; leftPadding: 32; topPadding: 30; bottomPadding: 30
-                onTextChanged: { if (!win.syncingEditor && activeFocus && text !== deck.source) deck.editSource(text) }
-                onCursorPositionChanged: { if (!win.syncingEditor && activeFocus) deck.selectAt(cursorPosition) }
-                Keys.onPressed: function(event) { win.editorKey(sourceEditor, sourceFlick, event) }
             }
-            }
-        }
         }
     }
     MediaPlayer { id: player; objectName: "player"; videoOutput: video; audioOutput: AudioOutput { muted: deck.media.muted } loops: deck.media.loop ? MediaPlayer.Infinite : 1; onErrorOccurred: function(error,message) { deck.setStatus(message) } }

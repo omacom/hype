@@ -1,23 +1,24 @@
 #include "deck.h"
-#include "blocks.h"
-#include "fonts.h"
-#include "budget.h"
 #include "animationexport.h"
+#include "blocks.h"
+#include "budget.h"
 #include "filedialog.h"
+#include "fonts.h"
 #include "images.h"
 #include "pptx.h"
 #include "renderer.h"
 #include "templates.h"
-#include <QGuiApplication>
 #include <QCache>
 #include <QClipboard>
 #include <QCryptographicHash>
 #include <QDataStream>
 #include <QDateTime>
 #include <QDir>
+#include <QDirIterator>
 #include <QFileInfo>
 #include <QFontDatabase>
 #include <QFutureWatcher>
+#include <QGuiApplication>
 #include <QImageReader>
 #include <QImageWriter>
 #include <QJsonArray>
@@ -30,20 +31,20 @@
 #include <QProcess>
 #include <QRegularExpression>
 #include <QSaveFile>
-#include <QSet>
 #include <QScopeGuard>
+#include <QSet>
 #include <QSettings>
 #include <QStandardPaths>
 #include <QTemporaryDir>
 #include <QThreadPool>
 #include <QtConcurrentRun>
 #include <atomic>
-#include <malloc.h>
 #include <cerrno>
 #include <climits>
 #include <csignal>
 #include <cstdio>
 #include <cstring>
+#include <malloc.h>
 #include <memory>
 
 ParsedDeck parseDeck(const QString &source) {
@@ -142,7 +143,7 @@ QString setScalar(QString header, const QString &key, const QString &value) {
 Deck::Deck(QObject *parent, const QString &exportProgram) : QAbstractListModel(parent),
     m_exportProgram(exportProgram.isEmpty() ? QCoreApplication::applicationFilePath() : exportProgram) {
     discoverThemes();
-    m_source = "---\ntitle: Untitled\ntheme: tokyo-night\n---\n\n# Your next idea\n";
+    m_source = "---\ntheme: tokyo-night\n---\n\n# Your next idea\n";
     m_parsed = parseDeck(m_source);
     m_saved = m_source;
     // Writers may truncate, or remove and recreate, the file; read it once they settle.
@@ -150,6 +151,19 @@ Deck::Deck(QObject *parent, const QString &exportProgram) : QAbstractListModel(p
     m_reloadTimer.setInterval(50);
     connect(&m_watcher, &QFileSystemWatcher::fileChanged, &m_reloadTimer, qOverload<>(&QTimer::start));
     connect(&m_watcher, &QFileSystemWatcher::directoryChanged, &m_reloadTimer, qOverload<>(&QTimer::start));
+    // Thumbnails cache by slide source, so a picture replaced on disk needs its own refresh.
+    m_mediaTimer.setSingleShot(true);
+    m_mediaTimer.setInterval(100);
+    connect(&m_mediaWatcher, &QFileSystemWatcher::fileChanged, &m_mediaTimer, qOverload<>(&QTimer::start));
+    connect(&m_mediaWatcher, &QFileSystemWatcher::directoryChanged, &m_mediaTimer, qOverload<>(&QTimer::start));
+    connect(&m_mediaTimer, &QTimer::timeout, this, [this] {
+        watchMedia();
+        m_renderIds.clear();
+        m_mediaCache.clear();
+        m_sizeClock.invalidate();
+        ++m_revision;
+        notifyChanged();
+    });
     connect(&m_reloadTimer, &QTimer::timeout, this, [this] {
         QFile file(m_path);
         if (m_path.isEmpty())
@@ -163,7 +177,7 @@ Deck::Deck(QObject *parent, const QString &exportProgram) : QAbstractListModel(p
         if (m_paletteStamp != templateStamp(true)) {
             // The template changed: every slide that uses it repaints.
             ++m_revision;
-            emit changed();
+            notifyChanged();
         }
         if (disk != m_saved) {
             if (!dirty()) {
@@ -213,9 +227,13 @@ static int followSlide(const QVector<Slide> &before, const QVector<Slide> &after
 // undo restores the old text.
 void Deck::reloadExternal(const QString &disk) {
     const int selected = followSlide(m_parsed.slides, parseDeck(disk).slides, m_selected);
+    const bool unchanged = disk == m_source;
     m_saved = disk;
     m_externalChange = false;
     apply(disk, selected);
+    // Matching text leaves the source alone, but the saved state changed.
+    if (unchanged)
+        notifyChanged();
     setStatus("Reloaded external changes.");
 }
 int Deck::rowCount(const QModelIndex &parent) const { return parent.isValid() ? 0 : count(); }
@@ -235,6 +253,7 @@ static QString withoutSlidePadding(QString text) {
     return text.trimmed().isEmpty() ? QString() : text;
 }
 QString Deck::slideText() const { return withoutSlidePadding(slideSource()); }
+QString Deck::speakerNotes() const { return ::speakerNotes(slideSource()); }
 QString Deck::slide(int i) const {
     return i >= 0 && i < count() ? m_parsed.slides[i].source : QString();
 }
@@ -259,7 +278,7 @@ void Deck::apply(const QString &source, int selected, bool history, int anchor,
     if (source == m_source && !structure) {
         m_anchor = qBound(0, anchor < 0 ? selected : anchor, count() - 1);
         m_selected = qBound(0, selected, count() - 1);
-        emit changed();
+        emit selectionChanged();
         return;
     }
     if (history) {
@@ -310,7 +329,7 @@ void Deck::apply(const QString &source, int selected, bool history, int anchor,
     else
         for (int i : modified)
             emit dataChanged(index(i), index(i));
-    emit changed();
+    notifyChanged();
     if (!m_parsed.error.isEmpty())
         setStatus(m_parsed.error);
 }
@@ -319,14 +338,14 @@ void Deck::select(int index) {
     if (m_selected == index && m_anchor == index)
         return;
     m_selected = m_anchor = index;
-    emit changed();
+    emit selectionChanged();
 }
 void Deck::extendSelection(int index) {
     index = qBound(0, index, count() - 1);
     if (m_selected == index)
         return;
     m_selected = index;
-    emit changed();
+    emit selectionChanged();
 }
 void Deck::moveSelection(int direction) {
     if (direction < 0 && selectionFirst() > 0)
@@ -356,8 +375,11 @@ void Deck::selectAt(int position) {
             select(i);
             return;
         }
+    // Front matter precedes every slide; keep the selection at the document's start.
+    select(0);
 }
 int Deck::sourcePosition() const { return m_parsed.slides.value(m_selected).start; }
+int Deck::sourceEndPosition() const { return m_parsed.slides.value(m_selected).end; }
 void Deck::editSource(const QString &s) { apply(s, m_selected); }
 void Deck::editSlide(const QString &s) {
     const auto range = m_parsed.slides.value(m_selected);
@@ -479,8 +501,10 @@ void Deck::redo() {
 }
 // The desktop's colors as Omarchy keeps them; `theme: current` follows them as they change.
 static QString desktopThemeColors() {
-    const QString state = qEnvironmentVariable("XDG_STATE_HOME", QDir::homePath() + "/.local/state");
-    for (const QString &folder : {state + "/omarchy/current/theme", QDir::homePath() + "/.config/omarchy/current/theme"})
+    const QString state =
+        qEnvironmentVariable("XDG_STATE_HOME", QDir::homePath() + "/.local/state");
+    for (const QString &folder :
+         {state + "/omarchy/current/theme", QDir::homePath() + "/.config/omarchy/current/theme"})
         if (QFileInfo::exists(folder + "/colors.toml"))
             return folder + "/colors.toml";
     return {};
@@ -555,7 +579,7 @@ void Deck::loadGoogleFonts() {
     });
     watcher->setFuture(QtConcurrent::run([] { fonts::catalog(true); }));
 }
-QString Deck::fontName() const { return scalar(m_parsed.header, "font", "JetBrains Mono"); }
+QString Deck::fontName() const { return palette()["font"].toString(); }
 void Deck::chooseFont(const QString &family) {
     // An installed family, or one from Google Fonts, which downloads once it is named.
     bool google = false;
@@ -573,11 +597,13 @@ QVariantList Deck::themeChoices() const {
     if (names.removeAll("current"))
         names.prepend("current");
     const QString chosen = scalar(m_parsed.header, "theme");
-    static const QRegularExpression entry("^([a-z_]+)\\s*=\\s*[\"'](#[0-9a-fA-F]{6})[\"']", QRegularExpression::MultilineOption);
+    static const QRegularExpression entry("^([a-z_]+)\\s*=\\s*[\"'](#[0-9a-fA-F]{6})[\"']",
+                                          QRegularExpression::MultilineOption);
     QVariantList list;
     for (const QString &name : names) {
         QFile file(m_themes.value(name));
-        QVariantMap colors{{"background", "#1a1b26"}, {"foreground", "#c0caf5"}, {"accent", "#7aa2f7"}};
+        QVariantMap colors{
+            {"background", "#1a1b26"}, {"foreground", "#c0caf5"}, {"accent", "#7aa2f7"}};
         if (file.open(QIODevice::ReadOnly))
             for (auto it = entry.globalMatch(QString::fromUtf8(file.readAll())); it.hasNext();) {
                 const auto m = it.next();
@@ -611,7 +637,8 @@ QString Deck::templateStamp(bool force) const {
         const QFileInfo info(path);
         // A link that comes to point elsewhere, as the desktop's theme does, changes the stamp too.
         stamp += '|' + path + ':' +
-                 (info.exists() ? info.canonicalFilePath() + ':' + QString::number(info.lastModified().toMSecsSinceEpoch()) +
+                 (info.exists() ? info.canonicalFilePath() + ':' +
+                                      QString::number(info.lastModified().toMSecsSinceEpoch()) +
                                       ':' + QString::number(info.size())
                                 : QString("-"));
     }
@@ -624,7 +651,8 @@ QStringList Deck::requestedFonts() const {
     const QString key = m_path + '|' + QString::number(m_revision) + '|' + m_templateHeader + '|' +
                         QString::number(qHash(m_templateText));
     if (key != m_requestedKey) {
-        m_requested = fonts::requested({m_parsed.header, m_templateHeader}, {m_source, m_templateText});
+        m_requested =
+            fonts::requested({m_parsed.header, m_templateHeader}, {m_source, m_templateText});
         m_requestedKey = key;
     }
     return m_requested;
@@ -674,8 +702,9 @@ void Deck::fetchFontsLater() {
         palette();
         ++m_revision;
         emit fontsChanged();
-        emit changed();
-        setStatus(errors.isEmpty() ? "Added " + wanted.join(", ") + " from Google Fonts" : errors.join("; "));
+        notifyChanged();
+        setStatus(errors.isEmpty() ? "Added " + wanted.join(", ") + " from Google Fonts"
+                                   : errors.join("; "));
         fetchFontsLater(); // Anything named while this was downloading.
     });
     watcher->setFuture(QtConcurrent::run([wanted] {
@@ -732,7 +761,8 @@ QVariantMap Deck::palette() const {
             themeColors[m.captured(1)] = m.captured(2);
         }
     }
-    static const QRegularExpression colorKey("^color_([a-z0-9_]+):", QRegularExpression::MultilineOption);
+    static const QRegularExpression colorKey("^color_([a-z0-9_]+):",
+                                             QRegularExpression::MultilineOption);
     auto colorsOf = [&](const QString &header) {
         for (auto keys = colorKey.globalMatch(header); keys.hasNext();) {
             const QString key = keys.next().captured(1);
@@ -753,14 +783,15 @@ QVariantMap Deck::palette() const {
     colors["font"] = scalar(m_parsed.header, "font", fallbackFont);
     // font_heading, and font_<name> aliases that components can name: font="display".
     // And the weights of type roles: heading_weight, title_weight, number_weight, eyebrow_weight.
-    static const QRegularExpression fontKey("^(font_[a-z0-9_]+|[a-z]+_weight):", QRegularExpression::MultilineOption);
+    static const QRegularExpression fontKey("^(font_[a-z0-9_]+|[a-z]+_weight):",
+                                            QRegularExpression::MultilineOption);
     for (const QString &header : {pack.header, m_parsed.header})
         for (auto keys = fontKey.globalMatch(header); keys.hasNext();) {
             const QString key = keys.next().captured(1);
             colors[key] = scalar(header, key);
         }
-    for (const QString &key : {"radius", "frame", "margin", "chart_colors",
-                               "gradient_angle", "fit", "fit_max"}) {
+    for (const QString &key :
+         {"radius", "frame", "margin", "chart_colors", "gradient_angle", "fit", "fit_max"}) {
         const QString value = scalar(m_parsed.header, key, scalar(pack.header, key));
         if (!value.isEmpty())
             colors[key] = value;
@@ -825,17 +856,21 @@ void Deck::chooseTheme(const QString &name) {
 // the slide's picture or video.
 static QString withAddedMedia(const QString &source, const QString &name) {
     if (!hasComponents(source))
-        return withMedia(source, "![](<" + name + ">)");
-    const bool video = QStringList{"mp4", "m4v", "mov", "webm", "mkv"}.contains(QFileInfo(name).suffix().toLower());
+        return withReplacedMedia(source, name);
+    const bool video = QStringList{"mp4", "m4v", "mov", "webm", "mkv"}.contains(
+        QFileInfo(name).suffix().toLower());
     QString escaped = name;
     escaped.replace('"', "\\\"");
-    return source.trimmed() + "\n\n<" + (video ? "Video" : "Image") + " src=\"" + escaped + "\"/>\n";
+    return source.trimmed() + "\n\n<" + (video ? "Video" : "Image") + " src=\"" + escaped +
+           "\"/>\n";
 }
+QStringList Deck::mediaPositions() const { return ::mediaPositions(); }
 QVariantMap Deck::media() const {
     const QString source = slideSource(), base = baseDir();
     // A template can move a component video, so its stamp is part of the key.
     const QString stamp = m_parsed.header + templateStamp();
-    if (!m_mediaCache.isEmpty() && m_mediaSource == source && m_mediaBase == base && m_mediaStamp == stamp)
+    if (!m_mediaCache.isEmpty() && m_mediaSource == source && m_mediaBase == base &&
+        m_mediaStamp == stamp)
         return m_mediaCache;
     m_mediaSource = source;
     m_mediaBase = base;
@@ -869,7 +904,10 @@ QVariantMap Deck::media() const {
                     {"rect", mediaRect(m)},
                     {"background", m.background},
                     {"layout", m.layout},
-                    {"overlay", m.overlay}};
+                    {"overlay", m.overlay},
+                    {"position", m.position},
+                    {"size", m.size},
+                    {"alignment", int(m.alignment)}};
     return m_mediaCache;
 }
 void Deck::watch() {
@@ -895,21 +933,57 @@ void Deck::watch() {
             files << m_themes.value("current");
     }
     for (const QString &file : QStringList(files))
-        if (const QString canonical = QFileInfo(file).canonicalFilePath(); !canonical.isEmpty() && canonical != file)
+        if (const QString canonical = QFileInfo(file).canonicalFilePath();
+            !canonical.isEmpty() && canonical != file)
             files << canonical;
     QStringList paths;
     for (const QString &candidate : files) {
         if (candidate.startsWith(":/"))
             continue; // Built into Hype; it never changes.
         // Up to, not including, the presentation's folder (watched already), home, or the root.
-        for (QString path = candidate; path != QDir::rootPath() && path != QDir::homePath() && path != base &&
-                                       !base.startsWith(path + "/");
+        for (QString path = candidate; path != QDir::rootPath() && path != QDir::homePath() &&
+                                       path != base && !base.startsWith(path + "/");
              path = QFileInfo(path).absolutePath())
             if (QFileInfo::exists(path) && !paths.contains(path))
                 paths << path;
     }
     if (!paths.isEmpty())
         m_watcher.addPaths(paths);
+    watchMedia();
+}
+// Watch the media folders, for files added or replaced, and each file in them, for writes in place.
+void Deck::watchMedia() {
+    const QStringList watched = m_mediaWatcher.files() + m_mediaWatcher.directories();
+    QStringList paths;
+    if (!m_path.isEmpty())
+        for (const char *folder : {"images", "videos"}) {
+            const QDir dir(QDir(baseDir()).filePath(folder));
+            if (!dir.exists())
+                continue;
+            paths.append(dir.absolutePath());
+            for (const QString &name : dir.entryList(QDir::Files))
+                paths.append(dir.absoluteFilePath(name));
+        }
+    QStringList stale, added;
+    for (const QString &path : watched)
+        if (!paths.contains(path))
+            stale.append(path);
+    for (const QString &path : paths)
+        if (!watched.contains(path))
+            added.append(path);
+    if (!stale.isEmpty())
+        m_mediaWatcher.removePaths(stale);
+    if (!added.isEmpty())
+        m_mediaWatcher.addPaths(added);
+}
+// Every document change also refreshes the selected slide, after the document's own listeners.
+void Deck::notifyChanged() {
+    emit changed();
+    emit selectionChanged();
+    if (const QString font = fontName(); font != m_notifiedFont) {
+        m_notifiedFont = font;
+        emit fontChanged();
+    }
 }
 QString Deck::dialogDirectory() const {
     QSettings settings(QSettings::IniFormat, QSettings::UserScope, "hype", "hype");
@@ -942,6 +1016,7 @@ bool Deck::reopenLastPresentation() {
     m_saved.clear();
     apply(QString(), 0, false);
     m_externalChange = true;
+    notifyChanged();
     setStatus("The last presentation is missing. Use Save As to recover it to a new file.");
     return false;
 }
@@ -959,7 +1034,7 @@ bool Deck::loadPath(const QString &path, bool remember) {
     m_redo.clear();
     m_externalChange = false;
     watch();
-    emit changed();
+    notifyChanged();
     setStatus("Opened " + title());
     if (remember)
         rememberPresentation(m_path);
@@ -1034,7 +1109,7 @@ bool Deck::savePath(const QString &path) {
     m_saved = m_source;
     m_externalChange = false;
     watch();
-    emit changed();
+    notifyChanged();
     setStatus("Saved");
     rememberPresentation(m_path);
     if (!m_recoveryDirectory.isEmpty())
@@ -1091,13 +1166,24 @@ bool Deck::saveCopyPath(const QString &path) {
     QList<QPair<QString, QString>> copies;
     // Check every collision before publishing anything; compare streams so a
     // large video never requires two whole-file buffers in the editor.
+    const QString stagingPrefix = QDir(staging.path()).absolutePath() + '/';
     for (const QString &kind : {QString("images"), QString("videos")}) {
         const QDir source(baseDir() + '/' + kind);
-        for (const auto &name : source.entryList(QDir::Files)) {
+        // Copy the whole tree, hidden files included, since references may
+        // point anywhere inside it. Poster caches are regenerated on demand.
+        for (QDirIterator it(source.absolutePath(), QDir::Files | QDir::Hidden,
+                             QDirIterator::Subdirectories);
+             it.hasNext();) {
+            const QString file = it.next();
+            if (file.startsWith(stagingPrefix))
+                continue;
+            const QString name = source.relativeFilePath(file);
+            if (kind == "images" && name.startsWith(".hype-poster-") && !name.contains('/'))
+                continue;
             const QString relative = kind + '/' + name;
             const QString target = destination.filePath(relative);
             if (QFile::exists(target)) {
-                QFile a(source.filePath(name)), b(target);
+                QFile a(file), b(target);
                 QCryptographicHash ah(QCryptographicHash::Sha256), bh(QCryptographicHash::Sha256);
                 if (!a.open(QIODevice::ReadOnly) || !b.open(QIODevice::ReadOnly) ||
                     !ah.addData(&a) || !bh.addData(&b)) {
@@ -1105,14 +1191,14 @@ bool Deck::saveCopyPath(const QString &path) {
                     return false;
                 }
                 if (ah.result() != bh.result()) {
-                    setStatus("Save As media collision: " + name);
+                    setStatus("Save As media collision: " + relative);
                     return false;
                 }
             } else {
-                QDir().mkpath(staging.filePath(kind));
                 const QString staged = staging.filePath(relative);
-                if (!QFile::copy(source.filePath(name), staged)) {
-                    setStatus("Could not copy " + name);
+                QDir().mkpath(QFileInfo(staged).absolutePath());
+                if (!QFile::copy(file, staged)) {
+                    setStatus("Could not copy " + relative);
                     return false;
                 }
                 copies.append({staged, target});
@@ -1123,13 +1209,18 @@ bool Deck::saveCopyPath(const QString &path) {
     auto rollback = [&] {
         for (const auto &file : published)
             QFile::remove(file);
-        for (const auto &directory : directories)
-            QDir().rmdir(directory);
+        for (auto directory = directories.crbegin(); directory != directories.crend(); ++directory)
+            QDir().rmdir(*directory);
     };
     for (const auto &copy : copies) {
-        const QString directory = QFileInfo(copy.second).absolutePath();
-        if (!QDir(directory).exists()) {
-            if (!QDir().mkpath(directory)) {
+        // Record every missing ancestor parent-first so rollback can remove
+        // them child-first.
+        QStringList missing;
+        for (QString directory = QFileInfo(copy.second).absolutePath();
+             !QFileInfo::exists(directory); directory = QFileInfo(directory).absolutePath())
+            missing.prepend(directory);
+        for (const auto &directory : missing) {
+            if (!QDir().mkdir(directory)) {
                 rollback();
                 setStatus("Could not create media directory");
                 return false;
@@ -1143,6 +1234,20 @@ bool Deck::saveCopyPath(const QString &path) {
         }
         published << copy.second;
     }
+    // Media outside images/ and videos/ is not copied, so refuse a copy that
+    // would lose a reference the original resolves.
+    for (int i = 0; i < count(); ++i) {
+        const QStringList before = slideProblems(slide(i), baseDir());
+        for (const QString &problem : slideProblems(slide(i), destination.absolutePath())) {
+            if (!before.contains(problem)) {
+                rollback();
+                setStatus(QString("Save As could not copy media for slide %1: %2")
+                              .arg(i + 1)
+                              .arg(problem));
+                return false;
+            }
+        }
+    }
     if (savePath(path))
         return true;
     rollback();
@@ -1155,10 +1260,11 @@ void Deck::newDeck() {
     m_path.clear();
     m_saved.clear();
     m_externalChange = false;
-    apply("---\ntitle: Untitled\ntheme: tokyo-night\n---\n\n# Your next idea\n", 0);
+    apply("---\ntheme: tokyo-night\n---\n\n# Your next idea\n", 0);
     m_undo.clear();
     m_redo.clear();
     watch();
+    notifyChanged();
     if (!m_recoveryDirectory.isEmpty()) {
         m_checkpointSource.clear();
         checkpoint();
@@ -1295,7 +1401,7 @@ bool Deck::pasteMedia() {
         emit pasteRequested(suggested, extension, video);
         return true;
     }
-    const auto media = parseMedia(withMedia(slideSource(), "![](<paste.png>)"), baseDir());
+    const auto media = parseMedia(withReplacedMedia(slideSource(), "paste.png"), baseDir());
     const auto generation = ++m_pasteGeneration;
     m_compressingImage = true;
     emit compressingImageChanged();
@@ -1324,6 +1430,7 @@ bool Deck::pasteMedia() {
     });
     // Clipboard access stays on the UI thread; decoding, scaling and both lossless
     // encoders work on an independent snapshot without touching the document.
+    // Keep enough detail if the image is enlarged or switched back to Fit later.
     watcher->setFuture(QtConcurrent::run([pending = m_paste, image, span = media.span]() mutable -> Result {
         const QSize canvas(3840, 2160);
         QSize original;
@@ -1404,7 +1511,8 @@ QString Deck::savePastedMedia(const QString &value) {
     setStatus("Added " + name);
     return {};
 }
-// Everything the thumbnail provider needs to draw a slide, including when its pictures last changed.
+// Everything the thumbnail provider needs to draw a slide, including when its pictures last
+// changed.
 static QString encodeRender(const QString &source, const QString &base, const QVariantMap &colors) {
     QByteArray bytes;
     QDataStream stream(&bytes, QIODevice::WriteOnly);
@@ -1417,7 +1525,8 @@ static QString encodeRender(const QString &source, const QString &base, const QV
         QFileInfo file(path);
         stream << file.lastModified().toMSecsSinceEpoch() << file.size();
     }
-    return QString::fromLatin1(bytes.toBase64(QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals));
+    return QString::fromLatin1(
+        bytes.toBase64(QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals));
 }
 QString Deck::renderId(int index) const {
     auto &cached = m_renderIds[index];
@@ -1438,25 +1547,37 @@ QVariantList Deck::templates() const {
     QVariantList list;
     const QString current = templateName();
     for (const auto &entry : templates::available(baseDir()))
-        list << QVariantMap{{"name", entry.name},         {"title", entry.title},   {"where", entry.where},
-                            {"linked", entry.linked},     {"path", entry.path},     {"slides", entry.slides},
-                            {"components", entry.components}, {"current", entry.name == current},
+        list << QVariantMap{{"name", entry.name},
+                            {"title", entry.title},
+                            {"where", entry.where},
+                            {"linked", entry.linked},
+                            {"path", entry.path},
+                            {"slides", entry.slides},
+                            {"components", entry.components},
+                            {"current", entry.name == current},
                             {"preview", templatePreview(entry.path, entry.title)}};
     return list;
 }
 // How a presentation built on the template looks: its first slide, or a plain one when it has none.
 QString Deck::templatePreview(const QString &path, const QString &title) const {
     const QFileInfo info(path);
-    const QString stamp = info.canonicalFilePath() + ':' + QString::number(info.lastModified().toMSecsSinceEpoch()) +
-                          ':' + QString::number(info.size());
+    const QString stamp = info.canonicalFilePath() + ':' +
+                          QString::number(info.lastModified().toMSecsSinceEpoch()) + ':' +
+                          QString::number(info.size());
     if (const auto cached = m_templatePreviews.constFind(path);
         cached != m_templatePreviews.cend() && cached->first == stamp)
         return cached->second;
     const auto starters = templates::starterSlides(path);
     Deck sample(nullptr, m_exportProgram);
-    sample.m_path = info.absolutePath() + "/.hype-preview.md"; // Pictures resolve from the template's folder.
-    sample.editSource("---\ntemplate: " + QString::fromUtf8(QJsonDocument(QJsonArray{path}).toJson(QJsonDocument::Compact)).mid(1).chopped(1) +
-                      "\n---\n\n" + (starters.isEmpty() ? "# " + title + "\n\nYour next idea\n" : starters.first().source));
+    sample.m_path =
+        info.absolutePath() + "/.hype-preview.md"; // Pictures resolve from the template's folder.
+    sample.editSource(
+        "---\ntemplate: " +
+        QString::fromUtf8(QJsonDocument(QJsonArray{path}).toJson(QJsonDocument::Compact))
+            .mid(1)
+            .chopped(1) +
+        "\n---\n\n" +
+        (starters.isEmpty() ? "# " + title + "\n\nYour next idea\n" : starters.first().source));
     const QString id = encodeRender(sample.slide(0), sample.baseDir(), sample.slidePalette(0));
     m_templatePreviews[path] = {stamp, id};
     return id;
@@ -1481,9 +1602,12 @@ QVariantList Deck::templateSlides() const {
         QByteArray bytes;
         QDataStream stream(&bytes, QIODevice::WriteOnly);
         stream << starters[i].source << baseDir() << colors;
-        list << QVariantMap{{"index", i}, {"label", starters[i].label}, {"section", starters[i].section},
-                            {"preview", QString::fromLatin1(bytes.toBase64(QByteArray::Base64UrlEncoding |
-                                                                           QByteArray::OmitTrailingEquals))}};
+        list << QVariantMap{
+            {"index", i},
+            {"label", starters[i].label},
+            {"section", starters[i].section},
+            {"preview", QString::fromLatin1(bytes.toBase64(QByteArray::Base64UrlEncoding |
+                                                           QByteArray::OmitTrailingEquals))}};
     }
     return list;
 }
@@ -1514,7 +1638,8 @@ QString Deck::saveAsTemplate(const QString &name, bool copy, bool replace) {
     if (dirty() && !savePath(m_path))
         return m_status;
     QString saved;
-    if (const QString error = templates::save(m_path, name, copy, replace, &saved); !error.isEmpty())
+    if (const QString error = templates::save(m_path, name, copy, replace, &saved);
+        !error.isEmpty())
         return error;
     setStatus("Saved as the template " + QFileInfo(saved).fileName());
     return {};
@@ -1532,7 +1657,8 @@ void Deck::setMediaBackground(const QString &mode) {
     // A background only shows around fitted media, so choosing one stops the media spanning.
     const bool fittedBackground = mode == "blur" || mode == "white" || mode == "black" ||
                                   (media.video && mode == "auto");
-    QStringList remove{"background"}, add{"background=" + mode};
+    // Backgrounds belong to full layouts, so choosing one unplaces the image.
+    QStringList remove{"background", "position", "size"}, add{"background=" + mode};
     if (fittedBackground) {
         remove << "span" << "fit";
         add.prepend("fit");
@@ -1542,13 +1668,32 @@ void Deck::setMediaBackground(const QString &mode) {
 void Deck::setMediaMode(const QString &mode) {
     if (parseMedia(slideSource(), baseDir()).layout == "components")
         return;
-    if (mode == "title" || mode == "overlay" || mode == "split" || mode == "caption" || mode == "caption-right") {
+    if (mode == "title" || mode == "overlay" || mode == "split" || mode == "caption" ||
+        mode == "caption-right") {
         editSlide(withMediaDirectives(slideSource(), {"layout"}, {"layout=" + mode}));
         return;
     }
     if (!QStringList{"fit", "span"}.contains(mode))
         return;
-    editSlide(withMediaDirectives(slideSource(), {"fit", "span"}, {mode}));
+    editSlide(withMediaDirectives(slideSource(), {"fit", "span", "position", "size"}, {mode}));
+}
+void Deck::setMediaPosition(const QString &position) {
+    if (!mediaPositions().contains(position))
+        return;
+    const auto media = parseMedia(slideSource(), baseDir());
+    if (media.file.isEmpty() || media.video)
+        return;
+    // Placing replaces the full layout; a new placement starts at the default size.
+    const QString size = QString("size=%1%").arg(media.placed() ? media.size : defaultPlacedSize);
+    editSlide(withMediaDirectives(slideSource(),
+                                  {"fit", "span", "background", "overlay", "position", "size"},
+                                  {"position=" + position, size}));
+}
+void Deck::setMediaSize(double percent) {
+    const auto media = parseMedia(slideSource(), baseDir());
+    if (!media.placed() || percent < 1 || percent > 100)
+        return;
+    editSlide(withMediaDirectives(slideSource(), {"size"}, {QString("size=%1%").arg(percent)}));
 }
 void Deck::exportDialog(const QString &format) {
     if (m_exporting)
@@ -1606,7 +1751,8 @@ bool Deck::loadExportSnapshot(const QString &path) {
     rememberTemplate(snapshot["template_text"].toString());
     m_paletteStamp = templateStamp(true);
     fonts::loadDirectory(baseDir() + "/fonts");
-    for (const QString &directory : m_paletteCache.value("template_dirs").toString().split('\n', Qt::SkipEmptyParts))
+    for (const QString &directory :
+         m_paletteCache.value("template_dirs").toString().split('\n', Qt::SkipEmptyParts))
         fonts::loadDirectory(directory + "/fonts");
     QStringList families;
     for (const QJsonValue &family : snapshot["fonts"].toArray())
@@ -1631,13 +1777,14 @@ void Deck::startExport(const QString &format, const QString &path) {
     const QString destination = QFileInfo(path).absoluteFilePath();
     auto staged = std::make_shared<QTemporaryDir>(QFileInfo(destination).absolutePath() + "/.hype-export-XXXXXX");
     QFile snapshot(temporary->filePath("presentation.json"));
-    const QByteArray data = QJsonDocument(QJsonObject{
-        {"source", m_source},
-        {"path", m_path.isEmpty() ? baseDir() + "/Untitled.md" : m_path},
-        {"palette", QJsonObject::fromVariantMap(palette())},
-        {"template", m_templatePath},
-        {"template_text", m_templateText},
-        {"fonts", QJsonArray::fromStringList(requestedFonts())}}).toJson();
+    const QByteArray data =
+        QJsonDocument(QJsonObject{{"source", m_source},
+                                  {"path", m_path.isEmpty() ? baseDir() + "/Untitled.md" : m_path},
+                                  {"palette", QJsonObject::fromVariantMap(palette())},
+                                  {"template", m_templatePath},
+                                  {"template_text", m_templateText},
+                                  {"fonts", QJsonArray::fromStringList(requestedFonts())}})
+            .toJson();
     if (!temporary->isValid() || !staged->isValid() || !snapshot.open(QIODevice::WriteOnly) || snapshot.write(data) != data.size()) {
         m_exportFailed = true;
         m_exportStatus = "Could not prepare the export.";
@@ -1808,28 +1955,34 @@ bool Deck::renderImages(const QString &directory, int width, bool powerPoint) {
     struct Still { QString name, warning; bool saved = false; };
     QList<QFuture<Still>> rendered;
     for (int i = 0; i < count(); ++i)
-        rendered << QtConcurrent::run(&stills, [&stopped, source = slide(i), base = baseDir(), colors = slidePalette(i),
-                                                width, directory, powerPoint, i]() -> Still {
-            if (stopped)
-                return {};
-            QImage image(width, width * 9 / 16, QImage::Format_ARGB32_Premultiplied);
-            image.fill(Qt::transparent);
-            QPainter p(&image);
-            Still still;
-            paintSlide(&p, image.rect(), source, base, colors, &still.warning);
-            p.end();
-            // PowerPoint slides go in as high-quality JPEG, as PDF pictures do: at 4K the loss
-            // is invisible, and the file is a fraction of the size. A slide with transparency
-            // stays PNG, and so does every image a plain render hands back.
-            const bool jpeg = powerPoint && opaque(image);
-            still.name = QString("slide-%1.%2").arg(i + 1, 3, 10, QChar('0')).arg(jpeg ? "jpg" : "png");
-            const QString path = directory + "/" + still.name;
-            if (jpeg)
-                still.saved = image.convertToFormat(QImage::Format_RGB32).save(path, "JPEG", 92);
-            else
-                still.saved = opaque(image) ? image.convertToFormat(QImage::Format_RGB32).save(path) : image.save(path);
-            return still;
-        });
+        rendered << QtConcurrent::run(
+            &stills,
+            [&stopped, source = slide(i), base = baseDir(), colors = slidePalette(i), width,
+             directory, powerPoint, i]() -> Still {
+                if (stopped)
+                    return {};
+                QImage image(width, width * 9 / 16, QImage::Format_ARGB32_Premultiplied);
+                image.fill(Qt::transparent);
+                QPainter p(&image);
+                Still still;
+                paintSlide(&p, image.rect(), source, base, colors, &still.warning);
+                p.end();
+                // PowerPoint slides go in as high-quality JPEG, as PDF pictures do: at 4K the loss
+                // is invisible, and the file is a fraction of the size. A slide with transparency
+                // stays PNG, and so does every image a plain render hands back.
+                const bool jpeg = powerPoint && opaque(image);
+                still.name =
+                    QString("slide-%1.%2").arg(i + 1, 3, 10, QChar('0')).arg(jpeg ? "jpg" : "png");
+                const QString path = directory + "/" + still.name;
+                if (jpeg)
+                    still.saved =
+                        image.convertToFormat(QImage::Format_RGB32).save(path, "JPEG", 92);
+                else
+                    still.saved = opaque(image)
+                                      ? image.convertToFormat(QImage::Format_RGB32).save(path)
+                                      : image.save(path);
+                return still;
+            });
     if (!overlap) {
         const double portion = 0.8;
         while (!stills.waitForDone(100)) {
@@ -1891,9 +2044,10 @@ bool Deck::renderImages(const QString &directory, int width, bool powerPoint) {
                 int repeats = 1;
                 QString error;
                 progress(0, "Converting animation");
-                if (!exportAnimation(slide(i), baseDir(), slidePalette(i), directory + "/" + movie, width,
-                                     &repeats, &error,
-                                     [&](double fraction) { progress(fraction, "Converting animation"); })) {
+                if (!exportAnimation(slide(i), baseDir(), slidePalette(i), directory + "/" + movie,
+                                     width, &repeats, &error, [&](double fraction) {
+                                         progress(fraction, "Converting animation");
+                                     })) {
                     setStatus(QString("Slide %1: %2").arg(i + 1).arg(error));
                     return false;
                 }

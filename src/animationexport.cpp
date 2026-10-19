@@ -149,13 +149,11 @@ bool exportAnimation(const QString &source, const QString &base, const QVariantM
             p.setRenderHint(QPainter::SmoothPixmapTransform);
             p.save();
             p.scale(width / 1920.0, size.height() / 1080.0);
-            QSizeF scaled = frame.size();
-            scaled.scale(rect.size(),
-                         media.span ? Qt::KeepAspectRatioByExpanding : Qt::KeepAspectRatio);
+            const QRectF dest = mediaImageRect(media, frame.size());
             p.setClipRect(rect);
-            p.drawImage(
-                QRectF(rect.center() - QPointF(scaled.width() / 2, scaled.height() / 2), scaled),
-                media.text.trimmed().isEmpty() ? frame : softenedImage(frame, scaled));
+            p.drawImage(dest, media.placed() || media.text.trimmed().isEmpty()
+                                  ? frame
+                                  : softenedImage(frame, dest.size()));
             p.restore();
             p.drawImage(0, 0, overlay);
         }

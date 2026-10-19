@@ -18,6 +18,7 @@
 #include <QProcess>
 #include <QRegularExpression>
 #include <QSet>
+#include <QSvgRenderer>
 #include <QTemporaryFile>
 #include <QTextBlock>
 #include <QTextCursor>
@@ -25,6 +26,7 @@
 #include <QTextTable>
 #include <QTimer>
 #include <QWaitCondition>
+#include <QXmlStreamReader>
 #include <algorithm>
 #include <limits>
 
@@ -108,7 +110,8 @@ static WordCloud readWordCloud(const QString &markdown) {
     static const QRegularExpression heading("^(#{2,6})[ \\t]+\\S");
     for (const auto &line : withoutComments(markdown).split('\n')) {
         const QString trimmed = line.trimmed();
-        if (trimmed.isEmpty()) continue;
+        if (trimmed.isEmpty())
+            continue;
         const auto match = heading.match(trimmed);
         QTextDocument doc;
         doc.setMarkdown(trimmed, QTextDocument::MarkdownDialectGitHub);
@@ -122,15 +125,57 @@ static WordCloud readWordCloud(const QString &markdown) {
             }
             result.labels.append(label);
         } else if (trimmed.startsWith("> ")) {
-            if (!result.footer.isEmpty()) result.footer += ' ';
+            if (!result.footer.isEmpty())
+                result.footer += ' ';
             result.footer += doc.toPlainText().trimmed();
         } else {
             result.error = "Word cloud needs ## to ###### labels, followed by an optional > footer";
             return result;
         }
     }
-    if (result.labels.isEmpty()) result.error = "Word cloud needs at least one ## to ###### label";
+    if (result.labels.isEmpty())
+        result.error = "Word cloud needs at least one ## to ###### label";
     return result;
+}
+QString speakerNotes(const QString &source) {
+    const QString visible = outsideCode(source);
+    auto matches = QRegularExpression("<!--[\\s\\S]*?-->").globalMatch(visible);
+    QStringList notes;
+    static const QRegularExpression directive("^hype:", QRegularExpression::CaseInsensitiveOption);
+    while (matches.hasNext()) {
+        const auto match = matches.next();
+        QString note = source.mid(match.capturedStart() + 4, match.capturedLength() - 7).trimmed();
+        if (!note.isEmpty() && !directive.match(note).hasMatch())
+            notes.append(note);
+    }
+    return notes.join("\n\n");
+}
+static bool isVideoFile(const QString &file) {
+    return QStringList{"mp4", "m4v", "mov", "webm", "mkv"}.contains(
+        QFileInfo(file).suffix().toLower());
+}
+// The one list of placed-image positions and where each pins its image.
+static const QList<std::pair<QString, Qt::Alignment>> &placements() {
+    static const QList<std::pair<QString, Qt::Alignment>> list{
+        {"top-left", Qt::AlignLeft | Qt::AlignTop},
+        {"top", Qt::AlignHCenter | Qt::AlignTop},
+        {"top-right", Qt::AlignRight | Qt::AlignTop},
+        {"left", Qt::AlignLeft | Qt::AlignVCenter},
+        {"center", Qt::AlignCenter},
+        {"right", Qt::AlignRight | Qt::AlignVCenter},
+        {"bottom-left", Qt::AlignLeft | Qt::AlignBottom},
+        {"bottom", Qt::AlignHCenter | Qt::AlignBottom},
+        {"bottom-right", Qt::AlignRight | Qt::AlignBottom}};
+    return list;
+}
+const QStringList &mediaPositions() {
+    static const QStringList names = [] {
+        QStringList result;
+        for (const auto &placement : placements())
+            result << placement.first;
+        return result;
+    }();
+    return names;
 }
 static QString assetPath(const QString &base, QString file, bool video) {
     if (QFileInfo(file).isAbsolute())
@@ -154,6 +199,15 @@ QString withMedia(const QString &source, const QString &reference) {
     else
         updated += "\n" + reference + "\n";
     return updated;
+}
+QString withReplacedMedia(const QString &source, const QString &file) {
+    // A new logo keeps the old one's corner and size; other layouts start fresh.
+    const auto current = parseMedia(source, {});
+    const QString flags =
+        current.placed() && !isVideoFile(file)
+            ? QString("position=%1 size=%2%").arg(current.position, QString::number(current.size))
+            : QString();
+    return withMedia(source, "![" + flags + "](<" + file + ">)");
 }
 QString withMediaDirectives(const QString &source, const QStringList &remove,
                             const QStringList &add) {
@@ -206,7 +260,8 @@ static Media readMedia(const QString &source, const QString &base) {
             result.loop = flag("loop", false);
             result.muted = flag("muted", false);
             result.autoplay = flag("autoplay", true);
-            if (!video.value("poster").isEmpty()) result.poster = assetPath(base, video.value("poster"), false);
+            if (!video.value("poster").isEmpty())
+                result.poster = assetPath(base, video.value("poster"), false);
         }
         return result;
     }
@@ -215,23 +270,29 @@ static Media readMedia(const QString &source, const QString &base) {
         result.layout = "gallery";
         for (const auto &line : result.text.split('\n')) {
             const QString trimmed = line.trimmed();
-            if (trimmed.isEmpty()) continue;
+            if (trimmed.isEmpty())
+                continue;
             const auto image = mediaRe.match(trimmed);
             if (trimmed.startsWith("# ") && result.heading.isEmpty() && result.gallery.isEmpty()) {
                 result.heading = trimmed;
-            } else if (trimmed.startsWith("## ") && !result.heading.isEmpty() && result.footer.isEmpty() &&
+            } else if (trimmed.startsWith("## ") && !result.heading.isEmpty() &&
+                       result.footer.isEmpty() &&
                        (result.gallery.isEmpty() || !result.gallery.last().file.isEmpty())) {
                 result.gallery.append({trimmed.mid(3).trimmed(), {}, {}});
-            } else if (image.hasMatch() && image.capturedStart() == 0 && image.capturedLength() == trimmed.size() &&
-                       !result.gallery.isEmpty() && result.gallery.last().file.isEmpty() && result.footer.isEmpty()) {
+            } else if (image.hasMatch() && image.capturedStart() == 0 &&
+                       image.capturedLength() == trimmed.size() && !result.gallery.isEmpty() &&
+                       result.gallery.last().file.isEmpty() && result.footer.isEmpty()) {
                 auto &item = result.gallery.last();
                 item.file = image.captured(2).isEmpty() ? image.captured(3) : image.captured(2);
                 item.path = assetPath(base, item.file, false);
-            } else if (trimmed.startsWith("> ") && !result.gallery.isEmpty() && !result.gallery.last().file.isEmpty()) {
-                if (!result.footer.isEmpty()) result.footer += '\n';
+            } else if (trimmed.startsWith("> ") && !result.gallery.isEmpty() &&
+                       !result.gallery.last().file.isEmpty()) {
+                if (!result.footer.isEmpty())
+                    result.footer += '\n';
                 result.footer += trimmed.mid(2);
             } else {
-                result.error = "Gallery needs a # title, pairs of ## labels and images, then an optional > footer";
+                result.error = "Gallery needs a # title, pairs of ## labels and images, then an "
+                               "optional > footer";
                 break;
             }
         }
@@ -251,15 +312,16 @@ static Media readMedia(const QString &source, const QString &base) {
             result.text.remove(heading.capturedStart(), heading.capturedLength());
         }
         result.error = readWordCloud(result.text).error;
-        if (!heading.hasMatch()) result.error = "Word cloud needs a # title";
-        if (m.hasMatch()) result.error = "Word cloud is a text-only layout";
+        if (!heading.hasMatch())
+            result.error = "Word cloud needs a # title";
+        if (m.hasMatch())
+            result.error = "Word cloud is a text-only layout";
         return result;
     }
     if (!m.hasMatch())
         return result;
     result.file = m.captured(2).isEmpty() ? m.captured(3) : m.captured(2);
-    result.video = QStringList{"mp4", "m4v", "mov", "webm", "mkv"}.contains(
-        QFileInfo(result.file).suffix().toLower());
+    result.video = isVideoFile(result.file);
     result.path = assetPath(base, result.file, result.video);
     result.text.remove(m.capturedStart(), m.capturedLength());
     result.span = !result.video &&
@@ -300,10 +362,28 @@ static Media readMedia(const QString &source, const QString &base) {
             else if (key == "overlay")
                 explicitOverlay = value;
             else if (key == "layout") {
-                if (value != "title" && value != "overlay" && value != "split" && value != "caption" && value != "caption-right")
-                    result.error = "Layout must be title, overlay, split, caption, or caption-right";
+                if (value != "title" && value != "overlay" && value != "split" &&
+                    value != "caption" && value != "caption-right")
+                    result.error =
+                        "Layout must be title, overlay, split, caption, or caption-right";
                 else
                     result.layout = value;
+            } else if (key == "position") {
+                // Errors name the directive, never the author's value, which may hold markup.
+                result.position = value;
+                if (!mediaPositions().contains(value))
+                    result.error = "Unknown position";
+            } else if (key == "size") {
+                // Plain decimals only: toDouble() would also accept "nan" and "1e1".
+                static const QRegularExpression percentage(R"(^(\d{1,3}(?:\.\d+)?)%$)");
+                const auto number = percentage.match(value);
+                result.size = number.hasMatch() ? number.captured(1).toDouble() : 0;
+                if (result.size < 1 || result.size > 100) {
+                    result.error = "Size must be a percentage from 1% to 100%";
+                    result.size = 0;
+                }
+                if (result.position.isEmpty())
+                    result.position = "center";
             } else if (key == "background") {
                 result.background = value;
                 if (value != "auto" && value != "theme" && value != "blur" && !QColor(value).isValid())
@@ -318,10 +398,27 @@ static Media readMedia(const QString &source, const QString &base) {
     }
     if (fit && span)
         result.error = "Choose either span or fit";
+    if (result.placed()) {
+        if (result.video)
+            result.error = "Only images can be placed";
+        else if (fit || span || !result.background.isEmpty() || !explicitOverlay.isEmpty() ||
+                 !result.layout.isEmpty())
+            result.error = "A placed image cannot use fit, span, background, overlay, or layout";
+        if (result.size == 0)
+            result.size = defaultPlacedSize;
+        for (const auto &[position, alignment] : placements())
+            if (position == result.position)
+                result.alignment = alignment;
+        // A placed image leaves the slide's own layout and colors alone.
+        result.span = false;
+        result.overlay = 0;
+        return result;
+    }
     // A background choice implies fitting unless span was explicitly requested.
     if (!span && (result.background == "blur" || result.background == "auto"))
         result.span = false;
-    if (result.layout == "title" || result.layout == "caption" || result.layout == "caption-right") {
+    if (result.layout == "title" || result.layout == "caption" ||
+        result.layout == "caption-right") {
         const auto heading = QRegularExpression("^# [^\\n]+", QRegularExpression::MultilineOption)
                                  .match(outsideCode(result.text));
         if (heading.hasMatch()) {
@@ -332,11 +429,16 @@ static Media readMedia(const QString &source, const QString &base) {
         if (!span)
             result.span = false;
     }
-    if ((result.layout == "split" || result.layout == "caption" || result.layout == "caption-right") && !span)
+    if ((result.layout == "split" || result.layout == "caption" ||
+         result.layout == "caption-right") &&
+        !span)
         result.span = false;
-    result.overlay = result.layout != "split" && result.layout != "caption" && result.layout != "caption-right" &&
+    result.overlay = result.layout != "split" && result.layout != "caption" &&
+                             result.layout != "caption-right" &&
                              (!result.video || result.span || result.layout == "title") &&
-                             !result.text.trimmed().isEmpty() ? 0.25 : 0;
+                             !result.text.trimmed().isEmpty()
+                         ? 0.25
+                         : 0;
     if (!explicitOverlay.isEmpty()) {
         bool ok;
         double opacity = explicitOverlay.toDouble(&ok);
@@ -347,13 +449,113 @@ static Media readMedia(const QString &source, const QString &base) {
     }
     return result;
 }
+// The first fence in this language: taken out of the text, its lines returned in body.
+static bool takeFence(QString &text, const QString &language, QString *body) {
+    static const QRegularExpression marker("^ {0,3}(`{3,}|~{3,})(.*)$");
+    int position = 0, fenceLength = 0, start = -1, content = 0;
+    QChar fence;
+    while (position < text.size()) {
+        int end = text.indexOf('\n', position);
+        if (end < 0)
+            end = text.size();
+        const auto match = marker.match(text.mid(position, end - position));
+        if (match.hasMatch()) {
+            const QString run = match.captured(1);
+            if (!fenceLength) {
+                fence = run[0];
+                fenceLength = run.size();
+                if (match.captured(2).trimmed().section(' ', 0, 0).compare(
+                        language, Qt::CaseInsensitive) == 0) {
+                    start = position;
+                    content = qMin(int(text.size()), end + 1);
+                }
+            } else if (run[0] == fence && run.size() >= fenceLength &&
+                       match.captured(2).trimmed().isEmpty()) {
+                fenceLength = 0;
+                if (start >= 0) {
+                    *body = text.mid(content, position - content);
+                    text.remove(start, qMin(int(text.size()), end + 1) - start);
+                    return true;
+                }
+            }
+        }
+        position = end + 1;
+    }
+    return false;
+}
+// The deck's colors by name, as var(--accent), and its colors and font as the SVG's defaults,
+// so a drawing follows the theme unless it says otherwise.
+static QByteArray themedSvg(const QString &svg, const QVariantMap &palette) {
+    static const QRegularExpression variable(R"(var\(\s*--([a-z_-]+)\s*\))"),
+        root("<svg\\b([^>]*)>");
+    QString themed;
+    int last = 0;
+    for (auto it = variable.globalMatch(svg); it.hasNext();) {
+        const auto m = it.next();
+        const QString value = palette.value(m.captured(1).replace('-', '_')).toString();
+        themed +=
+            svg.mid(last, m.capturedStart() - last) + (value.isEmpty() ? m.captured(0) : value);
+        last = m.capturedEnd();
+    }
+    themed += svg.mid(last);
+    if (const auto m = root.match(themed); m.hasMatch()) {
+        const QString attributes = m.captured(1), ink = palette.value("foreground").toString();
+        QString defaults;
+        if (!attributes.contains(QRegularExpression("(^|\\s)xmlns\\s*=")))
+            defaults += " xmlns=\"http://www.w3.org/2000/svg\"";
+        if (!attributes.contains(QRegularExpression("(^|\\s)color\\s*=")))
+            defaults += " color=\"" + ink + "\"";
+        if (!attributes.contains(QRegularExpression("(^|\\s)fill\\s*=")))
+            defaults += " fill=\"" + ink + "\"";
+        if (!attributes.contains(QRegularExpression("(^|\\s)font-family\\s*=")))
+            defaults += " font-family=\"" +
+                        palette.value("font", "JetBrains Mono").toString().toHtmlEscaped() + "\"";
+        themed.insert(m.capturedStart(1), defaults);
+    }
+    return themed.toUtf8();
+}
+// Why an ```svg fence can't be drawn, or empty when it can. Lines count within the fence.
+static QString svgProblem(const QString &svg) {
+    QXmlStreamReader xml(svg);
+    bool first = true;
+    while (!xml.atEnd()) {
+        if (xml.readNext() == QXmlStreamReader::StartElement && first) {
+            first = false;
+            if (xml.name() != QLatin1String("svg"))
+                return "An svg block holds one <svg> element";
+        }
+    }
+    if (xml.hasError())
+        return QString("SVG line %1: %2").arg(xml.lineNumber()).arg(xml.errorString());
+    static const QRegularExpression variable(R"(var\(\s*--([a-z_-]+)\s*\))");
+    static const QStringList colors{
+        "background", "foreground", "accent", "green",           "red",
+        "yellow",     "magenta",    "cyan",   "dark_foreground", "font"};
+    for (auto it = variable.globalMatch(svg); it.hasNext();) {
+        const QString name = it.next().captured(1);
+        if (!colors.contains(QString(name).replace('-', '_')))
+            return "Unknown theme color --" + name + "; use --" +
+                   colors.mid(0, 9).join(", --").replace('_', '-');
+    }
+    QSvgRenderer renderer(themedSvg(svg, {{"foreground", "#000000"}}));
+    if (!renderer.isValid())
+        return "Qt can't draw this SVG";
+    if (renderer.viewBoxF().isEmpty())
+        return "Give the SVG a viewBox, or a width and height";
+    return {};
+}
 Media parseMedia(const QString &source, const QString &base) {
     // Parsing is pure: file existence and modification checks remain at call sites.
     static thread_local QCache<QString, Media> cache(8 * 1024 * 1024);
     const QString key = base + QChar(0) + source;
     if (const auto result = cache.object(key))
         return *result;
-    const auto result = readMedia(source, base);
+    auto result = readMedia(source, base);
+    result.svgBlocks = takeFence(result.text, "svg", &result.svg);
+    if (result.svgBlocks) {
+        QString remaining = result.text, extra;
+        result.svgBlocks += takeFence(remaining, "svg", &extra);
+    }
     cache.insert(key, new Media(result), qMax(1, int((key.size() + result.text.size()) * 2)));
     return result;
 }
@@ -422,11 +624,16 @@ QStringList slideProblems(const QString &source, const QString &base, const QVar
     if (!media.error.isEmpty())
         errors << media.error;
     for (const auto &item : media.gallery) {
-        if (item.file.isEmpty()) continue;
+        if (item.file.isEmpty())
+            continue;
         if (!QFileInfo::exists(item.path))
             errors << "Missing media: " + item.file;
         else if (!QImageReader(item.path).canRead())
             errors << "Cannot decode gallery image: " + item.file;
+    }
+    if (media.svgBlocks) {
+        if (const QString problem = svgProblem(media.svg); !problem.isEmpty())
+            errors << problem;
     }
     if (!media.file.isEmpty() && !QFileInfo::exists(media.path))
         errors << "Missing media: " + media.file;
@@ -441,7 +648,7 @@ QStringList slideProblems(const QString &source, const QString &base, const QVar
         matches.next();
         ++count;
     }
-    if (count > 1 && media.layout != "gallery")
+    if (count + media.svgBlocks > 1 && (media.layout != "gallery" || media.svgBlocks))
         errors << "Use one media item per slide (combine artwork before importing)";
     return errors;
 }
@@ -555,6 +762,56 @@ QString preserveLineBreaks(QString markdown) {
     }
     return lines.join('\n');
 }
+static const QRegularExpression &tableDelimiter() {
+    // A delimiter row, with or without outer pipes: | --- | :-: | or --- | ---:
+    static const QRegularExpression re("^ {0,3}(?=[^\\n]*\\|)\\|? *:?-+:? *(?:\\| *:?-+:? *)*\\|? *$",
+                                       QRegularExpression::MultilineOption);
+    return re;
+}
+// Markdown trims table cells. Keep the one space each side that reads as
+// separation, and turn any more into non-breaking spaces that pad the cell.
+static QString padTableCells(const QString &markdown) {
+    QStringList lines = markdown.split('\n');
+    const QStringList visible = outsideCode(markdown).split('\n');
+    auto pad = [&](int index) {
+        QString &line = lines[index];
+        const QString &mask = visible[index];
+        QList<int> pipes;
+        for (int i = 0; i < mask.size(); ++i)
+            if (mask[i] == '|' && (i == 0 || mask[i - 1] != '\\'))
+                pipes.append(i);
+        if (pipes.isEmpty())
+            return;
+        if (pipes.first() > 0 && !mask.left(pipes.first()).trimmed().isEmpty())
+            pipes.prepend(-1);
+        if (pipes.last() < mask.size() - 1 && !mask.mid(pipes.last() + 1).trimmed().isEmpty())
+            pipes.append(mask.size());
+        // Work from the end so earlier positions stay valid.
+        for (int c = pipes.size() - 1; c > 0; --c) {
+            int start = pipes[c - 1] + 1, end = pipes[c];
+            if (line.mid(start, end - start).trimmed().isEmpty())
+                continue;
+            int trailing = 0, leading = 0;
+            while (line[end - 1 - trailing] == ' ')
+                ++trailing;
+            while (line[start + leading] == ' ')
+                ++leading;
+            if (trailing > 1)
+                line.replace(end - trailing, trailing - 1, QString(trailing - 1, QChar::Nbsp));
+            if (leading > 1)
+                line.replace(start + 1, leading - 1, QString(leading - 1, QChar::Nbsp));
+        }
+    };
+    for (int i = 1; i < lines.size(); ++i) {
+        if (!tableDelimiter().match(visible[i]).hasMatch() || !visible[i - 1].contains('|'))
+            continue;
+        pad(i - 1);
+        for (int row = i + 1; row < lines.size() && visible[row].contains('|') &&
+                              !visible[row].trimmed().isEmpty(); ++row)
+            pad(row);
+    }
+    return lines.join('\n');
+}
 static void sizeSlideText(QTextDocument &doc, const QVariantMap &palette, qreal fontSize,
                           qreal width, bool centered, bool code, bool equalColumns = false) {
     // A null page size suspends layout while every format below changes; the
@@ -577,7 +834,9 @@ static void sizeSlideText(QTextDocument &doc, const QVariantMap &palette, qreal 
         QTextCursor cursor(block);
         QTextBlockFormat bf = block.blockFormat();
         int level = bf.headingLevel();
-        bf.setAlignment(centered ? Qt::AlignHCenter : Qt::AlignLeft);
+        // Table cells keep the alignment their column's delimiter asked for.
+        if (!cursor.currentTable())
+            bf.setAlignment(centered ? Qt::AlignHCenter : Qt::AlignLeft);
         bf.setTopMargin(level ? fontSize * 0.15 : 0);
         bf.setBottomMargin(fontSize * 0.22);
         bf.setLineHeight(115, QTextBlockFormat::ProportionalHeight);
@@ -621,30 +880,64 @@ static void sizeSlideText(QTextDocument &doc, const QVariantMap &palette, qreal 
         if (auto table = qobject_cast<QTextTable *>(it.currentFrame())) {
             auto fmt = table->format();
             fmt.setBorder(0);
-            fmt.setCellPadding(fontSize * 0.2);
-            fmt.setCellSpacing(fontSize * 0.1);
-            fmt.setWidth(QTextLength(QTextLength::PercentageLength, 100));
-            if (equalColumns)
-                fmt.setColumnWidthConstraints(QList<QTextLength>(
-                    table->columns(), QTextLength(QTextLength::PercentageLength, 100.0 / table->columns())));
+            fmt.setBorderCollapse(true);
+            fmt.setCellPadding(fontSize * 0.25);
+            fmt.setCellSpacing(0);
+            if (equalColumns) {
+                // A caption's table, say names under a row of portraits: one equal column under
+                // each.
+                fmt.setWidth(QTextLength(QTextLength::PercentageLength, 100));
+                fmt.setColumnWidthConstraints(
+                    QList<QTextLength>(table->columns(), QTextLength(QTextLength::PercentageLength,
+                                                                     100.0 / table->columns())));
+            } else
+                // Size to the content rather than the slide, so columns stay close enough to read
+                // across.
+                fmt.setWidth(QTextLength());
+            fmt.setAlignment(centered ? Qt::AlignHCenter : Qt::AlignLeft);
             table->setFormat(fmt);
+            // Qt aligns body cells by the delimiter row but leaves the header at the default.
+            for (int column = 0; table->rows() > 1 && column < table->columns(); ++column) {
+                QTextCursor header = table->cellAt(0, column).firstCursorPosition();
+                auto bf = header.blockFormat();
+                bf.setAlignment(table->cellAt(1, column).firstCursorPosition().blockFormat().alignment());
+                header.setBlockFormat(bf);
+            }
+            // A gap between columns, a firm rule under the header and faint ones between rows.
+            QColor rule(palette["foreground"].toString());
+            rule.setAlphaF(0.2);
+            for (int row = 0; row < table->rows(); ++row)
+                for (int column = 0; column < table->columns(); ++column) {
+                    auto cell = table->cellAt(row, column);
+                    auto cf = cell.format().toTableCellFormat();
+                    if (column)
+                        cf.setLeftPadding(fontSize * 0.8);
+                    if (column + 1 < table->columns())
+                        cf.setRightPadding(fontSize * 0.8);
+                    if (row + 1 < table->rows() && !equalColumns) {
+                        cf.setBottomBorder(row ? fontSize * 0.03 : fontSize * 0.06);
+                        cf.setBottomBorderStyle(QTextFrameFormat::BorderStyle_Solid);
+                        cf.setBottomBorderBrush(row ? rule : QColor(palette["accent"].toString()));
+                    }
+                    cell.setFormat(cf);
+                }
         }
     doc.setTextWidth(width);
 }
 void layoutSlideText(QTextDocument &doc, const QString &markdown, const QVariantMap &palette,
                      qreal fontSize, qreal width, bool centered, bool code, bool equalColumns) {
     doc.setUndoRedoEnabled(false);
-    doc.setMarkdown(preserveLineBreaks(markdown), QTextDocument::MarkdownDialectGitHub);
+    doc.setMarkdown(preserveLineBreaks(padTableCells(markdown)), QTextDocument::MarkdownDialectGitHub);
     sizeSlideText(doc, palette, fontSize, width, centered, code, equalColumns);
 }
 WordCloud layoutWordCloud(const QString &markdown, const QVariantMap &palette, const QRectF &area) {
     WordCloud result = readWordCloud(markdown);
-    if (!result.error.isEmpty()) return result;
+    if (!result.error.isEmpty())
+        return result;
     // Place larger labels first. Stable ordering and geometric candidates make
     // the result repeatable at every render size, without a random seed.
-    std::stable_sort(result.labels.begin(), result.labels.end(), [](const auto &a, const auto &b) {
-        return a.level < b.level;
-    });
+    std::stable_sort(result.labels.begin(), result.labels.end(),
+                     [](const auto &a, const auto &b) { return a.level < b.level; });
     const int sizes[] = {116, 88, 64, 50, 38};
     for (qreal scale = 1; scale >= 0.20; scale *= 0.94) {
         QVector<QRectF> occupied;
@@ -653,38 +946,48 @@ WordCloud layoutWordCloud(const QString &markdown, const QVariantMap &palette, c
             QFont font(palette.value("font", "JetBrains Mono").toString());
             font.setHintingPreference(QFont::PreferNoHinting);
             font.setPixelSize(qMax(8, qRound(sizes[label.level - 2] * scale)));
-            font.setWeight(label.level == 2 ? QFont::Bold : label.level == 3 ? QFont::DemiBold
-                                                       : label.level == 4 ? QFont::Medium : QFont::Normal);
+            font.setWeight(label.level == 2   ? QFont::Bold
+                           : label.level == 3 ? QFont::DemiBold
+                           : label.level == 4 ? QFont::Medium
+                                              : QFont::Normal);
             const QFontMetricsF metrics(font);
-            const qreal w = qMax(metrics.horizontalAdvance(label.text), metrics.boundingRect(label.text).width()) + 10;
+            const qreal w = qMax(metrics.horizontalAdvance(label.text),
+                                 metrics.boundingRect(label.text).width()) +
+                            10;
             const qreal h = metrics.height() + 8;
             const qreal gap = 20 * scale;
             QVector<qreal> xs{area.center().x() - w / 2, area.left(), area.right() - w};
             QVector<qreal> ys{area.center().y() - h / 2, area.top(), area.bottom() - h};
             for (const auto &other : occupied) {
-                xs << other.left() << other.right() - w << other.left() - gap - w << other.right() + gap;
-                ys << other.top() << other.bottom() - h << other.top() - gap - h << other.bottom() + gap;
+                xs << other.left() << other.right() - w << other.left() - gap - w
+                   << other.right() + gap;
+                ys << other.top() << other.bottom() - h << other.top() - gap - h
+                   << other.bottom() + gap;
             }
             qreal bestScore = std::numeric_limits<qreal>::max();
             QRectF best;
-            for (qreal x : xs) for (qreal y : ys) {
-                const QRectF candidate(x, y, w, h);
-                if (!area.contains(candidate)) continue;
-                const qreal dx = (candidate.center().x() - area.center().x()) / area.width();
-                const qreal dy = (candidate.center().y() - area.center().y()) / area.height();
-                const qreal score = dx * dx + dy * dy;
-                if (score >= bestScore) continue;
-                bool collision = false;
-                for (const auto &other : occupied)
-                    if (candidate.adjusted(-gap / 2, -gap / 2, gap / 2, gap / 2).intersects(other)) {
-                        collision = true;
-                        break;
+            for (qreal x : xs)
+                for (qreal y : ys) {
+                    const QRectF candidate(x, y, w, h);
+                    if (!area.contains(candidate))
+                        continue;
+                    const qreal dx = (candidate.center().x() - area.center().x()) / area.width();
+                    const qreal dy = (candidate.center().y() - area.center().y()) / area.height();
+                    const qreal score = dx * dx + dy * dy;
+                    if (score >= bestScore)
+                        continue;
+                    bool collision = false;
+                    for (const auto &other : occupied)
+                        if (candidate.adjusted(-gap / 2, -gap / 2, gap / 2, gap / 2)
+                                .intersects(other)) {
+                            collision = true;
+                            break;
+                        }
+                    if (!collision) {
+                        best = candidate;
+                        bestScore = score;
                     }
-                if (!collision) {
-                    best = candidate;
-                    bestScore = score;
                 }
-            }
             if (best.isEmpty()) {
                 fits = false;
                 break;
@@ -695,9 +998,11 @@ WordCloud layoutWordCloud(const QString &markdown, const QVariantMap &palette, c
         }
         if (fits) {
             QRectF bounds;
-            for (const auto &rect : occupied) bounds = bounds.united(rect);
+            for (const auto &rect : occupied)
+                bounds = bounds.united(rect);
             const QPointF offset = area.center() - bounds.center();
-            for (auto &label : result.labels) label.rect.translate(offset);
+            for (auto &label : result.labels)
+                label.rect.translate(offset);
             return result;
         }
     }
@@ -715,15 +1020,29 @@ static void rememberFit(const QString &key, qreal size) {
     QMutexLocker lock(&fitMutex);
     fittedSizes.insert(key, new qreal(size));
 }
+static QRectF alignedRect(const QSizeF &size, const QRectF &within, Qt::Alignment alignment) {
+    const qreal x = alignment & Qt::AlignLeft    ? within.left()
+                    : alignment & Qt::AlignRight ? within.right() - size.width()
+                                                 : within.center().x() - size.width() / 2;
+    const qreal y = alignment & Qt::AlignTop      ? within.top()
+                    : alignment & Qt::AlignBottom ? within.bottom() - size.height()
+                                                  : within.center().y() - size.height() / 2;
+    return QRectF(QPointF(x, y), size);
+}
 QRectF mediaRect(const Media &media) {
     if (!media.box.isEmpty())
         return media.box;
+    if (media.placed()) {
+        const QSizeF box(1920 * media.size / 100, 1080 * media.size / 100);
+        // The margin shrinks as the box grows, so large images stay on the slide.
+        const qreal margin = qMin(60.0, (1080 - box.height()) / 2);
+        return alignedRect(box, QRectF(0, 0, 1920, 1080).adjusted(margin, margin, -margin, -margin),
+                           media.alignment);
+    }
     if (media.layout == "caption")
-        return media.heading.isEmpty() ? QRectF(130, 100, 1660, 530)
-                                       : QRectF(130, 190, 1660, 440);
+        return media.heading.isEmpty() ? QRectF(130, 100, 1660, 530) : QRectF(130, 190, 1660, 440);
     if (media.layout == "caption-right")
-        return media.heading.isEmpty() ? QRectF(70, 50, 1780, 800)
-                                       : QRectF(70, 180, 1780, 680);
+        return media.heading.isEmpty() ? QRectF(70, 50, 1780, 800) : QRectF(70, 180, 1780, 680);
     if (media.layout == "split")
         return QRectF(1030, 100, 790, 880);
     if (media.layout == "title")
@@ -731,6 +1050,13 @@ QRectF mediaRect(const Media &media) {
     return media.span ? QRectF(0, 0, 1920, 1080)
                       : (!media.video || media.text.trimmed().isEmpty() ? QRectF(70, 50, 1780, 980)
                                                         : QRectF(100, 280, 1720, 730));
+}
+QRectF mediaImageRect(const Media &media, const QSizeF &image) {
+    const QRectF rect = mediaRect(media);
+    QSizeF scaled = image;
+    scaled.scale(rect.size(), media.span ? Qt::KeepAspectRatioByExpanding : Qt::KeepAspectRatio);
+    // Placed images hug their corner or edge; everything else is centered.
+    return alignedRect(scaled, rect, media.alignment);
 }
 void paintSlide(QPainter *p, const QRectF &target, const QString &source, const QString &base,
                 const QVariantMap &inputPalette, QString *warning, bool overlayOnly,
@@ -758,7 +1084,8 @@ void paintSlide(QPainter *p, const QRectF &target, const QString &source, const 
                 QFont diagnostic("sans");
                 diagnostic.setPixelSize(21);
                 p->setFont(diagnostic);
-                p->drawText(QRectF(30, 1005, 1860, 70), Qt::AlignVCenter | Qt::TextWordWrap, problems.join(" · "));
+                p->drawText(QRectF(30, 1005, 1860, 70), Qt::AlignVCenter | Qt::TextWordWrap,
+                            problems.join(" · "));
                 if (warning)
                     *warning = problems.join("; ");
             }
@@ -775,13 +1102,31 @@ void paintSlide(QPainter *p, const QRectF &target, const QString &source, const 
     QString text = media.text.trimmed();
     auto problems = slideProblems(source, base, palette);
     QRectF area(130, 90, 1660, 900);
+    if (!media.svg.isEmpty() && media.file.isEmpty()) {
+        // Like a video, a drawing under a headline leaves the headline a band at the top.
+        const QRectF rect =
+            text.isEmpty() ? QRectF(70, 50, 1780, 980) : QRectF(100, 280, 1720, 730);
+        if (!text.isEmpty())
+            area = QRectF(130, 40, 1660, 205);
+        QSvgRenderer svg(themedSvg(media.svg, palette));
+        if (!overlayOnly && !backgroundOnly && svg.isValid() && !svg.viewBoxF().isEmpty()) {
+            QSizeF size = svg.viewBoxF().size();
+            size.scale(rect.size(), Qt::KeepAspectRatio);
+            svg.setAspectRatioMode(Qt::KeepAspectRatio);
+            svg.render(p, QRectF(rect.center() - QPointF(size.width(), size.height()) / 2, size));
+        }
+    }
     if (!media.file.isEmpty()) {
         QString path =
             media.video ? (media.poster.isEmpty() ? ensurePoster(media.path, base) : media.poster)
                         : media.path;
         const QRectF rect = mediaRect(media);
         const QSize pixels = p->deviceTransform().mapRect(rect).size().toSize();
-        QImage image = loadedImage(path, pixels, media.span);
+        // An SVG with nothing over it is drawn as vectors, sharp at any size and in PDF. Its
+        // small raster only gives its shape and edge colors for the background.
+        const bool vector = !media.video && (text.isEmpty() || media.placed()) &&
+                            QStringList{"svg", "svgz"}.contains(QFileInfo(path).suffix().toLower());
+        QImage image = loadedImage(path, vector ? QSize(480, 270) : pixels, media.span);
         // Video backgrounds use the first frame, even with a custom poster.
         const QImage backdrop = media.video && !media.span && !media.poster.isEmpty() &&
             (media.background == "blur" || media.background == "auto")
@@ -790,8 +1135,8 @@ void paintSlide(QPainter *p, const QRectF &target, const QString &source, const 
             if (!backdrop.isNull())
                 p->drawImage(QRectF(0, 0, 1920, 1080), blurredBackground(backdrop));
         }
-        if ((!media.video || !media.background.isEmpty()) && !media.span && media.background != "theme" &&
-            (!(split || caption) || !media.background.isEmpty()) &&
+        if ((!media.video || !media.background.isEmpty()) && !media.span && !media.placed() &&
+            media.background != "theme" && (!(split || caption) || !media.background.isEmpty()) &&
             (bg.isEmpty() || !media.background.isEmpty())) {
             QColor color(media.background);
             if ((media.background.isEmpty() || media.background == "auto") && !backdrop.isNull()) {
@@ -837,37 +1182,51 @@ void paintSlide(QPainter *p, const QRectF &target, const QString &source, const 
         }
 
         if (!overlayOnly && !backgroundOnly && !image.isNull()) {
-            QSizeF scaled = image.size();
-            scaled.scale(rect.size(),
-                         media.span ? Qt::KeepAspectRatioByExpanding : Qt::KeepAspectRatio);
-            QRectF dest(QPointF(rect.center().x() - scaled.width() / 2,
-                                rect.center().y() - scaled.height() / 2),
-                        scaled);
+            const QRectF dest = mediaImageRect(media, image.size());
             p->save();
             p->setClipRect(rect);
-            p->drawImage(dest, !media.video && !text.isEmpty() && !split && !caption ? softenedImage(image, dest.size()) : image);
+            QSvgRenderer svg;
+            if (vector && svg.load(path)) {
+                svg.setAspectRatioMode(Qt::KeepAspectRatio);
+                svg.render(p, dest);
+            } else
+                p->drawImage(dest, !media.video && !media.placed() && !text.isEmpty() && !split &&
+                                           !caption
+                                       ? softenedImage(image, dest.size())
+                                       : image);
             p->restore();
         } else if (!overlayOnly && !backgroundOnly) {
             p->setPen(QColor(palette["accent"].toString()));
+            const QString message = "Missing media\n" + media.file;
             QFont diagnostic("sans");
-            diagnostic.setPixelSize(32);
+            // Shrink the notice to fit small placed boxes, and never draw past them.
+            for (int size = 32; size >= 8; size -= 2) {
+                diagnostic.setPixelSize(size);
+                if (QRectF(QFontMetricsF(diagnostic).boundingRect(rect, Qt::AlignCenter, message))
+                        .width() <= rect.width())
+                    break;
+            }
+            p->save();
+            p->setClipRect(rect);
             p->setFont(diagnostic);
-            p->drawText(rect, Qt::AlignCenter, "Missing media\n" + media.file);
+            p->drawText(rect, Qt::AlignCenter, message);
+            p->restore();
         }
-        if (split || caption) {
+        // Text beside a placed image keeps the theme's colors and full area.
+        if ((split || caption) && !media.placed()) {
             if (!backgroundOnly)
                 p->fillRect(rect, QColor(0, 0, 0, qRound(media.overlay * 255)));
             area = fullCaption ? QRectF(130, 650, 1660, 260)
-                               : caption ? QRectF(1030, 870, 790, 160) : QRectF(130, 100, 800, 880);
-        } else if (!media.video || media.span || media.layout == "title") {
+                   : caption   ? QRectF(1030, 870, 790, 160)
+                               : QRectF(130, 100, 800, 880);
+        } else if (!media.placed() && (!media.video || media.span || media.layout == "title")) {
             if (!backgroundOnly)
-                p->fillRect(QRectF(0, 0, 1920, 1080),
-                            QColor(0, 0, 0, qRound(media.overlay * 255)));
+                p->fillRect(QRectF(0, 0, 1920, 1080), QColor(0, 0, 0, qRound(media.overlay * 255)));
             if (fg.isEmpty() && !text.isEmpty())
                 palette["foreground"] = "#ffffff";
-        } else if (!text.isEmpty())
+        } else if (!media.placed() && !text.isEmpty())
             area = QRectF(130, 40, 1660, 205);
-        if (media.layout == "title")
+        if (media.layout == "title" && !media.placed())
             area = mediaRect(media).adjusted(60, 40, -60, -40);
     }
     if (backgroundOnly) {
@@ -899,11 +1258,13 @@ void paintSlide(QPainter *p, const QRectF &target, const QString &source, const 
             QTextDocument doc;
             qreal size = maximum;
             layoutSlideText(doc, markdown, palette, size, rect.width(), true, false);
-            while (size > 8 && (doc.size().height() > rect.height() || doc.idealWidth() > rect.width() + 1)) {
+            while (size > 8 &&
+                   (doc.size().height() > rect.height() || doc.idealWidth() > rect.width() + 1)) {
                 size -= 2;
                 sizeSlideText(doc, palette, size, rect.width(), true, false);
             }
-            if (size < 24 && warning) *warning = "Gallery label fits below 24px on a 1080p slide";
+            if (size < 24 && warning)
+                *warning = "Gallery label fits below 24px on a 1080p slide";
             p->save();
             p->translate(rect.x(), rect.y() + qMax(0.0, (rect.height() - doc.size().height()) / 2));
             QAbstractTextDocumentLayout::PaintContext context;
@@ -917,32 +1278,42 @@ void paintSlide(QPainter *p, const QRectF &target, const QString &source, const 
             const int rowCount = qMin(columns, count - row * columns);
             const qreal width = (grid.width() - 50 * (columns - 1)) / columns;
             const qreal height = (grid.height() - 30 * (rows - 1)) / rows;
-            const qreal x = grid.x() + (grid.width() - (rowCount * width + (rowCount - 1) * 50)) / 2 + column * (width + 50);
+            const qreal x = grid.x() +
+                            (grid.width() - (rowCount * width + (rowCount - 1) * 50)) / 2 +
+                            column * (width + 50);
             const qreal y = grid.y() + row * (height + 30);
             drawText(item.label, QRectF(x, y, width, 60), 44);
             const QRectF rect(x, y + 75, width, height - 75);
             if (!overlayOnly) {
-                const QImage picture = loadedImage(item.path, p->deviceTransform().mapRect(rect).size().toSize(), false);
+                const QImage picture = loadedImage(
+                    item.path, p->deviceTransform().mapRect(rect).size().toSize(), false);
                 if (!picture.isNull()) {
                     QSizeF size = picture.size();
                     size.scale(rect.size(), Qt::KeepAspectRatio);
-                    p->drawImage(QRectF(rect.center() - QPointF(size.width() / 2, size.height() / 2), size), picture);
+                    p->drawImage(
+                        QRectF(rect.center() - QPointF(size.width() / 2, size.height() / 2), size),
+                        picture);
                 }
             }
         }
-        if (!media.footer.isEmpty()) drawText(media.footer, QRectF(130, 950, 1660, 85), 36);
+        if (!media.footer.isEmpty())
+            drawText(media.footer, QRectF(130, 950, 1660, 85), 36);
         text.clear();
     }
     if (media.layout == "cloud") {
         const bool footer = !readWordCloud(text).footer.isEmpty();
-        const auto cloud = layoutWordCloud(text, palette, QRectF(120, 210, 1680, footer ? 720 : 790));
+        const auto cloud =
+            layoutWordCloud(text, palette, QRectF(120, 210, 1680, footer ? 720 : 790));
         if (!cloud.error.isEmpty()) {
-            if (!problems.contains(cloud.error)) problems << cloud.error;
+            if (!problems.contains(cloud.error))
+                problems << cloud.error;
         } else {
-            const QStringList colors{"accent", "magenta", "bright_foreground", "green", "foreground"};
+            const QStringList colors{"accent", "magenta", "bright_foreground", "green",
+                                     "foreground"};
             for (const auto &label : cloud.labels) {
                 p->setFont(label.font);
-                p->setPen(QColor(palette.value(colors[label.level - 2], palette["foreground"]).toString()));
+                p->setPen(QColor(
+                    palette.value(colors[label.level - 2], palette["foreground"]).toString()));
                 p->drawText(label.rect, Qt::AlignCenter | Qt::TextSingleLine, label.text);
                 if (label.font.pixelSize() < 24 && warning)
                     *warning = "Word cloud text fits below 24px on a 1080p slide";
@@ -952,7 +1323,8 @@ void paintSlide(QPainter *p, const QRectF &target, const QString &source, const 
                 font.setPixelSize(28);
                 p->setFont(font);
                 p->setPen(QColor(palette["foreground"].toString()));
-                p->drawText(QRectF(130, 962, 1660, 76), Qt::AlignCenter | Qt::TextWordWrap, cloud.footer);
+                p->drawText(QRectF(130, 962, 1660, 76), Qt::AlignCenter | Qt::TextWordWrap,
+                            cloud.footer);
             }
         }
         text.clear();
@@ -963,8 +1335,11 @@ void paintSlide(QPainter *p, const QRectF &target, const QString &source, const 
         bool quote = text.startsWith('>');
         bool list = text.contains(
             QRegularExpression("^\\s*(?:[-*+] |[0-9]+[.)] )", QRegularExpression::MultilineOption));
-        bool table = text.contains(QRegularExpression("\\|[ :|-]+\\|"));
-        bool centered = fullCaption || !(code || quote || list || table || split);
+        bool table = text.contains(tableDelimiter());
+        // A table alone on its slide sits in the middle; beside other text it lines up with it.
+        const bool tableOnly = table && !text.split('\n').filter(QRegularExpression("^(?!.*\\|).*\\S")).size();
+        bool centered =
+            fullCaption || (tableOnly && !split) || !(code || quote || list || table || split);
         const bool equalColumns = fullCaption && table;
         const QString alignment = slideProperty(source, "alignment");
         if (alignment == "left")
@@ -973,7 +1348,7 @@ void paintSlide(QPainter *p, const QRectF &target, const QString &source, const 
             centered = true;
         bool stack = (text.contains('\n') || text.contains('\r')) && !text.startsWith('#') &&
                      !quote && !list && !code;
-        qreal low = 8, high = code ? 56 : quote ? 64 : list ? 72 : table ? 60 : stack ? 128 : 76;
+        qreal low = 8, high = code ? 56 : quote ? 64 : list || table ? 72 : stack ? 128 : 76;
         if (fullCaption)
             high = 44;
         else if (split || caption)
@@ -983,9 +1358,15 @@ void paintSlide(QPainter *p, const QRectF &target, const QString &source, const 
         QTextDocument doc;
         // Layout happens in 1080p slide units, so every render size, the PDF and
         // a theme change all reuse one search. Colors never affect the fit.
-        const QString fit = QString("%1 %2 %3 %4 %5 %6 ").arg(high).arg(area.width()).arg(area.height())
-                                .arg(centered).arg(code).arg(equalColumns) + palette.value("font").toString() +
-                                palette.value("font_epoch").toString() + '\n' + text;
+        const QString fit = QString("%1 %2 %3 %4 %5 %6 ")
+                                .arg(high)
+                                .arg(area.width())
+                                .arg(area.height())
+                                .arg(centered)
+                                .arg(code)
+                                .arg(equalColumns) +
+                            palette.value("font").toString() +
+                            palette.value("font_epoch").toString() + '\n' + text;
         if (const qreal fitted = fittedSize(fit); fitted > 0) {
             low = fitted;
             layoutSlideText(doc, text, palette, low, area.width(), centered, code, equalColumns);
@@ -1034,7 +1415,7 @@ void SlideItem::setDeck(Deck *deck) {
         disconnect(m_deck, nullptr, this, nullptr);
     m_deck = deck;
     if (deck)
-        connect(deck, &Deck::changed, this, [this] { update(); });
+        connect(deck, &Deck::selectionChanged, this, [this] { update(); });
     emit deckChanged();
     update();
 }
@@ -1125,7 +1506,7 @@ Thumbnails::Thumbnails(Deck *deck) {
     auto timer = new QTimer(this);
     timer->setInterval(60);
     timer->setSingleShot(true);
-    connect(deck, &Deck::changed, this, [this, timer] {
+    connect(deck, &Deck::selectionChanged, this, [this, timer] {
         if (m_stopping->load())
             return;
         ++*m_generation;

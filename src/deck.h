@@ -30,12 +30,13 @@ QString setScalar(QString header, const QString &key, const QString &value);
 class Deck : public QAbstractListModel {
     Q_OBJECT
     Q_PROPERTY(QString source READ source NOTIFY changed)
-    Q_PROPERTY(QString slideSource READ slideSource NOTIFY changed)
-    Q_PROPERTY(QString slideText READ slideText NOTIFY changed)
-    Q_PROPERTY(int selected READ selected WRITE select NOTIFY changed)
-    Q_PROPERTY(int selectionFirst READ selectionFirst NOTIFY changed)
-    Q_PROPERTY(int selectionLast READ selectionLast NOTIFY changed)
-    Q_PROPERTY(int selectionCount READ selectionCount NOTIFY changed)
+    Q_PROPERTY(QString slideSource READ slideSource NOTIFY selectionChanged)
+    Q_PROPERTY(QString slideText READ slideText NOTIFY selectionChanged)
+    Q_PROPERTY(int selected READ selected WRITE select NOTIFY selectionChanged)
+    Q_PROPERTY(int selectionFirst READ selectionFirst NOTIFY selectionChanged)
+    Q_PROPERTY(int selectionLast READ selectionLast NOTIFY selectionChanged)
+    Q_PROPERTY(int selectionCount READ selectionCount NOTIFY selectionChanged)
+    Q_PROPERTY(QString speakerNotes READ speakerNotes NOTIFY selectionChanged)
     Q_PROPERTY(int count READ count NOTIFY changed)
     Q_PROPERTY(int revision READ revision NOTIFY changed)
     Q_PROPERTY(bool dirty READ dirty NOTIFY changed)
@@ -49,14 +50,15 @@ class Deck : public QAbstractListModel {
     Q_PROPERTY(QString exportStatus READ exportStatus NOTIFY exportChanged)
     Q_PROPERTY(bool exportFailed READ exportFailed NOTIFY exportChanged)
     Q_PROPERTY(QStringList fontNames READ fontNames NOTIFY fontsChanged)
-    Q_PROPERTY(QString fontName READ fontName NOTIFY changed)
+    Q_PROPERTY(QString fontName READ fontName NOTIFY fontChanged)
     Q_PROPERTY(QStringList themeNames READ themeNames CONSTANT)
+    Q_PROPERTY(QStringList mediaPositions READ mediaPositions CONSTANT)
     Q_PROPERTY(QString themeName READ themeName NOTIFY changed)
     Q_PROPERTY(QString templateName READ templateName NOTIFY changed)
     Q_PROPERTY(QColor background READ background NOTIFY changed)
     Q_PROPERTY(QColor foreground READ foreground NOTIFY changed)
     Q_PROPERTY(QColor accent READ accent NOTIFY changed)
-    Q_PROPERTY(QVariantMap media READ media NOTIFY changed)
+    Q_PROPERTY(QVariantMap media READ media NOTIFY selectionChanged)
   public:
     explicit Deck(QObject *parent = nullptr, const QString &exportProgram = {});
     ~Deck() override;
@@ -75,6 +77,7 @@ class Deck : public QAbstractListModel {
     QString source() const { return m_source; }
     QString slideSource() const;
     QString slideText() const;
+    QString speakerNotes() const;
     int selected() const { return m_selected; }
     int selectionFirst() const { return qMin(m_anchor, m_selected); }
     int selectionLast() const { return qMax(m_anchor, m_selected); }
@@ -110,6 +113,7 @@ class Deck : public QAbstractListModel {
     // The palette plus page numbers, for slides whose template shows them.
     QVariantMap slidePalette(int index) const;
     QVariantMap media() const;
+    QStringList mediaPositions() const;
     QString baseDir() const;
     QString dialogDirectory() const;
     QString slide(int index) const;
@@ -131,6 +135,7 @@ class Deck : public QAbstractListModel {
     Q_INVOKABLE void dropSelection(int slot);
     Q_INVOKABLE void selectAt(int position);
     Q_INVOKABLE int sourcePosition() const;
+    Q_INVOKABLE int sourceEndPosition() const;
     Q_INVOKABLE void editSource(const QString &value);
     Q_INVOKABLE void editSlide(const QString &value);
     Q_INVOKABLE void moveSlide(int from, int to);
@@ -168,9 +173,13 @@ class Deck : public QAbstractListModel {
     Q_INVOKABLE void matchImageBackground(bool enabled);
     Q_INVOKABLE void setMediaBackground(const QString &mode);
     Q_INVOKABLE void setMediaMode(const QString &mode);
+    Q_INVOKABLE void setMediaPosition(const QString &position);
+    Q_INVOKABLE void setMediaSize(double percent);
     Q_INVOKABLE void setStatus(const QString &status);
   signals:
-    void changed();
+    void changed(); // Document content, path, saved state, or media files; always followed by selectionChanged.
+    void selectionChanged(); // Selection range or the selected slide's content/media.
+    void fontChanged();
     void statusChanged();
     void opened(bool existing);
     void compressingImageChanged();
@@ -212,7 +221,8 @@ class Deck : public QAbstractListModel {
     mutable QString m_stampKey, m_stampValue;
     mutable QStringList m_templateWatched; // Files the templates it builds on came from, or may.
     mutable bool m_followsDesktop = false; // Its theme is the desktop's, which may change.
-    mutable QHash<QString, QPair<QString, QString>> m_templatePreviews; // Path: file stamp, render id.
+    mutable QHash<QString, QPair<QString, QString>>
+        m_templatePreviews; // Path: file stamp, render id.
     QString templatePreview(const QString &path, const QString &title) const;
     mutable QElapsedTimer m_stampClock;
     QString templateStamp(bool force = false) const;
@@ -221,8 +231,9 @@ class Deck : public QAbstractListModel {
     int m_selected = 0, m_anchor = 0, m_revision = 0;
     QVector<State> m_undo, m_redo;
     QMap<QString, QString> m_themes;
-    QFileSystemWatcher m_watcher;
-    QTimer m_reloadTimer;
+    QFileSystemWatcher m_watcher, m_mediaWatcher;
+    QTimer m_reloadTimer, m_mediaTimer;
+    QString m_notifiedFont;
     bool m_externalChange = false;
     QString m_recoveryDirectory, m_checkpointSource, m_checkpointPath;
     QTimer m_autosaveTimer, m_autosaveDeadline;
@@ -254,5 +265,7 @@ class Deck : public QAbstractListModel {
     bool restoreSnapshot(const QByteArray &bytes, bool opening);
     void discoverThemes();
     void watch();
+    void watchMedia();
+    void notifyChanged();
     void reloadExternal(const QString &disk);
 };

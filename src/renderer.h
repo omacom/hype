@@ -1,7 +1,7 @@
 #pragma once
 #include "deck.h"
-#include <QMutex>
 #include <QFont>
+#include <QMutex>
 #include <QQuickImageProvider>
 #include <QQuickPaintedItem>
 #include <QThreadPool>
@@ -13,28 +13,42 @@ struct GalleryItem {
 };
 struct Media {
     QString file, path, poster, error, background, layout, heading;
+    QString svg; // A ```svg fence, drawn as vectors where a picture would be
+    int svgBlocks = 0;
     bool video = false, span = false, loop = false, muted = false, autoplay = true;
     double overlay = 0;
     QRectF box; // Where a component layout puts the video; empty for the fixed layouts.
     QString text;
     QVector<GalleryItem> gallery;
     QString footer;
+    // A placed image sits at a position, sized as a percentage of the slide.
+    QString position;
+    double size = 0;
+    Qt::Alignment alignment = Qt::AlignCenter;
+    bool placed() const { return !position.isEmpty(); }
 };
+constexpr double defaultPlacedSize = 10;
+const QStringList &mediaPositions();
 QRectF mediaRect(const Media &media);
+QRectF mediaImageRect(const Media &media, const QSizeF &image);
+QString withReplacedMedia(const QString &source, const QString &file);
 QImage softenedImage(const QImage &image, const QSizeF &slideSize);
 QString withMedia(const QString &source, const QString &reference);
 QString withMediaDirectives(const QString &source, const QStringList &remove,
                             const QStringList &add);
+QString speakerNotes(const QString &source);
 Media parseMedia(const QString &source, const QString &base);
 QString ensurePoster(const QString &video, const QString &base);
-QStringList slideProblems(const QString &source, const QString &base, const QVariantMap &palette = {});
+QStringList slideProblems(const QString &source, const QString &base,
+                          const QVariantMap &palette = {});
 // Shared with the component engine.
 QString outsideCode(QString source, bool maskInline = true);
 QString slideProperty(const QString &source, const QString &key);
 QString preserveLineBreaks(QString markdown);
 QImage boxBlur(QImage image, int radius);
 void layoutSlideText(QTextDocument &document, const QString &markdown, const QVariantMap &palette,
-                     qreal fontSize, qreal width, bool centered, bool code, bool equalColumns = false);
+                     qreal fontSize, qreal width, bool centered, bool code,
+                     bool equalColumns = false);
 struct CloudLabel {
     QString text;
     int level = 0;

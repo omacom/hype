@@ -9,9 +9,9 @@
 namespace templates {
 
 struct Entry {
-    QString name;  // What `template:` names it by.
-    QString path;  // The file it is read from.
-    QString where; // "project", "library" or "built-in".
+    QString name;   // What `template:` names it by.
+    QString path;   // The file it is read from.
+    QString where;  // "project", "library" or "built-in".
     QString linked; // The presentation a library link follows.
     QString title, theme, buildsOn;
     QStringList components;
@@ -40,7 +40,8 @@ QString slideLabel(const QString &source);
 QString suggestedName(const QString &presentation);
 // Adds a presentation to the library under `name`. A link follows the file; a copy
 // keeps it, its images and its fonts as they are now. Returns an error, or sets `saved`.
-QString save(const QString &presentation, const QString &name, bool copy, bool replace, QString *saved);
+QString save(const QString &presentation, const QString &name, bool copy, bool replace,
+             QString *saved);
 // Removes a library template: a link leaves the presentation it follows alone.
 QString remove(const QString &name, QString *removed);
 

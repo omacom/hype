@@ -1,8 +1,8 @@
 #pragma once
-#include <QString>
-#include <QStringList>
 #include <QMap>
 #include <QRectF>
+#include <QString>
+#include <QStringList>
 #include <QVariantMap>
 class QPainter;
 
@@ -15,7 +15,8 @@ bool hasComponents(const QString &source);
 // template frame applies to its plain Markdown.
 bool isComposedSlide(const QString &source, const QVariantMap &palette);
 // Errors: unknown components or props, unclosed tags, missing images or icons.
-QStringList composedProblems(const QString &source, const QString &base, const QVariantMap &palette);
+QStringList composedProblems(const QString &source, const QString &base,
+                             const QVariantMap &palette);
 // Paints in 1920×1080 slide units; the caller has already scaled the painter.
 // `warning` receives fit and readability warnings.
 void paintComposed(QPainter *painter, const QString &source, const QString &base,
@@ -30,16 +31,17 @@ QStringList componentAssets(const QString &source, const QString &base, const QV
 // presentations built on it and whose <Define> blocks become their components. It may
 // build on a template of its own, and so on.
 struct TemplatePack {
-    QString path;           // The template named, if found.
-    QString header;         // Each template's front matter, the nearest first.
-    QString definitions;    // Each template's definitions, the nearest last so they win.
-    QString theme;          // The nearest theme a template names.
+    QString path;            // The template named, if found.
+    QString header;          // Each template's front matter, the nearest first.
+    QString definitions;     // Each template's definitions, the nearest last so they win.
+    QString theme;           // The nearest theme a template names.
     QStringList directories; // Where each template lives, the nearest first.
-    QStringList watched;    // Every file whose change or arrival would change the template.
+    QStringList watched;     // Every file whose change or arrival would change the template.
     QString error;
 };
 // `presentation` is the file using the template, which may not be among its templates.
-TemplatePack loadTemplate(const QString &name, const QString &base, const QString &presentation = {});
+TemplatePack loadTemplate(const QString &name, const QString &base,
+                          const QString &presentation = {});
 // Where loadTemplate looks for a template, in order.
 QStringList templateCandidates(const QString &name, const QString &base);
 // The <Define> blocks written on a presentation's slides; every slide may use them.

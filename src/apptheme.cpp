@@ -37,27 +37,33 @@ void AppTheme::reload() {
     QMap<QString, QColor> values;
     QFile file(path);
     if (file.open(QIODevice::ReadOnly)) {
-        const QRegularExpression entry(R"re(^\s*([a-z_]+)\s*=\s*["'](#[0-9a-fA-F]{6})["'])re");
+        // Quoted or bare hex with an optional note. Quotes must pair; comments need no gap.
+        const QRegularExpression entry(
+            R"re(^\s*([a-z_]+)\s*=\s*(["']?)(#[0-9a-fA-F]{6})\2\s*(?:#.*)?\s*$)re");
         while (!file.atEnd()) {
             const auto match = entry.match(QString::fromUtf8(file.readLine()));
             if (match.hasMatch())
-                values[match.captured(1)] = QColor(match.captured(2));
+                values[match.captured(1)] = QColor(match.captured(3));
         }
     }
     const QColor bg = values.value("background", QColor("#1a1b26"));
     const QColor fg = values.value("foreground", QColor("#c0caf5"));
     const QColor accent = values.value("accent", QColor("#7aa2f7"));
     const QColor selection = values.value("selection", mix(bg, accent, .3));
+    const QColor border = mix(bg, fg, .22);
+    const QColor inactiveSelection = mix(border, accent, .7);
     const QVariantMap colors{{"background", bg},
                              {"foreground", fg},
                              {"accent", accent},
                              {"panel", mix(bg, fg, .025)},
                              {"button", values.value("lighter_background", mix(bg, fg, .08))},
                              {"hover", mix(bg, accent, .22)},
-                             {"border", mix(bg, fg, .22)},
+                             {"border", border},
                              {"muted", mix(bg, fg, .62)},
                              {"selection", selection},
                              {"selectionText", contrastInk(selection)},
+                             {"inactiveSelection", inactiveSelection},
+                             {"inactiveSelectionText", contrastInk(inactiveSelection)},
                              {"accentText", contrastInk(accent)},
                              {"accentHover", mix(accent, fg, .15)},
                              {"windowBorder", values.value("active_border_color", accent)},

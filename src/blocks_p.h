@@ -18,7 +18,7 @@ class QTextDocument;
 struct Ink {
     QColor fg, muted, accent, surface, line, bg;
     bool dark = false; // The surface underneath is dark.
-    qreal text = 26; // Body size that Text inherits, before the fit factor.
+    qreal text = 26;   // Body size that Text inherits, before the fit factor.
     Qt::Alignment align = Qt::AlignLeft;
 };
 
@@ -27,9 +27,9 @@ struct Node {
     QMap<QString, QString> props;
     QString text; // Markdown for Text; the raw inner source for components.
     QVector<Node> kids;
-    int line = 1; // Slide-relative, for error messages.
-    int textLine = 0; // The slide line of the first line of `text`; 0 if it has none.
-    bool templated = false; // Expanded from a template, where empty props are allowed.
+    int line = 1;             // Slide-relative, for error messages.
+    int textLine = 0;         // The slide line of the first line of `text`; 0 if it has none.
+    bool templated = false;   // Expanded from a template, where empty props are allowed.
     bool textAuthored = true; // `text` was written on the slide, not in a template.
     // Layout results, in 1920×1080 slide units.
     QRectF rect;
@@ -47,7 +47,8 @@ struct Node {
     }
     bool has(const QString &key) const { return !props.value(key).isEmpty(); }
     bool flag(const QString &key, bool fallback = false) const {
-        if (!props.contains(key)) return fallback;
+        if (!props.contains(key))
+            return fallback;
         const QString v = props.value(key).toLower();
         return v != "false" && v != "no" && v != "0" && v != "none" && v != "off";
     }
@@ -57,8 +58,8 @@ struct Ctx {
     QVariantMap palette;
     QString base;
     QStringList templateDirs; // The template's folder, then those of the templates it builds on.
-    qreal s = 1; // Fit factor: type, gaps and padding scale with it.
-    qreal slack = 1; // Share of the available height content may use; less when growing.
+    qreal s = 1;              // Fit factor: type, gaps and padding scale with it.
+    qreal slack = 1;          // Share of the available height content may use; less when growing.
     QPainter *p = nullptr;
     QStringList *problems = nullptr;
     mutable qreal smallest = 1e9; // Smallest text size used, in 1080p pixels.
@@ -73,7 +74,8 @@ struct Ctx {
     qreal px(qreal value) const { return value * s; }
     // Type grows less than everything else: body text fully, display type hardly at all.
     qreal type(qreal size) const {
-        if (s <= 1) return size * s;
+        if (s <= 1)
+            return size * s;
         return size * (1 + (s - 1) * qBound(0.0, (50 - size) / 24, 1.0));
     }
     QColor color(const QString &key) const;
@@ -129,7 +131,7 @@ struct TextStyle {
     qreal lineHeight = 1.3;
     bool italic = false;
     bool boldTone = false; // `accent` was chosen for bold text, headings included.
-    QColor tableHeader; // Table header fill; invalid uses the foreground.
+    QColor tableHeader;    // Table header fill; invalid uses the foreground.
     bool zebra = true;
     bool highlightLast = false;
     Fill gradient; // Two colors fill the glyphs with a gradient instead of `ink`.
@@ -139,14 +141,15 @@ void drawText(QTextDocument &doc, QPointF at, QPainter *p);
 // A font at `size` 1080p pixels (already scaled by the fit factor).
 QFont uiFont(const Ctx &c, qreal size, bool heading = false, int weight = -1);
 // One line of text in a rectangle, shrunk (not below 60%) and then elided to fit.
-void drawLabel(QPainter *p, const QRectF &rect, const QString &text, QFont font, const QColor &color,
-               Qt::Alignment align = Qt::AlignCenter);
+void drawLabel(QPainter *p, const QRectF &rect, const QString &text, QFont font,
+               const QColor &color, Qt::Alignment align = Qt::AlignCenter);
 qreal sizeToken(const QString &value, qreal fallback);
 
 // Icons
 bool iconExists(const QString &name);
 QStringList iconSuggestions(const QString &name);
-void paintIcon(QPainter *p, const QString &name, const QRectF &rect, const QColor &color, qreal stroke = 1.75);
+void paintIcon(QPainter *p, const QString &name, const QRectF &rect, const QColor &color,
+               qreal stroke = 1.75);
 
 // Images
 QImage componentImage(const QString &path, QSize pixels, bool cover);
@@ -157,7 +160,8 @@ void drawPicture(QPainter *p, const QString &path, const QRectF &rect, const QPa
 // A play button centered on a picture of a video.
 void paintPlay(QPainter *p, const QRectF &rect, const QColor &accent, const Ctx &c);
 // A circle with someone's initials, for a person without a portrait.
-void paintInitials(QPainter *p, const QRectF &circle, const QString &name, const QColor &fill, const Ctx &c);
+void paintInitials(QPainter *p, const QRectF &circle, const QString &name, const QColor &fill,
+                   const Ctx &c);
 
 // Markdown data shared by data components.
 struct Table {
@@ -184,7 +188,7 @@ QStringList diagramProblems(const Node &n, const Ctx &c);
 // A composed slide after parsing, expansion and desugaring.
 struct Composition {
     QVector<Node> flow, backgrounds, overlays;
-    QString justify; // auto, start, center, end, between
+    QString justify;    // auto, start, center, end, between
     bool bleed = false; // A single Split fills the slide edge to edge.
     QStringList errors;
 };

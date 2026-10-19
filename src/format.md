@@ -86,6 +86,8 @@ puts "Code is highlighted when you name the language"
 - `# Headline` is big. Lists, quotes, tables, and inline `code` work.
 - `*asterisks*` are italic, `**double**` is bold, `_underscores_` underline.
 - Ordinary line breaks stay visible on the slide.
+- Tables use `| pipes |`; `:---:` centers a column and `---:` aligns it right.
+  More than one space beside a cell's text pads it.
 - `<!-- comments -->` are hidden from the slide; use them for speaker notes.
 - A `---` inside a code fence does not split the slide.
 
@@ -176,6 +178,21 @@ Outside a gallery, each slide takes one image or video. Options go inside the br
 | `![loop muted](demo.mp4)` | Loop a video without sound |
 | `![autoplay=false](demo.mp4)` | Wait for Space to play the video |
 | `![poster=still.png](demo.mp4)` | Show an image from `images/` until it plays |
+| `![position=bottom-right size=10%](logo.png)` | Place a small image, such as a logo, in a corner |
+
+An `svg` code block draws SVG in the image's place, sharp at any size. Give it
+a `viewBox`. `var(--accent)`, `var(--foreground)`, `var(--background)`,
+`var(--dark-foreground)`, `var(--red)`, `var(--green)`, `var(--yellow)`,
+`var(--magenta)`, and `var(--cyan)` are the theme's colors. Shapes and text
+without a color take the theme's text color, and text takes the font.
+
+````markdown
+```svg
+<svg viewBox="0 0 300 120">
+  <rect x="120" y="20" width="60" height="100" fill="var(--accent)"/>
+</svg>
+```
+````
 
 By default, text on an image slide is overlaid in white over a slightly darkened picture.
 An image with a headline spans the slide unless you say `fit`.
@@ -206,6 +223,12 @@ table in the caption has equal-width, centered columns, useful for editable name
 and roles beneath a row of portraits. An optional first `# Heading` goes above
 the media. Media stays sharp and undimmed by default. The Layout menu calls this
 **Caption below media**.
+
+A placed image leaves the slide's text and theme colors alone. `position` is
+`top-left`, `top`, `top-right`, `left`, `center`, `right`, `bottom-left`,
+`bottom`, or `bottom-right`; `size` is the share of the slide it may fill, from
+1% to 100% (default 10%). Placement is for images only and cannot be combined
+with `fit`, `span`, `background`, `overlay`, or `layout`.
 
 ## Commands
 

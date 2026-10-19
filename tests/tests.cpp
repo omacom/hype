@@ -1,16 +1,16 @@
-#include "budget.h"
 #include "apptheme.h"
 #include "blocks.h"
 #include "blocks_p.h"
-#include "fonts.h"
+#include "budget.h"
 #include "deck.h"
 #include "filedialog.h"
-#include "renderer.h"
+#include "fonts.h"
 #include "images.h"
+#include "renderer.h"
 #include "syntax.h"
 #include "templates.h"
-#include <QApplication>
 #include <QAbstractTextDocumentLayout>
+#include <QApplication>
 #include <QClipboard>
 #include <QDBusArgument>
 #include <QDBusConnection>
@@ -18,36 +18,37 @@
 #include <QDBusObjectPath>
 #include <QDBusVirtualObject>
 #include <QFile>
-#include <QJsonDocument>
-#include <QJSEngine>
-#include <QJsonObject>
+#include <QGlyphRun>
 #include <QImage>
 #include <QImageReader>
-#include <QGlyphRun>
-#include <QMimeData>
+#include <QJSEngine>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QMediaPlayer>
+#include <QMimeData>
 #include <QPainter>
 #include <QPdfDocument>
 #include <QProcess>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
+#include <QQuickItemGrabResult>
 #include <QQuickStyle>
 #include <QQuickWindow>
-#include <QQuickItemGrabResult>
-#include <QSettings>
 #include <QSaveFile>
 #include <QScopeGuard>
+#include <QScreen>
 #include <QSemaphore>
-#include <QThreadPool>
-#include <QTimer>
-#include <QtConcurrentRun>
+#include <QSettings>
 #include <QTemporaryDir>
-#include <QTextCursor>
 #include <QTextBlock>
+#include <QTextCursor>
 #include <QTextLayout>
 #include <QTextTable>
-#include <QVideoSink>
+#include <QThreadPool>
+#include <QTimer>
 #include <QVideoFrame>
+#include <QVideoSink>
+#include <QtConcurrentRun>
 #include <QtTest>
 
 class TestFilePortal : public QDBusVirtualObject {
@@ -93,17 +94,40 @@ static bool nearColor(const QColor &got, const QColor &want, int tolerance = 8) 
            qAbs(got.blue() - want.blue()) <= tolerance;
 }
 static QImage renderSlide(const Deck &deck, int index, QString *warning = nullptr) {
-        QImage image(1920, 1080, QImage::Format_ARGB32_Premultiplied);
-        image.fill(Qt::transparent);
-        QPainter painter(&image);
-        paintSlide(&painter, image.rect(), deck.slide(index), deck.baseDir(), deck.slidePalette(index), warning);
-        painter.end();
-        return image;
-    }
+    QImage image(1920, 1080, QImage::Format_ARGB32_Premultiplied);
+    image.fill(Qt::transparent);
+    QPainter painter(&image);
+    paintSlide(&painter, image.rect(), deck.slide(index), deck.baseDir(), deck.slidePalette(index),
+               warning);
+    painter.end();
+    return image;
+}
 static void write(const QString &path, const QString &content) {
         QFile f(path);
         QVERIFY(f.open(QIODevice::WriteOnly));
         f.write(content.toUtf8());
+    }
+    // Builds original/ with nested, hidden, unreferenced, and poster-cache media.
+    static QString nestedMediaDeck(const QTemporaryDir &tmp) {
+        const QString original = tmp.filePath("original");
+        for (const char *directory : {"images/nested", "images/posters", "images/.private",
+                                      "images/unused", "videos/clips"})
+            QDir().mkpath(original + "/" + directory);
+        QImage image(8, 8, QImage::Format_RGB32);
+        image.fill(Qt::red);
+        image.save(original + "/images/nested/photo.png");
+        image.fill(Qt::blue);
+        image.save(original + "/images/posters/.cover.png");
+        image.fill(Qt::yellow);
+        image.save(original + "/images/.private/logo.png");
+        write(original + "/videos/clips/talk.mp4", "video");
+        write(original + "/images/unused/extra.txt", "extra");
+        write(original + "/images/.hype-poster-0123456789abcdef.jpg", "cache");
+        write(original + "/talk.md",
+              "![](images/nested/photo.png)\n\n---\n\n"
+              "![poster=\"images/posters/.cover.png\"](videos/clips/talk.mp4)\n\n---\n\n"
+              "![](images/.private/logo.png)\n\n---\n\n![](images/gone.png)\n");
+        return original;
     }
   private slots:
     void initTestCase() {
@@ -159,6 +183,40 @@ static void write(const QString &path, const QString &content) {
         QVERIFY(FileDialog::choose(false, "/tmp", "Media", {"*.png"}, &error).isEmpty());
         QVERIFY(!error.isEmpty());
     }
+    void speakerNotesIgnoreDirectivesAndCode() {
+        Deck deck;
+        deck.editSlide("<!-- First note -->\n\n<!-- hype: background=\"#112233\" -->\n\n# Title\n\n"
+                       "```html\n<!-- Shown as code, not a note -->\n```\n\n<!-- Second\nline -->");
+        QCOMPARE(deck.speakerNotes(), QString("First note\n\nSecond\nline"));
+        deck.editSlide("# Title\n<!-- Hype makes Markdown presentations. -->");
+        QCOMPARE(deck.speakerNotes(), QString("Hype makes Markdown presentations."));
+    }
+    void readsThemeColorFormats() {
+        QTemporaryDir files;
+        QVERIFY(QDir().mkpath(files.filePath("theme")));
+        const QStringList values{"#224488",
+                                 "'#224488'",
+                                 "\"#224488\"",
+                                 "#224488 # secondary-400",
+                                 "'#224488' # secondary-400",
+                                 "\"#224488\" # secondary-400",
+                                 "'#224488'# secondary-400",
+                                 "\"#224488\"# secondary-400"};
+        for (const auto &value : values) {
+            write(files.filePath("theme/colors.toml"), "accent = " + value + '\n');
+            AppTheme theme(files.path());
+            QVERIFY2(theme.colors().value("accent").value<QColor>() == QColor("#224488"),
+                     qPrintable(value));
+        }
+        // An incomplete string or a note inside a quoted value is not a hex color.
+        for (const auto &value : {QString("'#224488"), QString("\"#224488"),
+                                  QString("\"#224488# note\""), QString("#224488ff")}) {
+            write(files.filePath("theme/colors.toml"), "accent = " + value + '\n');
+            AppTheme theme(files.path());
+            QVERIFY2(theme.colors().value("accent").value<QColor>() != QColor("#224488"),
+                     qPrintable(value));
+        }
+    }
     void followsDesktopTheme() {
         QTemporaryDir files;
         const QString current = files.path() + "/current";
@@ -168,7 +226,8 @@ static void write(const QString &path, const QString &content) {
         QVERIFY(QDir().mkpath(dark));
         QVERIFY(QDir().mkpath(light));
         write(dark + "/colors.toml", "background = '#101020'\nforeground = '#eeeeee'\naccent = '#7788ff'\n");
-        write(light + "/colors.toml", "background = '#ffffff'\nforeground = '#111111'\naccent = '#224488'\n");
+        write(light + "/colors.toml", "background = '#ffffff'\nforeground = '#111111'\n"
+                                      "accent = #224488 # secondary-400\n");
         write(light + "/hyprland.lua", "hl.config({\n  decoration = {\n    rounding = 6,\n    -- rounding = 12,\n  },\n})\n");
         QVERIFY(QFile::link(dark, current + "/theme"));
         AppTheme theme(current);
@@ -630,6 +689,201 @@ static void write(const QString &path, const QString &content) {
         window->setProperty("allowClose", true);
         window->close();
     }
+    void presenterScreensAndCloseWhilePresenting() {
+        if (!qEnvironmentVariableIsSet("HYPE_GUI_TESTS"))
+            QSKIP("Set HYPE_GUI_TESTS=1");
+        Deck deck;
+        deck.editSource("# First\n---\n# Last\n");
+        QQuickStyle::setStyle("Basic");
+        qmlRegisterType<SlideItem>("Hype", 1, 0, "SlideCanvas");
+        qmlRegisterType<AppTheme>("Hype", 1, 0, "AppTheme");
+        QQmlApplicationEngine engine;
+        engine.rootContext()->setContextProperty("deck", &deck);
+        engine.addImageProvider("slides", new Thumbnails(&deck));
+        engine.load(QUrl("qrc:/Main.qml"));
+        QVERIFY(!engine.rootObjects().isEmpty());
+        auto window = qobject_cast<QQuickWindow *>(engine.rootObjects().first());
+        auto presenterWindow = window->findChild<QQuickWindow *>("presenterWindow");
+        QVERIFY(presenterWindow);
+
+        // Screens are matched by connector name and position, never by object identity.
+        auto screen = [](const QString &name, int x) {
+            return QVariantMap{{"name", name}, {"virtualX", x}, {"virtualY", 0}};
+        };
+        auto pick = [&](const QVariantMap &current, const QVariantList &screens) {
+            QVariant result;
+            if (!QMetaObject::invokeMethod(window, "presentationScreens",
+                                           Q_RETURN_ARG(QVariant, result), Q_ARG(QVariant, current),
+                                           Q_ARG(QVariant, screens)))
+                return QStringList{"invoke failed"};
+            const auto picked = result.toMap();
+            const QString notes = picked.value("notes").toMap().value("name").toString();
+            return QStringList{picked.value("audience").toMap().value("name").toString(),
+                               notes.isEmpty() ? "none" : notes};
+        };
+        const auto laptop = screen("eDP-1", 0), hdmi = screen("HDMI-A-1", 1920),
+                   dock = screen("DP-4", 1920);
+        QCOMPARE(pick(laptop, {laptop}), QStringList({"eDP-1", "none"}));
+        QCOMPARE(pick(laptop, {laptop, dock}), QStringList({"DP-4", "eDP-1"}));
+        QCOMPARE(pick(laptop, {dock, laptop, hdmi}), QStringList({"HDMI-A-1", "eDP-1"}));
+        QCOMPARE(pick(hdmi, {hdmi, laptop}), QStringList({"HDMI-A-1", "eDP-1"}));
+        QCOMPARE(pick(dock, {laptop, dock}), QStringList({"DP-4", "eDP-1"}));
+        QCOMPARE(pick(hdmi, {dock, hdmi, laptop}), QStringList({"HDMI-A-1", "eDP-1"}));
+        auto notes = presenterWindow->findChild<QObject *>("presenterNotes");
+        QVERIFY(notes);
+        deck.editSource("# One\n<!-- First note -->\n---\n# Two\n<!-- Second note -->\n");
+        QCOMPARE(notes->property("text").toString(), QString("First note"));
+        deck.select(1);
+        QCOMPARE(notes->property("text").toString(), QString("Second note"));
+
+        // Closing with unsaved changes while presenting brings the editor back before asking.
+        QVERIFY(deck.dirty());
+        QVERIFY(QMetaObject::invokeMethod(window, "togglePresent"));
+        QVERIFY(window->property("presenting").toBool());
+        QTRY_COMPARE(window->visibility(), QWindow::FullScreen);
+        window->close();
+        QVERIFY(window->isVisible());
+        QVERIFY(!window->property("presenting").toBool());
+        QVERIFY(!presenterWindow->isVisible());
+        QTRY_VERIFY(window->visibility() != QWindow::FullScreen);
+        QTRY_VERIFY(window->property("popupOpen").toBool());
+        window->setProperty("allowClose", true);
+        window->close();
+    }
+    void presenterViewUsesSeparateScreens() {
+        if (!qEnvironmentVariableIsSet("HYPE_GUI_TESTS"))
+            QSKIP("Set HYPE_GUI_TESTS=1");
+        const auto screens = QGuiApplication::screens();
+        if (screens.size() != 2)
+            QSKIP("Run with offscreen:configfile=tests/fixtures/presenter-screens.json");
+        QScreen *laptop = nullptr, *external = nullptr;
+        for (auto *screen : screens) {
+            if (screen->name().startsWith("eDP"))
+                laptop = screen;
+            else
+                external = screen;
+        }
+        if (!laptop || !external)
+            QSKIP("This check needs a laptop panel and an external display");
+        QTemporaryDir tmp;
+        QVERIFY(QDir().mkpath(tmp.filePath("images")));
+        QVERIFY(
+            QFile::copy(QFINDTESTDATA("fixtures/animated.webp"), tmp.filePath("images/demo.webp")));
+        Deck deck;
+        QVERIFY(deck.savePath(tmp.filePath("talk.md")));
+        deck.editSource("# One\n<!-- First note -->\n---\n# Two\n<!-- Second note -->\n"
+                        "---\n![loop](demo.webp)\n<!-- Last note -->\n");
+        QQuickStyle::setStyle("Basic");
+        qmlRegisterType<SlideItem>("Hype", 1, 0, "SlideCanvas");
+        qmlRegisterType<AppTheme>("Hype", 1, 0, "AppTheme");
+        QQmlApplicationEngine engine;
+        engine.rootContext()->setContextProperty("deck", &deck);
+        engine.addImageProvider("slides", new Thumbnails(&deck));
+        engine.load(QUrl("qrc:/Main.qml"));
+        QVERIFY(!engine.rootObjects().isEmpty());
+        auto window = qobject_cast<QQuickWindow *>(engine.rootObjects().first());
+        auto presenter = window->findChild<QQuickWindow *>("presenterWindow");
+        QVERIFY(presenter);
+        auto notes = presenter->findChild<QQuickItem *>("presenterNotes");
+        QVERIFY(notes);
+        window->setScreen(laptop);
+        window->setGeometry(QRect(laptop->geometry().topLeft() + QPoint(30, 20), QSize(1200, 760)));
+        window->showNormal();
+        window->requestActivate();
+        QTRY_COMPARE(window->screen(), laptop);
+        QTRY_VERIFY(window->isActive());
+        QTest::qWait(100);
+        const QRect original = window->geometry();
+        QTest::keyClick(window, Qt::Key_F5);
+        QTRY_VERIFY(window->property("presenting").toBool());
+        QTRY_COMPARE(window->screen(), external);
+        QTRY_COMPARE(window->visibility(), QWindow::FullScreen);
+        QTRY_VERIFY(presenter->isVisible());
+        QCOMPARE(presenter->screen(), laptop);
+        presenter->requestActivate();
+        QTRY_VERIFY(presenter->isActive());
+        notes->forceActiveFocus();
+        QTest::keyClick(presenter, Qt::Key_Right);
+        QTRY_COMPARE(deck.selected(), 1);
+        QCOMPARE(notes->property("text").toString(), QString("Second note"));
+        QTest::keyClick(presenter, Qt::Key_F5, Qt::ShiftModifier);
+        QTRY_COMPARE(deck.selected(), 0);
+        QTest::keyClick(presenter, Qt::Key_End);
+        QTRY_COMPARE(deck.selected(), 2);
+        auto loader = window->findChild<QObject *>("animationLoader");
+        QVERIFY(loader);
+        QTRY_VERIFY(loader->property("item").value<QObject *>());
+        auto animation = loader->property("item").value<QObject *>();
+        QTRY_VERIFY(!animation->property("paused").toBool());
+        QTest::keyClick(presenter, Qt::Key_Space);
+        QTRY_VERIFY(animation->property("paused").toBool());
+        QTest::keyClick(presenter, Qt::Key_Escape);
+        QTRY_VERIFY(!window->property("presenting").toBool());
+        QTRY_VERIFY(!presenter->isVisible());
+        QTRY_COMPARE(window->screen(), laptop);
+        QTRY_COMPARE(window->geometry(), original);
+        QTRY_COMPARE(window->visibility(), QWindow::Windowed);
+        // Starting on the audience output keeps it there, and closing Notes ends the show.
+        window->setScreen(external);
+        window->setPosition(external->geometry().topLeft());
+        window->showMaximized();
+        QTRY_COMPARE(window->screen(), external);
+        QTest::keyClick(window, Qt::Key_F5);
+        QTRY_VERIFY(presenter->isVisible());
+        QCOMPARE(window->screen(), external);
+        QCOMPARE(presenter->screen(), laptop);
+        presenter->close();
+        QTRY_VERIFY(!window->property("presenting").toBool());
+        QTRY_COMPARE(window->visibility(), QWindow::Maximized);
+        QCOMPARE(window->screen(), external);
+        window->setProperty("allowClose", true);
+        window->close();
+    }
+    void placeMenuPlacesImage() {
+        if (!qEnvironmentVariableIsSet("HYPE_GUI_TESTS"))
+            QSKIP("Set HYPE_GUI_TESTS=1");
+        Deck deck;
+        deck.editSource("# Headline\n\n![](logo.png)\n");
+        QQuickStyle::setStyle("Basic");
+        qmlRegisterType<SlideItem>("Hype", 1, 0, "SlideCanvas");
+        qmlRegisterType<AppTheme>("Hype", 1, 0, "AppTheme");
+        QQmlApplicationEngine engine;
+        engine.rootContext()->setContextProperty("deck", &deck);
+        engine.addImageProvider("slides", new Thumbnails(&deck));
+        engine.load(QUrl("qrc:/Main.qml"));
+        QVERIFY(!engine.rootObjects().isEmpty());
+        auto window = qobject_cast<QQuickWindow *>(engine.rootObjects().first());
+        auto place = window->findChild<QObject *>("placeMenu");
+        QVERIFY(place);
+        QTRY_COMPARE(place->property("count").toInt(), 9);
+        QQuickItem *bottomRight = nullptr;
+        QVERIFY(QMetaObject::invokeMethod(place, "itemAt", Q_RETURN_ARG(QQuickItem *, bottomRight),
+                                          Q_ARG(int, 8)));
+        QVERIFY(bottomRight);
+        QCOMPARE(bottomRight->property("text").toString(), QString("Bottom right"));
+        QVERIFY(QMetaObject::invokeMethod(bottomRight, "triggered"));
+        QCOMPARE(parseMedia(deck.slideSource(), {}).position, QString("bottom-right"));
+        QTRY_VERIFY(bottomRight->property("checked").toBool());
+        // Small, the default size, is checked; backgrounds are off while placed.
+        auto size = window->findChild<QObject *>("sizeMenu");
+        QVERIFY(size);
+        QQuickItem *small = nullptr;
+        QVERIFY(QMetaObject::invokeMethod(size, "itemAt", Q_RETURN_ARG(QQuickItem *, small),
+                                          Q_ARG(int, 0)));
+        QTRY_VERIFY(small->property("checked").toBool());
+        QVERIFY(size->property("enabled").toBool());
+        auto white = window->findChild<QObject *>("whiteBackgroundItem");
+        QVERIFY(white);
+        QTRY_VERIFY(!white->property("enabled").toBool());
+        deck.setMediaMode("fit");
+        QTRY_VERIFY(white->property("enabled").toBool());
+        QTRY_VERIFY(!size->property("enabled").toBool());
+        // Videos cannot be placed.
+        deck.editSlide("![](demo.mp4)");
+        QTRY_VERIFY(!place->property("enabled").toBool());
+        window->setProperty("allowClose", true);
+        window->close();
+    }
     void fencesAndFrontMatter() {
         QString source = "---\ntitle: Test\n---\n\n# "
                          "One\n\n---\n\n````ruby\n---\n```\n````\n\n---\n\n~~~sh\n---\n~~~\n";
@@ -640,6 +894,27 @@ static void write(const QString &path, const QString &content) {
         QVERIFY(parsed.slides[1].source.contains("---"));
         for (auto &s : parsed.slides)
             QCOMPARE(source.mid(s.start, s.end - s.start), s.source);
+        Deck d;
+        d.editSource(source);
+        for (int position : {0, int(source.indexOf("title")), parsed.slides[0].start - 1,
+                             parsed.slides[0].start}) {
+            d.select(2);
+            d.selectAt(position);
+            QCOMPARE(d.selected(), 0);
+        }
+        d.selectAt(parsed.slides[1].start);
+        QCOMPARE(d.selected(), 1);
+    }
+    void newDeckTitleFollowsFileName() {
+        QTemporaryDir tmp;
+        Deck d;
+        QCOMPARE(d.title(), "Untitled");
+        QVERIFY(d.savePath(tmp.filePath("talk.md")));
+        QCOMPARE(d.title(), "talk");
+        d.newDeck();
+        QCOMPARE(d.title(), "Untitled");
+        QVERIFY(d.savePath(tmp.filePath("second_talk.md")));
+        QCOMPARE(d.title(), "second_talk");
     }
     void emptyBoundariesAndUnicode() {
         auto p = parseDeck("# Æble 🍎\n---\n\n---\n");
@@ -800,6 +1075,64 @@ static void write(const QString &path, const QString &content) {
         QVERIFY(f.open(QIODevice::ReadOnly));
         QCOMPARE(f.readAll(), QByteArray("# External\n"));
     }
+    void inlineSvg() {
+        const QString chart = "# Growth\n\n```svg\n<svg viewBox=\"0 0 200 100\">\n"
+                              "  <rect width=\"200\" height=\"100\" fill=\"var(--accent)\"/>\n"
+                              "  <text x=\"10\" y=\"50\">Requests per second</text>\n</svg>\n```\n";
+        const auto media = parseMedia(chart, "/tmp");
+        QVERIFY(media.svg.startsWith("<svg viewBox"));
+        QCOMPARE(media.text.trimmed(), QString("# Growth"));
+        QVERIFY(media.file.isEmpty());
+        QVERIFY(slideProblems(chart, "/tmp").isEmpty());
+        QVERIFY(!slideProblems("```svg\n```\n", "/tmp").isEmpty());
+        QVERIFY(slideProblems(chart + chart, "/tmp").join(' ').contains("one media item"));
+        const QString spacedAttributes =
+            "```svg\n<svg xmlns = \"http://www.w3.org/2000/svg\" "
+            "viewBox = \"0 0 1 1\" fill = \"red\" color = \"red\" font-family = \"sans\"/>\n```\n";
+        QVERIFY(slideProblems(spacedAttributes, "/tmp").isEmpty());
+        // Mistakes name their line within the block, or what to use instead.
+        QVERIFY(slideProblems("```svg\n<svg viewBox=\"0 0 1 1\">\n<rect>\n</svg>\n```", "/tmp")
+                    .value(0)
+                    .startsWith("SVG line 3: "));
+        QVERIFY(slideProblems(
+                    "```svg\n<svg viewBox=\"0 0 1 1\"><rect fill=\"var(--purple)\"/></svg>\n```",
+                    "/tmp")
+                    .value(0)
+                    .startsWith("Unknown theme color --purple; use --background"));
+        QVERIFY(
+            slideProblems("```svg\n<svg><rect/></svg>\n```", "/tmp").value(0).contains("viewBox"));
+        QVERIFY(slideProblems("![](photo.jpg)\n\n```svg\n<svg viewBox=\"0 0 1 1\"/>\n```", "/tmp")
+                    .join(' ')
+                    .contains("one media item"));
+        // Drawn in the theme's colors, below the headline's band.
+        QVariantMap palette{{"background", "#1a1b26"},
+                            {"foreground", "#c0caf5"},
+                            {"accent", "#7aa2f7"},
+                            {"font", "JetBrains Mono"}};
+        auto drawn = [&] {
+            QImage image(960, 540, QImage::Format_ARGB32_Premultiplied);
+            QPainter painter(&image);
+            paintSlide(&painter, image.rect(), chart, "/tmp", palette);
+            return image;
+        };
+        QImage image = drawn();
+        QCOMPARE(image.pixelColor(480, 300), QColor("#7aa2f7"));
+        QCOMPARE(image.pixelColor(480, 100), QColor("#1a1b26"));
+        palette["accent"] = "#e0af68";
+        QCOMPARE(drawn().pixelColor(480, 300), QColor("#e0af68"));
+        // In a PDF it stays vector: text, and no embedded picture.
+        QTemporaryDir tmp;
+        write(tmp.path() + "/talk.md", chart);
+        Deck deck;
+        QVERIFY(deck.loadPath(tmp.path() + "/talk.md"));
+        QVERIFY(deck.exportPdf(tmp.path() + "/talk.pdf"));
+        QPdfDocument pdf;
+        QCOMPARE(pdf.load(tmp.path() + "/talk.pdf"), QPdfDocument::Error::None);
+        QVERIFY(pdf.getAllText(0).text().contains("Requests per second"));
+        QFile file(tmp.path() + "/talk.pdf");
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        QVERIFY(!file.readAll().contains("/Subtype /Image"));
+    }
     void mediaDefaultsAndDirectives() {
         auto m = parseMedia("![](<City at night.JPG>)\n\n# Hello", "/tmp/deck");
         QCOMPARE(m.path, QString("/tmp/deck/images/City at night.JPG"));
@@ -819,6 +1152,173 @@ static void write(const QString &path, const QString &content) {
         m = parseMedia("![left](photo.jpg)\n\n# Text", "/tmp/deck");
         QVERIFY(m.error.isEmpty());
         QVERIFY(m.span);
+    }
+    void placedImageDirectives() {
+        auto m =
+            parseMedia("# Headline\n\n![position=bottom-right size=10%](logo.png)", "/tmp/deck");
+        QVERIFY(m.error.isEmpty());
+        QVERIFY(m.placed());
+        QCOMPARE(m.position, QString("bottom-right"));
+        QCOMPARE(m.size, 10.0);
+        QVERIFY(!m.span); // A headline no longer makes the image span.
+        QCOMPARE(m.overlay, 0.0);
+        QCOMPARE(mediaRect(m), QRectF(1920 - 60 - 192, 1080 - 60 - 108, 192, 108));
+        m = parseMedia("![position=top-left size=50%](logo.png)", "/tmp/deck");
+        QCOMPARE(mediaRect(m), QRectF(60, 60, 960, 540));
+        m = parseMedia("![position=top](logo.png)", "/tmp/deck");
+        QVERIFY(m.error.isEmpty());
+        QCOMPARE(m.size, 10.0);
+        QCOMPARE(mediaRect(m), QRectF((1920 - 192) / 2.0, 60, 192, 108));
+        m = parseMedia("![size=20%](logo.png)", "/tmp/deck");
+        QVERIFY(m.error.isEmpty());
+        QCOMPARE(m.position, QString("center"));
+        QCOMPARE(mediaRect(m), QRectF((1920 - 384) / 2.0, (1080 - 216) / 2.0, 384, 216));
+        QCOMPARE(parseMedia("![size=12.5%](logo.png)", "/tmp/deck").size, 12.5);
+        QVERIFY(!parseMedia("![](logo.png)", "/tmp/deck").placed());
+        // Every position maps to one alignment, shared by painting and the preview.
+        QCOMPARE(mediaPositions().size(), 9);
+        QCOMPARE(parseMedia("![](logo.png)", "/tmp/deck").alignment, Qt::AlignCenter);
+        QCOMPARE(parseMedia("![position=bottom-right](logo.png)", "/tmp/deck").alignment,
+                 Qt::AlignRight | Qt::AlignBottom);
+        QCOMPARE(parseMedia("![position=left](logo.png)", "/tmp/deck").alignment,
+                 Qt::AlignLeft | Qt::AlignVCenter);
+        QCOMPARE(parseMedia("![position=top](logo.png)", "/tmp/deck").alignment,
+                 Qt::AlignHCenter | Qt::AlignTop);
+        for (const QString &bad :
+             {QString("position=middle"), QString("size=0%"), QString("size=101%"),
+              QString("size=10"), QString("size=nan%"), QString("size=NaN%"), QString("size=1e1%"),
+              QString("size=%"), QString("size=-5%"), QString("fit position=left"),
+              QString("span size=10%"), QString("position=left background=white"),
+              QString("position=left overlay=0.5")}) {
+            const auto invalid = parseMedia("![" + bad + "](logo.png)", "/tmp/deck");
+            QVERIFY2(!invalid.error.isEmpty(), qPrintable(bad));
+            QVERIFY2(qIsFinite(mediaRect(invalid).width()), qPrintable(bad));
+        }
+        QVERIFY(!parseMedia("![position=left](demo.mp4)", "/tmp/deck").error.isEmpty());
+        // Errors never echo the author's value, which may hold markup.
+        QCOMPARE(parseMedia("![position=\"<b>x</b>\"](logo.png)", "/tmp/deck").error,
+                 QString("Unknown position"));
+    }
+    void largePlacedImagesStayOnTheSlide() {
+        const QRectF slide(0, 0, 1920, 1080);
+        // The margin shrinks to nothing as the box reaches the whole slide.
+        for (const QString &position : mediaPositions())
+            QCOMPARE(mediaRect(parseMedia("![position=" + position + " size=100%](logo.png)", {})),
+                     slide);
+        for (const QString &position : mediaPositions()) {
+            const QRectF rect =
+                mediaRect(parseMedia("![position=" + position + " size=95%](logo.png)", {}));
+            QVERIFY2(slide.contains(rect), qPrintable(position));
+            QCOMPARE(rect.size(), QSizeF(1824, 1026));
+        }
+        // A corner box keeps an equal gap on both of its sides once the margin shrinks.
+        const QRectF corner =
+            mediaRect(parseMedia("![position=bottom-right size=95%](logo.png)", {}));
+        QCOMPARE(1920 - corner.right(), 27.0);
+        QCOMPARE(1080 - corner.bottom(), 27.0);
+    }
+    void placedImageLeavesTextLayoutAlone() {
+        QTemporaryDir tmp;
+        QVERIFY(QDir().mkpath(tmp.path() + "/images"));
+        QImage logo(40, 20, QImage::Format_RGB32);
+        logo.fill(Qt::red);
+        QVERIFY(logo.save(tmp.path() + "/images/logo.png"));
+        Deck deck;
+        QVERIFY(deck.savePath(tmp.path() + "/talk.md"));
+        const QString text = "# Quarterly results\n\n- Revenue up\n- Churn down\n";
+        const QString placed = text + "\n![position=bottom-right size=10%](logo.png)\n";
+        auto render = [&](const QString &source) {
+            QImage image(1920, 1080, QImage::Format_ARGB32_Premultiplied);
+            QPainter p(&image);
+            paintSlide(&p, image.rect(), source, deck.baseDir(), deck.palette());
+            return image;
+        };
+        const QImage plain = render(text), withLogo = render(placed);
+        const QRect box = mediaRect(parseMedia(placed, deck.baseDir())).toAlignedRect();
+        int differences = 0;
+        for (int y = 0; y < 1080; ++y)
+            for (int x = 0; x < 1920; ++x)
+                if (!box.contains(x, y) && plain.pixel(x, y) != withLogo.pixel(x, y))
+                    ++differences;
+        // Same font size, position, and colors as the slide without an image.
+        QCOMPARE(differences, 0);
+    }
+    void placedImageKeepsSlideColors() {
+        QTemporaryDir tmp;
+        QVERIFY(QDir().mkpath(tmp.path() + "/images"));
+        QImage logo(40, 20, QImage::Format_RGB32);
+        logo.fill(Qt::red);
+        QVERIFY(logo.save(tmp.path() + "/images/logo.png"));
+        Deck deck;
+        QVERIFY(deck.savePath(tmp.path() + "/talk.md"));
+        const QString source = "<!-- hype: background=\"#204060\" foreground=\"#f0e0a0\" -->\n"
+                               "# Headline\n\n![position=bottom-right size=10%](logo.png)";
+        QImage slide(1920, 1080, QImage::Format_ARGB32_Premultiplied);
+        QPainter p(&slide);
+        paintSlide(&p, slide.rect(), source, deck.baseDir(), deck.palette());
+        p.end();
+        QCOMPARE(slide.pixelColor(10, 10), QColor("#204060"));
+        QCOMPARE(slide.pixelColor(1850, 1010), QColor(Qt::red));
+        // The headline uses the slide's own text color, not the white used over pictures.
+        bool slideInk = false, white = false;
+        for (int y = 0; y < 1080; y += 2)
+            for (int x = 0; x < 1920; x += 2) {
+                const QColor c = slide.pixelColor(x, y);
+                slideInk = slideInk || c == QColor("#f0e0a0");
+                white = white || (c.red() > 250 && c.green() > 250 && c.blue() > 250);
+            }
+        QVERIFY(slideInk);
+        QVERIFY(!white);
+        // With only a text color set, the theme background stays: no fill matching the red logo.
+        slide.fill(Qt::transparent);
+        p.begin(&slide);
+        paintSlide(&p, slide.rect(),
+                   "<!-- hype: foreground=\"#f0e0a0\" -->\n# Headline\n\n"
+                   "![position=bottom-right size=10%](logo.png)",
+                   deck.baseDir(), deck.palette());
+        p.end();
+        QCOMPARE(slide.pixelColor(10, 10), QColor(deck.palette()["background"].toString()));
+    }
+    void placedImageKeepsThemeLayout() {
+        QTemporaryDir tmp;
+        QVERIFY(QDir().mkpath(tmp.path() + "/images"));
+        QImage logo(40, 20, QImage::Format_RGB32);
+        logo.fill(Qt::red);
+        QVERIFY(logo.save(tmp.path() + "/images/logo.png"));
+        Deck deck;
+        QVERIFY(deck.savePath(tmp.path() + "/talk.md"));
+        const QString source = "# Headline\n\n![position=bottom-right size=10%](logo.png)";
+        QImage slide(1920, 1080, QImage::Format_ARGB32_Premultiplied);
+        QPainter p(&slide);
+        paintSlide(&p, slide.rect(), source, deck.baseDir(), deck.palette());
+        p.end();
+        // A 2:1 logo in a 192x108 box is 192x96, pinned to the bottom-right margin.
+        QCOMPARE(slide.pixelColor(1850, 1010), QColor(Qt::red));
+        QCOMPARE(slide.pixelColor(1675, 930), QColor(Qt::red));
+        const QColor background(deck.palette()["background"].toString());
+        QCOMPARE(slide.pixelColor(1850, 915), background);
+        QCOMPARE(slide.pixelColor(10, 10), background); // No overlay or edge-color fill.
+        // The PDF places the logo in the same corner.
+        deck.editSource(source);
+        QVERIFY(deck.exportPdf(tmp.filePath("talk.pdf")));
+        QPdfDocument pdf;
+        QCOMPARE(pdf.load(tmp.filePath("talk.pdf")), QPdfDocument::Error::None);
+        const QImage page = pdf.render(0, QSize(1920, 1080));
+        const QColor corner = page.pixelColor(1850, 1010), outside = page.pixelColor(1850, 900);
+        QVERIFY2(corner.red() > 200 && corner.green() < 60, qPrintable(corner.name()));
+        QVERIFY2(outside.red() < 100, qPrintable(outside.name()));
+        // A missing placed image keeps its placeholder inside the small box.
+        slide.fill(Qt::transparent);
+        p.begin(&slide);
+        paintSlide(&p, slide.rect(), "![position=bottom-right size=10%](gone.png)", deck.baseDir(),
+                   deck.palette());
+        p.end();
+        const QRectF box = mediaRect(parseMedia("![position=bottom-right size=10%](gone.png)", {}));
+        for (int y = 0; y < 1000; ++y) // The error banner fills the bottom 80 pixels.
+            for (int x = 0; x < 1920; ++x)
+                if (!box.contains(x, y) && slide.pixelColor(x, y) != background)
+                    QFAIL(qPrintable(
+                        QString("Placeholder drawn outside its box at %1,%2").arg(x).arg(y)));
     }
     void codeIsNotMedia() {
         QString source = "```markdown\n![](missing.png)\n<!-- Keep this code -->\n```";
@@ -846,7 +1346,8 @@ static void write(const QString &path, const QString &content) {
         Thumbnails provider(&deck);
         const auto chart = provider.requestImage(deck.renderId(0), nullptr, QSize(1920, 1080));
         QCOMPARE(chart.pixelColor(1000, 300), QColor(Qt::blue));
-        deck.editSlide("![layout=title overlay=0.65](chart.png)\n\n# Downloads\n\n**87,184** downloads");
+        deck.editSlide(
+            "![layout=title overlay=0.65](chart.png)\n\n# Downloads\n\n**87,184** downloads");
         const auto reveal = parseMedia(deck.slideSource(), deck.baseDir());
         QCOMPARE(mediaRect(first), mediaRect(reveal));
         QCOMPARE(reveal.text.trimmed(), QString("**87,184** downloads"));
@@ -892,7 +1393,8 @@ static void write(const QString &path, const QString &content) {
         deck.editSlide("![layout=split](art.png)");
         Thumbnails provider(&deck);
         const auto empty = provider.requestImage(deck.renderId(0), nullptr, QSize(1920, 1080));
-        deck.editSlide("![layout=split](art.png)\n\n**Episode 22**\n\n# I tried Omarchy for the first time\n\nUnrehearsed.");
+        deck.editSlide("![layout=split](art.png)\n\n**Episode 22**\n\n# I tried Omarchy for the "
+                       "first time\n\nUnrehearsed.");
         const auto media = parseMedia(deck.slideSource(), deck.baseDir());
         QVERIFY(media.error.isEmpty());
         QVERIFY(!media.span);
@@ -951,7 +1453,9 @@ static void write(const QString &path, const QString &content) {
     }
     void componentsValidateWithSuggestions() {
         QTemporaryDir dir;
-        auto problems = [&](const QString &slide) { return slideProblems(slide, dir.path()).join("\n"); };
+        auto problems = [&](const QString &slide) {
+            return slideProblems(slide, dir.path()).join("\n");
+        };
         QVERIFY(problems("<Crad title=\"x\"/>").contains("did you mean <Card>"));
         QVERIFY(problems("<Card titel=\"x\">Body</Card>").contains("did you mean title"));
         QVERIFY(problems("<Card icon=\"chart-barz\"/>").contains("chart-bar"));
@@ -965,9 +1469,12 @@ static void write(const QString &path, const QString &content) {
         QVERIFY(problems("<Chart>\nnot a table\n</Chart>").contains("Markdown table"));
         QVERIFY(problems("<Slot name=\"x\">\nText\n</Slot>").contains("template component"));
         // Indented children, inline content, heading attributes and data all check clean.
-        QCOMPARE(problems("# Title {align=center}\n\n<Row gap=\"lg\">\n  <Card icon=\"rocket\" title=\"Launch\" tone=\"accent\">\n"
-                          "  **Bold** body\n  </Card>\n  <Stat value=\"42%\" label=\"Growth\" trend=\"up\"/>\n"
-                          "  <Pill tone=\"gradient\">New</Pill>\n</Row>\n\n<Chart type=\"line\">\n| Year | Leads |\n"
+        QCOMPARE(problems("# Title {align=center}\n\n<Row gap=\"lg\">\n  <Card icon=\"rocket\" "
+                          "title=\"Launch\" tone=\"accent\">\n"
+                          "  **Bold** body\n  </Card>\n  <Stat value=\"42%\" label=\"Growth\" "
+                          "trend=\"up\"/>\n"
+                          "  <Pill tone=\"gradient\">New</Pill>\n</Row>\n\n<Chart "
+                          "type=\"line\">\n| Year | Leads |\n"
                           "| --- | --- |\n| FY24 | 4,200 |\n| FY25 | 5,100 |\n</Chart>"),
                  QString());
     }
@@ -982,8 +1489,12 @@ static void write(const QString &path, const QString &content) {
         const auto media = parseMedia("<Logos>\n![](a.png)\n![](b.png)\n</Logos>", ".");
         QVERIFY(media.file.isEmpty());
         QCOMPARE(media.layout, QString("components"));
-        QVERIFY(slideProblems("<Logos>\n![](a.png)\n</Logos>", ".").join(" ").contains("Missing image: a.png"));
-        QVERIFY(!slideProblems("<Logos>\n![](a.png)\n</Logos>", ".").join(" ").contains("one media item"));
+        QVERIFY(slideProblems("<Logos>\n![](a.png)\n</Logos>", ".")
+                    .join(" ")
+                    .contains("Missing image: a.png"));
+        QVERIFY(!slideProblems("<Logos>\n![](a.png)\n</Logos>", ".")
+                     .join(" ")
+                     .contains("one media item"));
     }
     void componentsReadMarkdownData() {
         bool ok = false;
@@ -995,11 +1506,13 @@ static void write(const QString &path, const QString &content) {
         QCOMPARE(parseNumber("**$15,000,000**"), 15e6);
         parseNumber("soon", &ok);
         QVERIFY(!ok);
-        const Table table = parseTable("| Year | A | B |\n| --- | :-: | --- |\n| FY24 | 1 | 2 |\n| FY25 | 3 | a \\| b |");
+        const Table table = parseTable(
+            "| Year | A | B |\n| --- | :-: | --- |\n| FY24 | 1 | 2 |\n| FY25 | 3 | a \\| b |");
         QCOMPARE(table.header, QStringList({"Year", "A", "B"}));
         QCOMPARE(table.rows.size(), 2);
         QCOMPARE(table.rows[1][2], QString("a | b"));
-        const auto items = parseItems("- :rocket: **Launch** Ship it\n  second line\n- Plain\n1. Numbered");
+        const auto items =
+            parseItems("- :rocket: **Launch** Ship it\n  second line\n- Plain\n1. Numbered");
         QCOMPARE(items.size(), 3);
         QCOMPARE(items[0].icon, QString("rocket"));
         QCOMPARE(items[0].title, QString("Launch"));
@@ -1027,11 +1540,15 @@ static void write(const QString &path, const QString &content) {
     }
     void componentsLayOutPaintAndFit() {
         Deck deck;
-        deck.editSource("---\ncolor_background: \"#202020\"\ncolor_foreground: \"#eeeeee\"\n---\n\n"
-                        "<Split ratio=\"1:3\">\n<Panel fill=\"#ff0000\">\n# Left\n</Panel>\n<Panel fill=\"#0000ff\"/>\n</Split>\n\n---\n\n"
-                        "<Background band=\"bottom\" size=\"25%\" fill=\"#00ff00\"/>\n# Title\n\n---\n\n"
-                        "# Packed\n\n<Column>\n" + QString("- An item that takes a whole line of the slide\n").repeated(60) + "</Column>\n\n---\n\n"
-                        "# Roomy\n\n<Row>\n<Stat value=\"42\" label=\"Answer\"/>\n</Row>\n");
+        deck.editSource(
+            "---\ncolor_background: \"#202020\"\ncolor_foreground: \"#eeeeee\"\n---\n\n"
+            "<Split ratio=\"1:3\">\n<Panel fill=\"#ff0000\">\n# Left\n</Panel>\n<Panel "
+            "fill=\"#0000ff\"/>\n</Split>\n\n---\n\n"
+            "<Background band=\"bottom\" size=\"25%\" fill=\"#00ff00\"/>\n# Title\n\n---\n\n"
+            "# Packed\n\n<Column>\n" +
+            QString("- An item that takes a whole line of the slide\n").repeated(60) +
+            "</Column>\n\n---\n\n"
+            "# Roomy\n\n<Row>\n<Stat value=\"42\" label=\"Answer\"/>\n</Row>\n");
         QCOMPARE(deck.count(), 4);
         const QImage split = renderSlide(deck, 0);
         QVERIFY(nearColor(split.pixelColor(240, 1000), QColor("#ff0000"), 2));
@@ -1056,16 +1573,23 @@ static void write(const QString &path, const QString &content) {
         QTemporaryDir dir;
         QVERIFY(QDir(dir.path()).mkpath("templates/brand/images"));
         write(dir.filePath("templates/brand/template.md"),
-              "---\ncolor_accent: \"#123456\"\ncolor_brand: \"#ff8800\"\nframe: Frame\nmargin: \"50 60\"\n---\n\n"
-              "<Define name=\"Frame\">\n<Place at=\"bottom\" inset=\"0\" height=\"12\" fill=\"#00ff00\"/>\n"
-              "<Place at=\"bottom-right\"><Text size=\"xs\">{page}/{pages}</Text></Place>\n{children}\n</Define>\n\n"
-              "<Define name=\"Hero\" title=\"Untitled\" eyebrow=\"\" frame=\"none\">\n<Background fill=\"brand\"/>\n"
-              "<Eyebrow>{eyebrow}</Eyebrow>\n# {title}\n{children}\n<Card>\n{aside}\n</Card>\n</Define>\n\n"
+              "---\ncolor_accent: \"#123456\"\ncolor_brand: \"#ff8800\"\nframe: Frame\nmargin: "
+              "\"50 60\"\n---\n\n"
+              "<Define name=\"Frame\">\n<Place at=\"bottom\" inset=\"0\" height=\"12\" "
+              "fill=\"#00ff00\"/>\n"
+              "<Place at=\"bottom-right\"><Text "
+              "size=\"xs\">{page}/{pages}</Text></Place>\n{children}\n</Define>\n\n"
+              "<Define name=\"Hero\" title=\"Untitled\" eyebrow=\"\" frame=\"none\">\n<Background "
+              "fill=\"brand\"/>\n"
+              "<Eyebrow>{eyebrow}</Eyebrow>\n# "
+              "{title}\n{children}\n<Card>\n{aside}\n</Card>\n</Define>\n\n"
               "<Define name=\"Card\">\nShadowing a built-in is refused.\n</Define>\n");
         write(dir.filePath("talk.md"),
               "---\ntitle: Talk\ntemplate: brand\n---\n\n# Plain\n\n---\n\n"
-              "<Hero title=\"Hi\">\nBody text\n<Slot name=\"aside\">\nAside text\n</Slot>\n</Hero>\n\n---\n\n"
-              "<!-- hype: frame=\"none\" -->\n# No frame\n\n---\n\n<Hero titel=\"x\"/>\n\n---\n\n<Hero>\n<Slot name=\"sidebar\">\nx\n</Slot>\n</Hero>\n");
+              "<Hero title=\"Hi\">\nBody text\n<Slot name=\"aside\">\nAside "
+              "text\n</Slot>\n</Hero>\n\n---\n\n"
+              "<!-- hype: frame=\"none\" -->\n# No frame\n\n---\n\n<Hero "
+              "titel=\"x\"/>\n\n---\n\n<Hero>\n<Slot name=\"sidebar\">\nx\n</Slot>\n</Hero>\n");
         Deck deck;
         QVERIFY(deck.loadPath(dir.filePath("talk.md"), false));
         const QVariantMap palette = deck.palette();
@@ -1076,20 +1600,27 @@ static void write(const QString &path, const QString &content) {
         QCOMPARE(deck.slidePalette(1)["page"].toInt(), 2);
         QCOMPARE(deck.slidePalette(1)["pages"].toInt(), 5);
         QCOMPARE(slideProblems(deck.slide(1), deck.baseDir(), deck.slidePalette(1)), QStringList());
-        QVERIFY(slideProblems(deck.slide(3), deck.baseDir(), deck.slidePalette(3)).join(" ").contains("did you mean title"));
-        QVERIFY(slideProblems(deck.slide(4), deck.baseDir(), deck.slidePalette(4)).join(" ").contains("no slot “sidebar”"));
+        QVERIFY(slideProblems(deck.slide(3), deck.baseDir(), deck.slidePalette(3))
+                    .join(" ")
+                    .contains("did you mean title"));
+        QVERIFY(slideProblems(deck.slide(4), deck.baseDir(), deck.slidePalette(4))
+                    .join(" ")
+                    .contains("no slot “sidebar”"));
         const QImage framed = renderSlide(deck, 0);
         QVERIFY(nearColor(framed.pixelColor(960, 1075), QColor("#00ff00"), 2));
-        const QImage hero = renderSlide(deck, 1); // Hero chooses no frame and paints its own background.
+        const QImage hero =
+            renderSlide(deck, 1); // Hero chooses no frame and paints its own background.
         QVERIFY(nearColor(hero.pixelColor(960, 1075), QColor("#ff8800"), 2));
         const QImage bare = renderSlide(deck, 2);
         QVERIFY(!nearColor(bare.pixelColor(960, 1075), QColor("#00ff00"), 30));
         // Editing the template file reaches the open presentation.
         write(dir.filePath("templates/brand/template.md"),
-              "---\ncolor_accent: \"#654321\"\n---\n\n<Define name=\"Hero\" title=\"\">\n# {title}\n</Define>\n");
+              "---\ncolor_accent: \"#654321\"\n---\n\n<Define name=\"Hero\" title=\"\">\n# "
+              "{title}\n</Define>\n");
         QFile touched(dir.filePath("templates/brand/template.md"));
         QVERIFY(touched.open(QIODevice::ReadWrite));
-        QVERIFY(touched.setFileTime(QDateTime::currentDateTime().addSecs(5), QFileDevice::FileModificationTime));
+        QVERIFY(touched.setFileTime(QDateTime::currentDateTime().addSecs(5),
+                                    QFileDevice::FileModificationTime));
         touched.close();
         QTRY_COMPARE(deck.palette()["accent"].toString(), QString("#654321"));
         QVERIFY(!isComposedSlide(deck.slide(0), deck.palette())); // No frame any more.
@@ -1102,25 +1633,35 @@ static void write(const QString &path, const QString &content) {
         dot.fill(QColor("#00ff00"));
         QVERIFY(dot.save(dir.filePath("base/images/dot.png")));
         // A theme only the base template names.
-        write(dir.filePath("themes/sunset/colors.toml"), "background = \"#203040\"\nforeground = \"#f0f0f0\"\n");
+        write(dir.filePath("themes/sunset/colors.toml"),
+              "background = \"#203040\"\nforeground = \"#f0f0f0\"\n");
         const bool hadOmarchy = qEnvironmentVariableIsSet("OMARCHY_PATH");
         const QByteArray oldOmarchy = qgetenv("OMARCHY_PATH");
         qputenv("OMARCHY_PATH", dir.path().toUtf8());
         const auto restore = qScopeGuard([&] {
-            if (hadOmarchy) qputenv("OMARCHY_PATH", oldOmarchy);
-            else qunsetenv("OMARCHY_PATH");
+            if (hadOmarchy)
+                qputenv("OMARCHY_PATH", oldOmarchy);
+            else
+                qunsetenv("OMARCHY_PATH");
         });
-        const QString base = "---\ntitle: Base\ntheme: sunset\ncolor_accent: \"#112233\"\ncolor_brand: \"%1\"\nframe: Frame\n---\n\n"
-                             "<Define name=\"Frame\">\n<Place at=\"bottom\" inset=\"0\" height=\"12\" fill=\"brand\"/>\n{children}\n</Define>\n\n"
-                             "<Define name=\"Dot\">\n<Image src=\"dot.png\" height=\"300\"/>\n</Define>\n\n# Base\n\n<Dot/>\n";
+        const QString base = "---\ntitle: Base\ntheme: sunset\ncolor_accent: "
+                             "\"#112233\"\ncolor_brand: \"%1\"\nframe: Frame\n---\n\n"
+                             "<Define name=\"Frame\">\n<Place at=\"bottom\" inset=\"0\" "
+                             "height=\"12\" fill=\"brand\"/>\n{children}\n</Define>\n\n"
+                             "<Define name=\"Dot\">\n<Image src=\"dot.png\" "
+                             "height=\"300\"/>\n</Define>\n\n# Base\n\n<Dot/>\n";
         write(dir.filePath("base/presentation.md"), base.arg("#ff8800"));
         // A presentation is a template, and builds on its own; a definition may follow its uses.
         write(dir.filePath("kit/presentation.md"),
-              "---\ntitle: Kit\ntemplate: ../base\ncolor_accent: \"#ea385e\"\n---\n\n<Hero>Hello</Hero>\n\n---\n\n"
-              "<Define name=\"Hero\" frame=\"none\">\n<Background fill=\"accent\"/>\n# {children}\n</Define>\n");
+              "---\ntitle: Kit\ntemplate: ../base\ncolor_accent: "
+              "\"#ea385e\"\n---\n\n<Hero>Hello</Hero>\n\n---\n\n"
+              "<Define name=\"Hero\" frame=\"none\">\n<Background fill=\"accent\"/>\n# "
+              "{children}\n</Define>\n");
         write(dir.filePath("talk.md"),
-              "---\ntitle: Talk\ntemplate: kit\n---\n\n<Hero>Welcome</Hero>\n\n---\n\n<Said>Words</Said>\n\n---\n\n"
-              "<Define name=\"Said\">\n<Background fill=\"#0000ff\"/>\n{children}\n</Define>\n\n<Dot/>\n");
+              "---\ntitle: Talk\ntemplate: "
+              "kit\n---\n\n<Hero>Welcome</Hero>\n\n---\n\n<Said>Words</Said>\n\n---\n\n"
+              "<Define name=\"Said\">\n<Background "
+              "fill=\"#0000ff\"/>\n{children}\n</Define>\n\n<Dot/>\n");
         Deck deck;
         QVERIFY(deck.loadPath(dir.filePath("talk.md"), false));
         const QVariantMap palette = deck.palette();
@@ -1129,23 +1670,28 @@ static void write(const QString &path, const QString &content) {
         QCOMPARE(palette["background"].toString(), QString("#203040")); // which keeps its theme.
         QCOMPARE(palette["template_error"].toString(), QString());
         for (int i = 0; i < deck.count(); ++i)
-            QCOMPARE(slideProblems(deck.slide(i), deck.baseDir(), deck.slidePalette(i)), QStringList());
+            QCOMPARE(slideProblems(deck.slide(i), deck.baseDir(), deck.slidePalette(i)),
+                     QStringList());
         const QImage hero = renderSlide(deck, 0);
         QVERIFY(nearColor(hero.pixelColor(600, 900), QColor("#ea385e"), 2));
-        QVERIFY(!nearColor(hero.pixelColor(960, 1075), QColor("#ff8800"), 30)); // Hero asks for no frame.
+        QVERIFY(!nearColor(hero.pixelColor(960, 1075), QColor("#ff8800"),
+                           30));                  // Hero asks for no frame.
         const QImage said = renderSlide(deck, 1); // Defined on a later slide.
         QVERIFY(nearColor(said.pixelColor(600, 600), QColor("#0000ff"), 2));
         QVERIFY(nearColor(said.pixelColor(960, 1075), QColor("#ff8800"), 2));
-        // The slide holding a definition shows none of it; the base's picture comes from its folder.
+        // The slide holding a definition shows none of it; the base's picture comes from its
+        // folder.
         const QImage defining = renderSlide(deck, 2);
         QVERIFY(nearColor(defining.pixelColor(1500, 600), QColor("#203040"), 2));
         int green = 0;
         for (int y = 0; y < 1080; y += 4)
-            for (int x = 0; x < 1920; x += 4) green += nearColor(defining.pixelColor(x, y), QColor("#00ff00"), 8);
+            for (int x = 0; x < 1920; x += 4)
+                green += nearColor(defining.pixelColor(x, y), QColor("#00ff00"), 8);
         QVERIFY2(green > 500, qPrintable(QString::number(green)));
         QVERIFY(!parseMedia(deck.slide(2), deck.baseDir()).text.contains("Define"));
 
-        // Editing a slide leaves the definitions, and so every thumbnail, alone; editing one doesn't.
+        // Editing a slide leaves the definitions, and so every thumbnail, alone; editing one
+        // doesn't.
         const QString id = deck.palette()["template_id"].toString();
         deck.editSource(QString(deck.source()).replace("Words", "Other words"));
         QCOMPARE(deck.palette()["template_id"].toString(), id);
@@ -1171,22 +1717,29 @@ static void write(const QString &path, const QString &content) {
         write(dir.filePath("base/presentation.md"), base.arg("#00ffff"));
         QFile touched(dir.filePath("base/presentation.md"));
         QVERIFY(touched.open(QIODevice::ReadWrite));
-        QVERIFY(touched.setFileTime(QDateTime::currentDateTime().addSecs(5), QFileDevice::FileModificationTime));
+        QVERIFY(touched.setFileTime(QDateTime::currentDateTime().addSecs(5),
+                                    QFileDevice::FileModificationTime));
         touched.close();
         QTRY_COMPARE(deck.palette()["brand"].toString(), QString("#00ffff"));
 
         // A presentation's own definition wins over its template's.
-        write(dir.filePath("own.md"), "---\ntemplate: kit/presentation.md\n---\n\n<Hero>Mine</Hero>\n\n"
-                                      "<Define name=\"Hero\" frame=\"none\">\n<Background fill=\"#00ffff\"/>\n{children}\n</Define>\n");
+        write(dir.filePath("own.md"),
+              "---\ntemplate: kit/presentation.md\n---\n\n<Hero>Mine</Hero>\n\n"
+              "<Define name=\"Hero\" frame=\"none\">\n<Background "
+              "fill=\"#00ffff\"/>\n{children}\n</Define>\n");
         Deck own;
         QVERIFY(own.loadPath(dir.filePath("own.md"), false));
         QVERIFY(nearColor(renderSlide(own, 0).pixelColor(600, 600), QColor("#00ffff"), 2));
 
         // Definitions are checked on the slide they're written on.
-        const QStringList bad = slideProblems("# Hi\n\n<Define name=\"lower\">\nx\n</Define>\n\n<Define name=\"Card\">\nx\n</Define>\n",
-                                              dir.path(), {});
-        QVERIFY2(bad.contains("Slide line 3: <Define> needs name=\"PascalCase\""), qPrintable(bad.join("\n")));
-        QVERIFY2(bad.filter("Slide line 7: <Card> is a built-in").size() == 1, qPrintable(bad.join("\n")));
+        const QStringList bad =
+            slideProblems("# Hi\n\n<Define name=\"lower\">\nx\n</Define>\n\n<Define "
+                          "name=\"Card\">\nx\n</Define>\n",
+                          dir.path(), {});
+        QVERIFY2(bad.contains("Slide line 3: <Define> needs name=\"PascalCase\""),
+                 qPrintable(bad.join("\n")));
+        QVERIFY2(bad.filter("Slide line 7: <Card> is a built-in").size() == 1,
+                 qPrintable(bad.join("\n")));
         // A template can't build on the presentation using it, directly or not.
         write(dir.filePath("loop.md"), "---\ntemplate: loop.md\n---\n\n# Loop\n");
         Deck loop;
@@ -1200,44 +1753,61 @@ static void write(const QString &path, const QString &content) {
     void componentsDrawDiagramsAndMedia() {
         QTemporaryDir dir;
         QVERIFY(QDir(dir.path()).mkpath("images") && QDir(dir.path()).mkpath("videos"));
-        for (const auto &[name, color] : {std::pair{"red.png", "#ff0000"}, std::pair{"blue.png", "#0000ff"},
-                                          std::pair{"green.png", "#00ff00"}}) {
+        for (const auto &[name, color] :
+             {std::pair{"red.png", "#ff0000"}, std::pair{"blue.png", "#0000ff"},
+              std::pair{"green.png", "#00ff00"}}) {
             QImage image(400, 300, QImage::Format_RGB32);
             image.fill(QColor(color));
             QVERIFY(image.save(dir.filePath(QString("images/") + name)));
         }
-        auto problems = [&](const QString &slide) { return slideProblems(slide, dir.path()).join("\n"); };
+        auto problems = [&](const QString &slide) {
+            return slideProblems(slide, dir.path()).join("\n");
+        };
         // Every new component and prop checks clean when used correctly...
-        QCOMPARE(problems("<Tree>\n- ![](red.png) **Avery** Lead\n  - **Blake** Design\n  - **Casey** Build\n</Tree>"), QString());
+        QCOMPARE(problems("<Tree>\n- ![](red.png) **Avery** Lead\n  - **Blake** Design\n  - "
+                          "**Casey** Build\n</Tree>"),
+                 QString());
         QCOMPARE(problems("<QR value=\"https://example.com\" label=\"Scan\"/>"), QString());
-        QCOMPARE(problems("<Collage rows=\"1,2\">\n![](red.png)\n![](blue.png)\n![](green.png)\n</Collage>"), QString());
-        QCOMPARE(problems("<Venn center-image=\"red.png\">\n- A\n- B\n- C\n- D\n</Venn>"), QString());
+        QCOMPARE(
+            problems(
+                "<Collage rows=\"1,2\">\n![](red.png)\n![](blue.png)\n![](green.png)\n</Collage>"),
+            QString());
+        QCOMPARE(problems("<Venn center-image=\"red.png\">\n- A\n- B\n- C\n- D\n</Venn>"),
+                 QString());
         QCOMPARE(problems("<Text rotate=\"-90\" tone=\"gradient\">Turned</Text>"), QString());
-        QCOMPARE(problems("<Gantt groups=\"side\">\n| Task | Start | End | Phase |\n| --- | --- | --- | --- |\n| A | 1 | 3 | One |\n</Gantt>"),
+        QCOMPARE(problems("<Gantt groups=\"side\">\n| Task | Start | End | Phase |\n| --- | --- | "
+                          "--- | --- |\n| A | 1 | 3 | One |\n</Gantt>"),
                  QString());
         QCOMPARE(problems("<Steps hub=\"Shared\">\n- **One**\n- **Two**\n</Steps>"), QString());
-        QCOMPARE(problems("<Cycle phases=\"Plan, Do\" center-image=\"red.png\">\n- A\n- B\n- C\n</Cycle>"), QString());
+        QCOMPARE(
+            problems(
+                "<Cycle phases=\"Plan, Do\" center-image=\"red.png\">\n- A\n- B\n- C\n</Cycle>"),
+            QString());
         // ...and says what is wrong when not.
         QVERIFY(problems("<Venn>\n- A\n- B\n- C\n- D\n- E\n</Venn>").contains("four list items"));
         QVERIFY(problems("<Collage>\n</Collage>").contains("needs images"));
-        QVERIFY(problems("<Tree>\n- ![](gone.png) **X**\n</Tree>").contains("Missing image: gone.png"));
+        QVERIFY(
+            problems("<Tree>\n- ![](gone.png) **X**\n</Tree>").contains("Missing image: gone.png"));
         QVERIFY(problems("<QR value=\"" + QString(5000, 'x') + "\"/>").contains("too long"));
         QVERIFY(problems("<Video src=\"gone.mp4\"/>").contains("Missing video: gone.mp4"));
         QVERIFY(problems("<Text rotate=\"45\">x</Text>").contains("0, 90, -90"));
 
         Deck deck;
-        deck.editSource("---\ncolor_background: \"#ffffff\"\ncolor_foreground: \"#111111\"\n---\n\n"
-                        "<Collage rows=\"1,2\" gap=\"0\" radius=\"0\">\n![](red.png)\n![](blue.png)\n![](green.png)\n</Collage>\n\n---\n\n"
-                        "<QR value=\"https://example.com\" size=\"600\"/>\n\n---\n\n"
-                        "<Row>\n<Text rotate=\"-90\" size=\"60\">Turned text</Text>\n</Row>\n\n---\n\n"
-                        "<Text size=\"90\" tone=\"#ff0000 #0000ff\">WWWWWWWWWWWW</Text>\n");
+        deck.editSource(
+            "---\ncolor_background: \"#ffffff\"\ncolor_foreground: \"#111111\"\n---\n\n"
+            "<Collage rows=\"1,2\" gap=\"0\" "
+            "radius=\"0\">\n![](red.png)\n![](blue.png)\n![](green.png)\n</Collage>\n\n---\n\n"
+            "<QR value=\"https://example.com\" size=\"600\"/>\n\n---\n\n"
+            "<Row>\n<Text rotate=\"-90\" size=\"60\">Turned text</Text>\n</Row>\n\n---\n\n"
+            "<Text size=\"90\" tone=\"#ff0000 #0000ff\">WWWWWWWWWWWW</Text>\n");
         auto at = [&](int index) {
             Deck copy;
             copy.editSource(deck.source());
             QImage image(1920, 1080, QImage::Format_ARGB32_Premultiplied);
             image.fill(Qt::transparent);
             QPainter painter(&image);
-            paintSlide(&painter, image.rect(), copy.slide(index), dir.path(), copy.slidePalette(index));
+            paintSlide(&painter, image.rect(), copy.slide(index), dir.path(),
+                       copy.slidePalette(index));
             return image;
         };
         // The collage fills its area: one picture across the top, two below.
@@ -1249,27 +1819,32 @@ static void write(const QString &path, const QString &content) {
         const QImage qr = at(1);
         int dark = 0;
         for (int y = 0; y < 1080; y += 4)
-            for (int x = 0; x < 1920; x += 4) dark += qr.pixelColor(x, y).lightness() < 60;
+            for (int x = 0; x < 1920; x += 4)
+                dark += qr.pixelColor(x, y).lightness() < 60;
         QVERIFY(dark > 2000);
         // Turned text is taller than it is wide.
         const QImage turned = at(2);
         QRect ink;
         for (int y = 0; y < 1080; ++y)
             for (int x = 0; x < 1920; ++x)
-                if (turned.pixelColor(x, y).lightness() < 100) ink |= QRect(x, y, 1, 1);
-        QVERIFY2(ink.height() > ink.width() * 3, qPrintable(QString("%1x%2").arg(ink.width()).arg(ink.height())));
+                if (turned.pixelColor(x, y).lightness() < 100)
+                    ink |= QRect(x, y, 1, 1);
+        QVERIFY2(ink.height() > ink.width() * 3,
+                 qPrintable(QString("%1x%2").arg(ink.width()).arg(ink.height())));
         // Gradient text runs from one color to the other across the line.
         const QImage gradient = at(3);
         QColor left, right;
         for (int x = 0; x < 1920 && !left.isValid(); ++x)
             for (int y = 0; y < 1080; ++y)
-                if (gradient.pixelColor(x, y).alpha() > 250 && gradient.pixelColor(x, y).lightness() < 200) {
+                if (gradient.pixelColor(x, y).alpha() > 250 &&
+                    gradient.pixelColor(x, y).lightness() < 200) {
                     left = gradient.pixelColor(x, y);
                     break;
                 }
         for (int x = 1919; x >= 0 && !right.isValid(); --x)
             for (int y = 0; y < 1080; ++y)
-                if (gradient.pixelColor(x, y).alpha() > 250 && gradient.pixelColor(x, y).lightness() < 200) {
+                if (gradient.pixelColor(x, y).alpha() > 250 &&
+                    gradient.pixelColor(x, y).lightness() < 200) {
                     right = gradient.pixelColor(x, y);
                     break;
                 }
@@ -1284,8 +1859,9 @@ static void write(const QString &path, const QString &content) {
         QVERIFY(video.open(QIODevice::WriteOnly));
         video.write("not decoded here");
         video.close();
-        const QString slide = "<Row>\n<Video src=\"demo.mp4\" aspect=\"16:9\" autoplay=\"false\" loop muted/>\n"
-                              "<Text>Beside it</Text>\n</Row>\n";
+        const QString slide =
+            "<Row>\n<Video src=\"demo.mp4\" aspect=\"16:9\" autoplay=\"false\" loop muted/>\n"
+            "<Text>Beside it</Text>\n</Row>\n";
         const Media media = parseMedia(slide, dir.path());
         QVERIFY(media.video);
         QCOMPARE(media.layout, QString("components"));
@@ -1311,14 +1887,17 @@ static void write(const QString &path, const QString &content) {
     }
     void componentLayoutRules() {
         QTemporaryDir dir;
-        auto problems = [&](const QString &slide) { return slideProblems(slide, dir.path()).join("\n"); };
+        auto problems = [&](const QString &slide) {
+            return slideProblems(slide, dir.path()).join("\n");
+        };
         // Tags may follow one another on a line; a typo in the second is still found.
         QVERIFY(problems("<Row>\n<Spacer size=\"10\"/><Crad/>\n</Row>").contains("<Crad>"));
         QCOMPARE(problems("<Column><Spacer size=\"10\"/><Card title=\"x\"/></Column>"), QString());
         Deck deck;
         // A box's height is a minimum: content taller than it doesn't shrink the slide forever.
         QString warning;
-        deck.editSource("<Column height=\"100px\">\n" + QString("Line of text\n\n").repeated(6) + "</Column>\n");
+        deck.editSource("<Column height=\"100px\">\n" + QString("Line of text\n\n").repeated(6) +
+                        "</Column>\n");
         renderSlide(deck, 0, &warning);
         QVERIFY2(warning.isEmpty(), qPrintable(warning));
         // A list item's text on the next line stays under its title.
@@ -1330,21 +1909,30 @@ static void write(const QString &path, const QString &content) {
         QTemporaryDir dir;
         QVERIFY(QDir(dir.path()).mkpath("templates/brand") && QDir(dir.path()).mkpath("images"));
         write(dir.filePath("templates/brand/template.md"),
-              "---\nframe: Page\n---\n\n<Define name=\"Page\">\n<Place at=\"bottom\" inset=\"0\" height=\"8\" fill=\"accent\"/>\n"
-              "{children}\n</Define>\n\n<Define name=\"Box\" title=\"\">\n<Card title=\"{title}\">\n{children}\n</Card>\n</Define>\n");
-        write(dir.filePath("talk.md"), "---\ntemplate: brand\n---\n\n# Framed\n\n<Image/>\n\n<Row>\n<Card>\nUnclosed\n</Row>\n\n"
+              "---\nframe: Page\n---\n\n<Define name=\"Page\">\n<Place at=\"bottom\" inset=\"0\" "
+              "height=\"8\" fill=\"accent\"/>\n"
+              "{children}\n</Define>\n\n<Define name=\"Box\" title=\"\">\n<Card "
+              "title=\"{title}\">\n{children}\n</Card>\n</Define>\n");
+        write(dir.filePath("talk.md"), "---\ntemplate: brand\n---\n\n# "
+                                       "Framed\n\n<Image/>\n\n<Row>\n<Card>\nUnclosed\n</Row>\n\n"
                                        "---\n\n<Box title=\"x\">\n<Icon/>\n</Box>\n");
         Deck deck;
         QVERIFY(deck.loadPath(dir.filePath("talk.md"), false));
-        // In a framed slide, the author's lines keep their numbers and their checks; nothing doubles.
-        const QStringList framed = slideProblems(deck.slide(0), deck.baseDir(), deck.slidePalette(0));
+        // In a framed slide, the author's lines keep their numbers and their checks; nothing
+        // doubles.
+        const QStringList framed =
+            slideProblems(deck.slide(0), deck.baseDir(), deck.slidePalette(0));
         // A slide's source starts with the blank line after its separator.
-        QVERIFY2(framed.contains("<Image> on slide line 4 needs src=\"…\""), qPrintable(framed.join("\n")));
+        QVERIFY2(framed.contains("<Image> on slide line 4 needs src=\"…\""),
+                 qPrintable(framed.join("\n")));
         QCOMPARE(framed.filter("never closed").size(), 1);
-        QVERIFY2(framed.filter("never closed").first().contains("slide line 7"), qPrintable(framed.join("\n")));
+        QVERIFY2(framed.filter("never closed").first().contains("slide line 7"),
+                 qPrintable(framed.join("\n")));
         // Children passed through a template component are checked like any other content.
-        const QStringList boxed = slideProblems(deck.slide(1), deck.baseDir(), deck.slidePalette(1));
-        QVERIFY2(boxed.contains("<Icon> on slide line 3 needs name=\"…\""), qPrintable(boxed.join("\n")));
+        const QStringList boxed =
+            slideProblems(deck.slide(1), deck.baseDir(), deck.slidePalette(1));
+        QVERIFY2(boxed.contains("<Icon> on slide line 3 needs name=\"…\""),
+                 qPrintable(boxed.join("\n")));
         // The palette names the template by id instead of carrying its text.
         const QString id = deck.palette()["template_id"].toString();
         QCOMPARE(id.size(), 40);
@@ -1383,7 +1971,8 @@ static void write(const QString &path, const QString &content) {
         QVERIFY(image.save(dir.filePath("images/photo.png")));
         QFile touched(dir.filePath("images/photo.png"));
         QVERIFY(touched.open(QIODevice::ReadWrite));
-        QVERIFY(touched.setFileTime(QDateTime::currentDateTime().addSecs(10), QFileDevice::FileModificationTime));
+        QVERIFY(touched.setFileTime(QDateTime::currentDateTime().addSecs(10),
+                                    QFileDevice::FileModificationTime));
         touched.close();
         QTest::qWait(1100); // Render ids are reused for a second.
         QVERIFY(pictures.renderId(0) != before);
@@ -1409,64 +1998,82 @@ static void write(const QString &path, const QString &content) {
         };
         const auto data = setEnv("XDG_DATA_HOME", dir.filePath("data").toUtf8());
         const auto state = setEnv("XDG_STATE_HOME", dir.filePath("state").toUtf8());
-        QVERIFY(QDir(dir.path()).mkpath("kit/images") && QDir(dir.path()).mkpath("kit/templates/base") &&
-                QDir(dir.path()).mkpath("talk"));
+        QVERIFY(QDir(dir.path()).mkpath("kit/images") &&
+                QDir(dir.path()).mkpath("kit/templates/base") && QDir(dir.path()).mkpath("talk"));
         QImage dot(40, 40, QImage::Format_RGB32);
         dot.fill(QColor("#00ff00"));
         QVERIFY(dot.save(dir.filePath("kit/images/dot.png")));
-        write(dir.filePath("kit/templates/base/template.md"), "---\ncolor_brand: \"#ff8800\"\n---\n");
-        const QString kit = "---\ntitle: Kit\ntemplate: base\ncolor_accent: \"%1\"\n---\n\n"
-                            "<Define name=\"Dot\">\n<Image src=\"dot.png\" height=\"300\"/>\n</Define>\n\n"
-                            "<Define name=\"Hero\" frame=\"none\">\n<Background fill=\"accent\"/>\n# {children}\n</Define>\n\n"
-                            "---\n\n<Hero>Hello there</Hero>\n\n---\n\n# Spots\n\n<Dot/>\n";
+        write(dir.filePath("kit/templates/base/template.md"),
+              "---\ncolor_brand: \"#ff8800\"\n---\n");
+        const QString kit =
+            "---\ntitle: Kit\ntemplate: base\ncolor_accent: \"%1\"\n---\n\n"
+            "<Define name=\"Dot\">\n<Image src=\"dot.png\" height=\"300\"/>\n</Define>\n\n"
+            "<Define name=\"Hero\" frame=\"none\">\n<Background fill=\"accent\"/>\n# "
+            "{children}\n</Define>\n\n"
+            "---\n\n<Hero>Hello there</Hero>\n\n---\n\n# Spots\n\n<Dot/>\n";
         write(dir.filePath("kit/presentation.md"), kit.arg("#112233"));
         const QString library = templates::libraryDirectory();
         QCOMPARE(library, dir.filePath("data") + "/hype/templates");
 
         // A link follows the presentation; its pictures come from beside the file it follows.
         QString saved;
-        QCOMPARE(templates::save(dir.filePath("kit/presentation.md"), "", false, false, &saved), QString());
+        QCOMPARE(templates::save(dir.filePath("kit/presentation.md"), "", false, false, &saved),
+                 QString());
         QCOMPARE(saved, library + "/kit");
         QVERIFY(QFileInfo(library + "/kit/presentation.md").isSymLink());
-        QVERIFY(templates::save(dir.filePath("kit/presentation.md"), "kit", false, false, &saved).contains("already exists"));
-        QCOMPARE(templates::save(dir.filePath("kit/presentation.md"), "kit", false, true, &saved), QString());
-        QVERIFY(templates::save(dir.filePath("kit/presentation.md"), "../x", false, false, &saved).contains("Name the template"));
+        QVERIFY(templates::save(dir.filePath("kit/presentation.md"), "kit", false, false, &saved)
+                    .contains("already exists"));
+        QCOMPARE(templates::save(dir.filePath("kit/presentation.md"), "kit", false, true, &saved),
+                 QString());
+        QVERIFY(templates::save(dir.filePath("kit/presentation.md"), "../x", false, false, &saved)
+                    .contains("Name the template"));
         // A copy keeps it as it was, and names the template it found beside it by path.
-        QCOMPARE(templates::save(dir.filePath("kit/presentation.md"), "frozen", true, false, &saved), QString());
+        QCOMPARE(
+            templates::save(dir.filePath("kit/presentation.md"), "frozen", true, false, &saved),
+            QString());
         QVERIFY(QFileInfo::exists(library + "/frozen/images/dot.png"));
         QFile copied(library + "/frozen/presentation.md");
         QVERIFY(copied.open(QIODevice::ReadOnly));
-        QVERIFY(QString::fromUtf8(copied.readAll()).contains("template: \"" + dir.filePath("kit/templates/base/template.md") + "\""));
+        QVERIFY(
+            QString::fromUtf8(copied.readAll())
+                .contains("template: \"" + dir.filePath("kit/templates/base/template.md") + "\""));
         copied.close();
         write(dir.filePath("kit/presentation.md"), kit.arg("#445566"));
 
         const auto found = templates::available(dir.filePath("talk"));
         QStringList names;
-        for (const auto &entry : found) names << entry.name + ":" + entry.where;
+        for (const auto &entry : found)
+            names << entry.name + ":" + entry.where;
         QCOMPARE(names, QStringList({"frozen:library", "kit:library", "omarchy:built-in"}));
-        QCOMPARE(found[1].linked, QFileInfo(dir.filePath("kit/presentation.md")).canonicalFilePath());
+        QCOMPARE(found[1].linked,
+                 QFileInfo(dir.filePath("kit/presentation.md")).canonicalFilePath());
         QCOMPARE(found[1].components, QStringList({"Dot", "Hero"}));
-        QCOMPARE(found[1].slides, 2); // The slide holding only definitions offers nothing to start from.
+        QCOMPARE(found[1].slides,
+                 2); // The slide holding only definitions offers nothing to start from.
         QCOMPARE(found[1].buildsOn, QString("base"));
 
         // A presentation names them like any template.
         write(dir.filePath("talk/presentation.md"),
-              "---\ntitle: Talk\ntheme: tokyo-night\ncolor_background: \"#000000\"\nfont: \"Serif\"\ntemplate: frozen\n---\n\n# One\n\n---\n\n<Dot/>\n");
+              "---\ntitle: Talk\ntheme: tokyo-night\ncolor_background: \"#000000\"\nfont: "
+              "\"Serif\"\ntemplate: frozen\n---\n\n# One\n\n---\n\n<Dot/>\n");
         Deck deck;
         QVERIFY(deck.loadPath(dir.filePath("talk/presentation.md"), false));
         QCOMPARE(deck.palette()["template_error"].toString(), QString());
         QCOMPARE(deck.palette()["brand"].toString(), QString("#ff8800"));
-        QCOMPARE(deck.palette()["background"].toString(), QString("#000000")); // Its own colors win.
+        QCOMPARE(deck.palette()["background"].toString(),
+                 QString("#000000")); // Its own colors win.
         deck.chooseTemplate("kit");
         QCOMPARE(deck.templateName(), QString("kit"));
-        QVERIFY(!deck.source().contains("color_background") && !deck.source().contains("theme:") && !deck.source().contains("font:"));
+        QVERIFY(!deck.source().contains("color_background") && !deck.source().contains("theme:") &&
+                !deck.source().contains("font:"));
         QCOMPARE(deck.palette()["accent"].toString(), QString("#445566"));
         QCOMPARE(deck.palette()["brand"].toString(), QString("#ff8800"));
         QCOMPARE(slideProblems(deck.slide(1), deck.baseDir(), deck.slidePalette(1)), QStringList());
         int green = 0;
         const QImage spots = renderSlide(deck, 1);
         for (int y = 0; y < 1080; y += 8)
-            for (int x = 0; x < 1920; x += 8) green += nearColor(spots.pixelColor(x, y), QColor("#00ff00"), 8);
+            for (int x = 0; x < 1920; x += 8)
+                green += nearColor(spots.pixelColor(x, y), QColor("#00ff00"), 8);
         QVERIFY2(green > 100, qPrintable(QString::number(green)));
 
         // The template's slides start new ones, without its definitions.
@@ -1475,9 +2082,11 @@ static void write(const QString &path, const QString &content) {
         QCOMPARE(starters[0].toMap()["label"].toString(), QString("Hero · Hello there"));
         QCOMPARE(starters[1].toMap()["label"].toString(), QString("Dot · Spots"));
         QCOMPARE(templates::slideLabel("<Card title=\"x\">\nWords\n</Card>"), QString("Words"));
-        QCOMPARE(templates::slideLabel("<Profile image=\"a.png\" name=\"Avery  \nChen\" title=\"Founder\">\nBio\n</Profile>"),
+        QCOMPARE(templates::slideLabel("<Profile image=\"a.png\" name=\"Avery  \nChen\" "
+                                       "title=\"Founder\">\nBio\n</Profile>"),
                  QString("Profile · Avery Chen"));
-        QCOMPARE(templates::slideLabel("<!-- note -->\n<Eyebrow>Proof</Eyebrow>\n<Stat value=\"5x\"/>\n\n- **First** point"),
+        QCOMPARE(templates::slideLabel("<!-- note -->\n<Eyebrow>Proof</Eyebrow>\n<Stat "
+                                       "value=\"5x\"/>\n\n- **First** point"),
                  QString("Proof"));
         deck.select(0);
         deck.addTemplateSlide(0);
@@ -1491,18 +2100,21 @@ static void write(const QString &path, const QString &content) {
         QVERIFY(choices[1].toMap()["current"].toBool());
         Thumbnails thumbnails(&deck);
         QSize size;
-        const QImage preview = thumbnails.requestImage(choices[1].toMap()["preview"].toString(), &size, QSize(192, 108));
+        const QImage preview = thumbnails.requestImage(choices[1].toMap()["preview"].toString(),
+                                                       &size, QSize(192, 108));
         QVERIFY(nearColor(preview.pixelColor(60, 90), QColor("#445566"), 3));
         deck.chooseTemplate("");
         QVERIFY(!deck.source().contains("template:"));
 
         // A presentation's definitions survive edits that move or add slides.
         Deck own;
-        own.editSource("<Define name=\"Mark\">\n<Background fill=\"#ff00ff\"/>\n</Define>\n\n# A\n\n---\n\n<Mark/>\n");
+        own.editSource("<Define name=\"Mark\">\n<Background fill=\"#ff00ff\"/>\n</Define>\n\n# "
+                       "A\n\n---\n\n<Mark/>\n");
         own.select(0);
         own.addSlide();
         own.moveSlide(2, 1);
-        QVERIFY2(nearColor(renderSlide(own, 1).pixelColor(600, 600), QColor("#ff00ff"), 2), qPrintable(own.source()));
+        QVERIFY2(nearColor(renderSlide(own, 1).pixelColor(600, 600), QColor("#ff00ff"), 2),
+                 qPrintable(own.source()));
 
         // Saving from the editor needs a file, and refuses a template that would build on itself.
         QVERIFY(own.saveAsTemplate("own", false, false).contains("Save the presentation first"));
@@ -1517,26 +2129,32 @@ static void write(const QString &path, const QString &content) {
         QString removed;
         QCOMPARE(templates::remove("kit", &removed), QString());
         QVERIFY(removed.contains("untouched"));
-        QVERIFY(QFileInfo::exists(dir.filePath("kit/presentation.md")) && !QFileInfo::exists(library + "/kit"));
+        QVERIFY(QFileInfo::exists(dir.filePath("kit/presentation.md")) &&
+                !QFileInfo::exists(library + "/kit"));
         QCOMPARE(templates::remove("frozen", &removed), QString());
         QVERIFY(!QFileInfo::exists(library + "/frozen"));
         QVERIFY(templates::remove("nothing", &removed).contains("No template"));
     }
     void boldToneColorsBoldWords() {
         Deck deck;
-        // Bold words in heading type, all one color, once made Qt merge fragments under the formatter.
-        deck.editSource("---\ncolor_accent: \"#ff0000\"\ncolor_background: \"#000000\"\n---\n\n"
-                        "<Text font=\"heading\" size=\"120\" tone=\"white\">**Big** words</Text>\n\n---\n\n"
-                        "<Text font=\"heading\" size=\"120\" tone=\"white\" bold-tone=\"accent\">**Big** words</Text>\n\n---\n\n"
-                        "<Column bold-tone=\"#00ff00\">\n# Plain **Lit** plain\n</Column>\n");
+        // Bold words in heading type, all one color, once made Qt merge fragments under the
+        // formatter.
+        deck.editSource(
+            "---\ncolor_accent: \"#ff0000\"\ncolor_background: \"#000000\"\n---\n\n"
+            "<Text font=\"heading\" size=\"120\" tone=\"white\">**Big** words</Text>\n\n---\n\n"
+            "<Text font=\"heading\" size=\"120\" tone=\"white\" bold-tone=\"accent\">**Big** "
+            "words</Text>\n\n---\n\n"
+            "<Column bold-tone=\"#00ff00\">\n# Plain **Lit** plain\n</Column>\n");
         auto count = [](const QImage &image, const QColor &color, const QRect &area) {
             int n = 0;
             for (int y = area.top(); y < area.bottom(); y += 2)
-                for (int x = area.left(); x < area.right(); x += 2) n += nearColor(image.pixelColor(x, y), color, 40);
+                for (int x = area.left(); x < area.right(); x += 2)
+                    n += nearColor(image.pixelColor(x, y), color, 40);
             return n;
         };
         const QImage white = renderSlide(deck, 0);
-        QCOMPARE(count(white, QColor("#ff0000"), white.rect()), 0); // A tone colors bold words with it.
+        QCOMPARE(count(white, QColor("#ff0000"), white.rect()),
+                 0); // A tone colors bold words with it.
         const QImage red = renderSlide(deck, 1);
         QVERIFY(count(red, QColor("#ff0000"), red.rect()) > 200);
         QVERIFY(count(red, QColor("#ffffff"), red.rect()) > 200);
@@ -1547,21 +2165,29 @@ static void write(const QString &path, const QString &content) {
         int left = 1920, right = 0;
         for (int y = 0; y < 1080; y += 2)
             for (int x = 0; x < 1920; x += 2)
-                if (nearColor(heading.pixelColor(x, y), QColor("#00ff00"), 40)) left = qMin(left, x), right = qMax(right, x);
+                if (nearColor(heading.pixelColor(x, y), QColor("#00ff00"), 40))
+                    left = qMin(left, x), right = qMax(right, x);
         int ink = 1920;
         for (int y = 0; y < 1080; y += 2)
             for (int x = 0; x < 1920; x += 2)
-                if (heading.pixelColor(x, y).lightness() > 120 && !nearColor(heading.pixelColor(x, y), QColor("#00ff00"), 40)) ink = qMin(ink, x);
-        QVERIFY2(ink < left, qPrintable(QString("plain text from %1, green from %2").arg(ink).arg(left)));
+                if (heading.pixelColor(x, y).lightness() > 120 &&
+                    !nearColor(heading.pixelColor(x, y), QColor("#00ff00"), 40))
+                    ink = qMin(ink, x);
+        QVERIFY2(ink < left,
+                 qPrintable(QString("plain text from %1, green from %2").arg(ink).arg(left)));
     }
     void templateSectionsGroupSlides() {
         QTemporaryDir dir;
         // A section mark, a comment that documents a definition, and speaker notes.
         write(dir.filePath("kit.md"),
-              "---\ncolor_accent: \"#123456\"\n---\n\n<!-- hype: section=\"Openers\" -->\n\n# Welcome\n\n---\n\n"
-              "<!-- hype: section=\"Case study · Acme\" frame=\"none\" -->\n\n<!-- The cover of a case study. -->\n\n"
-              "<Define name=\"Cover\" client=\"\">\n# {client}\n</Define>\n\n<Cover client=\"Acme\"/>\n\n<!-- Say the numbers slowly. -->\n\n"
-              "---\n\n# Acme results\n\n---\n\n<!-- hype: section=\"\" -->\n\n<!-- Only definitions here. -->\n\n"
+              "---\ncolor_accent: \"#123456\"\n---\n\n<!-- hype: section=\"Openers\" -->\n\n# "
+              "Welcome\n\n---\n\n"
+              "<!-- hype: section=\"Case study · Acme\" frame=\"none\" -->\n\n<!-- The cover of a "
+              "case study. -->\n\n"
+              "<Define name=\"Cover\" client=\"\">\n# {client}\n</Define>\n\n<Cover "
+              "client=\"Acme\"/>\n\n<!-- Say the numbers slowly. -->\n\n"
+              "---\n\n# Acme results\n\n---\n\n<!-- hype: section=\"\" -->\n\n<!-- Only "
+              "definitions here. -->\n\n"
               "<Define name=\"Unused\">\nx\n</Define>\n\n---\n\n# Loose\n");
         const auto starters = templates::starterSlides(dir.filePath("kit.md"));
         QCOMPARE(starters.size(), 4);
@@ -1570,14 +2196,16 @@ static void write(const QString &path, const QString &content) {
         QCOMPARE(starters[2].section, QString("Case study · Acme"));
         QCOMPARE(starters[3].section, QString()); // An empty mark ends the section.
         QCOMPARE(starters[1].label, QString("Cover · Acme"));
-        // A copy keeps the slide's own properties and notes, not the section or the definition's documentation.
+        // A copy keeps the slide's own properties and notes, not the section or the definition's
+        // documentation.
         QVERIFY(starters[1].source.contains("<!-- hype: frame=\"none\" -->"));
         QVERIFY(!starters[1].source.contains("section="));
         QVERIFY(!starters[1].source.contains("The cover of a case study"));
         QVERIFY(starters[1].source.contains("Say the numbers slowly"));
         QVERIFY(!starters[0].source.contains("<!--"));
-        QCOMPARE(templates::withoutTemplateMarks("<!-- hype: frame=\"none\" section=\"A\" -->\n# X\n"),
-                 QString("<!-- hype: frame=\"none\" -->\n# X\n"));
+        QCOMPARE(
+            templates::withoutTemplateMarks("<!-- hype: frame=\"none\" section=\"A\" -->\n# X\n"),
+            QString("<!-- hype: frame=\"none\" -->\n# X\n"));
 
         // A section's slides arrive together, in order, after the selection.
         write(dir.filePath("talk.md"), "---\ntemplate: kit.md\n---\n\n# One\n\n---\n\n# Two\n");
@@ -1603,11 +2231,15 @@ static void write(const QString &path, const QString &content) {
         const bool had = qEnvironmentVariableIsSet("XDG_STATE_HOME");
         const QByteArray old = qgetenv("XDG_STATE_HOME");
         qputenv("XDG_STATE_HOME", dir.filePath("state").toUtf8());
-        const auto restore = qScopeGuard([&] { had ? qputenv("XDG_STATE_HOME", old) : qunsetenv("XDG_STATE_HOME"); });
+        const auto restore = qScopeGuard(
+            [&] { had ? qputenv("XDG_STATE_HOME", old) : qunsetenv("XDG_STATE_HOME"); });
         const QString current = dir.filePath("state/omarchy/current");
-        QVERIFY(QDir().mkpath(dir.filePath("themes/dusk")) && QDir().mkpath(dir.filePath("themes/dawn")) && QDir().mkpath(current));
-        write(dir.filePath("themes/dusk/colors.toml"), "background = \"#102030\"\nforeground = \"#eeeeee\"\naccent = \"#ff0000\"\n");
-        write(dir.filePath("themes/dawn/colors.toml"), "background = \"#f0e0d0\"\nforeground = \"#111111\"\naccent = \"#0000ff\"\n");
+        QVERIFY(QDir().mkpath(dir.filePath("themes/dusk")) &&
+                QDir().mkpath(dir.filePath("themes/dawn")) && QDir().mkpath(current));
+        write(dir.filePath("themes/dusk/colors.toml"),
+              "background = \"#102030\"\nforeground = \"#eeeeee\"\naccent = \"#ff0000\"\n");
+        write(dir.filePath("themes/dawn/colors.toml"),
+              "background = \"#f0e0d0\"\nforeground = \"#111111\"\naccent = \"#0000ff\"\n");
         QVERIFY(QFile::link(dir.filePath("themes/dusk"), current + "/theme"));
         write(dir.filePath("talk.md"), "# Hello\n");
         Deck deck;
@@ -1632,7 +2264,8 @@ static void write(const QString &path, const QString &content) {
         QCOMPARE(omarchy.palette()["template_error"].toString(), QString());
         QCOMPARE(omarchy.templateSlides().size(), 7);
         // A theme the presentation chooses recolors its template, the desktop's included.
-        write(dir.filePath("brand.md"), "---\ncolor_background: \"#ffffff\"\ncolor_brand: \"#00ff00\"\n---\n");
+        write(dir.filePath("brand.md"),
+              "---\ncolor_background: \"#ffffff\"\ncolor_brand: \"#00ff00\"\n---\n");
         Deck branded;
         branded.editSource("---\ntemplate: \"" + dir.filePath("brand.md") + "\"\n---\n\n# Hi\n");
         QCOMPARE(branded.palette()["background"].toString(), QString("#ffffff"));
@@ -1641,12 +2274,16 @@ static void write(const QString &path, const QString &content) {
         QCOMPARE(branded.palette()["brand"].toString(), QString("#00ff00"));
     }
     void fontsRequestedInheritedAndChosen() {
-        // The families a presentation names: front matter and props, not the names that point at them.
-        const QStringList families = fonts::requested(
-            {"font: \"Encode Sans\"\nfont_heading: \"Poppins\"\nfont_display: Oswald\ntheme: paper\n",
-             "font: \"Encode Sans\"\n"},
-            {"<Text font=\"display\">x</Text>\n<Card font='Playfair Display'/>\n<Text font=\"heading\">y</Text>\n"
-             "<Text font=\"sans-serif\">z</Text>\n<Define name=\"X\">\n<Text font=\"{face}\">t</Text>\n</Define>"});
+        // The families a presentation names: front matter and props, not the names that point at
+        // them.
+        const QStringList families =
+            fonts::requested({"font: \"Encode Sans\"\nfont_heading: \"Poppins\"\nfont_display: "
+                              "Oswald\ntheme: paper\n",
+                              "font: \"Encode Sans\"\n"},
+                             {"<Text font=\"display\">x</Text>\n<Card font='Playfair "
+                              "Display'/>\n<Text font=\"heading\">y</Text>\n"
+                              "<Text font=\"sans-serif\">z</Text>\n<Define name=\"X\">\n<Text "
+                              "font=\"{face}\">t</Text>\n</Define>"});
         QCOMPARE(families, QStringList({"Encode Sans", "Poppins", "Oswald", "Playfair Display"}));
         QVERIFY(fonts::available("sans-serif"));
         QVERIFY(!fonts::available("No Such Family 12345"));
@@ -1654,13 +2291,16 @@ static void write(const QString &path, const QString &content) {
 
         // A component's font reaches the text inside it, and font_<name> aliases resolve.
         QTemporaryDir dir;
-        const QString mono = QFontDatabase::families(QFontDatabase::Any).filter("Liberation Mono").value(0);
+        const QString mono =
+            QFontDatabase::families(QFontDatabase::Any).filter("Liberation Mono").value(0);
         if (mono.isEmpty())
             QSKIP("Liberation Mono is not installed");
         auto inkWidth = [&](const QString &markdown) {
             Deck deck;
             deck.editSource("---\nfont: \"Liberation Sans\"\nfont_code: \"Liberation Mono\"\n"
-                            "color_background: \"#ffffff\"\ncolor_foreground: \"#000000\"\ncolor_accent: \"#000000\"\n---\n\n" + markdown);
+                            "color_background: \"#ffffff\"\ncolor_foreground: "
+                            "\"#000000\"\ncolor_accent: \"#000000\"\n---\n\n" +
+                            markdown);
             QImage image(1920, 1080, QImage::Format_ARGB32_Premultiplied);
             image.fill(Qt::transparent);
             QPainter painter(&image);
@@ -1669,7 +2309,8 @@ static void write(const QString &path, const QString &content) {
             QRect ink;
             for (int y = 0; y < 1080; ++y)
                 for (int x = 0; x < 1920; ++x)
-                    if (image.pixelColor(x, y).lightness() < 128) ink |= QRect(x, y, 1, 1);
+                    if (image.pixelColor(x, y).lightness() < 128)
+                        ink |= QRect(x, y, 1, 1);
             return ink.width();
         };
         const QString text = "<Text size=\"40\">iiiiiiiiii</Text>\n";
@@ -1677,7 +2318,8 @@ static void write(const QString &path, const QString &content) {
         const int inherited = inkWidth("<Column font=\"code\">\n" + text + "</Column>\n");
         QVERIFY2(inherited > plain * 2, qPrintable(QString("%1 vs %2").arg(inherited).arg(plain)));
         // A component's own heading choice gives way to a font set on the component.
-        QVERIFY(inkWidth("<Stat value=\"iiiiii\" font=\"code\"/>\n") > inkWidth("<Stat value=\"iiiiii\"/>\n") * 2);
+        QVERIFY(inkWidth("<Stat value=\"iiiiii\" font=\"code\"/>\n") >
+                inkWidth("<Stat value=\"iiiiii\"/>\n") * 2);
     }
     void googleFontsInTheEditor() {
         if (!qEnvironmentVariableIsSet("HYPE_GUI_TESTS"))
@@ -1731,11 +2373,14 @@ static void write(const QString &path, const QString &content) {
         const bool had = qEnvironmentVariableIsSet("XDG_DATA_HOME");
         const QByteArray old = qgetenv("XDG_DATA_HOME");
         qputenv("XDG_DATA_HOME", dir.filePath("data").toUtf8());
-        const auto restore = qScopeGuard([&] { had ? qputenv("XDG_DATA_HOME", old) : qunsetenv("XDG_DATA_HOME"); });
+        const auto restore =
+            qScopeGuard([&] { had ? qputenv("XDG_DATA_HOME", old) : qunsetenv("XDG_DATA_HOME"); });
         QVERIFY(QDir(dir.path()).mkpath("templates/brand"));
         write(dir.filePath("templates/brand/presentation.md"),
-              "---\ncolor_accent: \"#123456\"\n---\n\n<Define name=\"Big\">\n# {children}\n</Define>\n\n<Big>Opening</Big>\n\n---\n\n# Agenda\n\n- One\n");
-        write(dir.filePath("talk.md"), "---\ntitle: Talk\ntheme: tokyo-night\ncolor_background: \"#000000\"\n---\n\n# Hello\n");
+              "---\ncolor_accent: \"#123456\"\n---\n\n<Define name=\"Big\">\n# "
+              "{children}\n</Define>\n\n<Big>Opening</Big>\n\n---\n\n# Agenda\n\n- One\n");
+        write(dir.filePath("talk.md"), "---\ntitle: Talk\ntheme: tokyo-night\ncolor_background: "
+                                       "\"#000000\"\n---\n\n# Hello\n");
         Deck deck;
         QQuickStyle::setStyle("Basic");
         qmlRegisterType<SlideItem>("Hype", 1, 0, "SlideCanvas");
@@ -1743,7 +2388,8 @@ static void write(const QString &path, const QString &content) {
         QQmlApplicationEngine engine;
         QStringList warnings;
         connect(&engine, &QQmlApplicationEngine::warnings, this, [&](const QList<QQmlError> &list) {
-            for (const auto &error : list) warnings << error.toString();
+            for (const auto &error : list)
+                warnings << error.toString();
         });
         engine.rootContext()->setContextProperty("deck", &deck);
         engine.addImageProvider("slides", new Thumbnails(&deck));
@@ -1758,16 +2404,22 @@ static void write(const QString &path, const QString &content) {
         QTRY_VERIFY(picker->property("visible").toBool());
         QVERIFY(window->property("popupOpen").toBool());
         QStringList names;
-        for (const QVariant &entry : picker->property("templateList").toList()) names << entry.toMap()["name"].toString();
+        for (const QVariant &entry : picker->property("templateList").toList())
+            names << entry.toMap()["name"].toString();
         QCOMPARE(names, QStringList({"brand", "omarchy"}));
         // Each template is a card with its preview, drawn in the popup's layer.
-        std::function<QQuickItem *(QQuickItem *, const QString &)> visual = [&](QQuickItem *item, const QString &name) -> QQuickItem * {
-            if (item->objectName() == name) return item;
+        std::function<QQuickItem *(QQuickItem *, const QString &)> visual =
+            [&](QQuickItem *item, const QString &name) -> QQuickItem * {
+            if (item->objectName() == name)
+                return item;
             for (QQuickItem *child : item->childItems())
-                if (QQuickItem *found = visual(child, name)) return found;
+                if (QQuickItem *found = visual(child, name))
+                    return found;
             return nullptr;
         };
-        QTRY_VERIFY(visual(window->contentItem()->parentItem() ? window->contentItem()->parentItem() : window->contentItem(), "template:brand"));
+        QTRY_VERIFY(visual(window->contentItem()->parentItem() ? window->contentItem()->parentItem()
+                                                               : window->contentItem(),
+                           "template:brand"));
         QVERIFY(!picker->property("themeList").toList().isEmpty());
         QVERIFY(QMetaObject::invokeMethod(picker, "chooseTemplate", Q_ARG(QVariant, "brand")));
         QTRY_VERIFY(!picker->property("visible").toBool());
@@ -1784,7 +2436,8 @@ static void write(const QString &path, const QString &content) {
         auto search = window->findChild<QQuickItem *>("templateSlideSearch");
         QVERIFY(search);
         QTRY_VERIFY(search->hasActiveFocus());
-        for (const char key : QByteArray("agen")) QTest::keyClick(window, key);
+        for (const char key : QByteArray("agen"))
+            QTest::keyClick(window, key);
         QTRY_COMPARE(starters->property("matches").toList().size(), 1);
         QCOMPARE(starters->property("current").toInt(), 1);
         QTest::keyClick(window, Qt::Key_Return);
@@ -1807,7 +2460,8 @@ static void write(const QString &path, const QString &content) {
         QTRY_VERIFY(saveDialog->property("visible").toBool());
         QVERIFY(QMetaObject::invokeMethod(saveDialog, "save"));
         QVERIFY(saveDialog->property("replacing").toBool());
-        QCOMPARE(window->findChild<QObject *>("saveTemplateButton")->property("text").toString(), QString("Replace"));
+        QCOMPARE(window->findChild<QObject *>("saveTemplateButton")->property("text").toString(),
+                 QString("Replace"));
         QVERIFY(QMetaObject::invokeMethod(saveDialog, "save"));
         QTRY_VERIFY(!saveDialog->property("visible").toBool());
         QVERIFY2(warnings.isEmpty(), qPrintable(warnings.join("\n")));
@@ -1861,7 +2515,8 @@ static void write(const QString &path, const QString &content) {
         const auto literal = parseMedia("```html\n" + directive + "```\n# Title", ".");
         QVERIFY(literal.layout.isEmpty());
         Deck deck;
-        const auto tooWide = layoutWordCloud("## " + QString(2000, 'M'), deck.palette(), QRectF(0, 0, 200, 100));
+        const auto tooWide =
+            layoutWordCloud("## " + QString(2000, 'M'), deck.palette(), QRectF(0, 0, 200, 100));
         QVERIFY(!tooWide.error.isEmpty());
     }
     void captionTableKeepsNamesUnderPortraits() {
@@ -1873,9 +2528,10 @@ static void write(const QString &path, const QString &content) {
         Deck deck;
         QVERIFY(deck.savePath(tmp.path() + "/talk.md"));
         const QString source = "![layout=caption](portraits.png)";
-        const QString names = "| **Krzysztof Wilczyński** | **outfoxxed** | **Emir Beganović** |\n"
-                              "| :---: | :---: | :---: |\n"
-                              "| Head of Omarchy Kernel | Head of Omarchy Shell | Head of Infrastructure |";
+        const QString names =
+            "| **Krzysztof Wilczyński** | **outfoxxed** | **Emir Beganović** |\n"
+            "| :---: | :---: | :---: |\n"
+            "| Head of Omarchy Kernel | Head of Omarchy Shell | Head of Infrastructure |";
         deck.editSlide(source);
         Thumbnails provider(&deck);
         const auto empty = provider.requestImage(deck.renderId(0), nullptr, QSize(1920, 1080));
@@ -1891,7 +2547,8 @@ static void write(const QString &path, const QString &content) {
         layoutSlideText(doc, names, deck.palette(), 48, 1660, true, false, true);
         QTextTable *table = nullptr;
         for (auto it = doc.rootFrame()->begin(); !it.atEnd(); ++it)
-            if (auto found = qobject_cast<QTextTable *>(it.currentFrame())) table = found;
+            if (auto found = qobject_cast<QTextTable *>(it.currentFrame()))
+                table = found;
         QVERIFY(table);
         QCOMPARE(table->columns(), 3);
         const auto widths = table->format().columnWidthConstraints();
@@ -1938,7 +2595,8 @@ static void write(const QString &path, const QString &content) {
         const auto changed = provider.requestImage(deck.renderId(0), nullptr, QSize(1920, 1080));
         QVERIFY(changed != captioned);
         QCOMPARE(changed.copy(0, 0, 1920, 870), captioned.copy(0, 0, 1920, 870));
-        deck.editSlide("![layout=caption-right overlay=0.5](collage.png)\n\nand **900+ community patrons**");
+        deck.editSlide(
+            "![layout=caption-right overlay=0.5](collage.png)\n\nand **900+ community patrons**");
         const auto dimmed = provider.requestImage(deck.renderId(0), nullptr, QSize(1920, 1080));
         QVERIFY(dimmed.pixelColor(1200, 400).red() < changed.pixelColor(1200, 400).red());
         QCOMPARE(dimmed.copy(0, 870, 1920, 210), changed.copy(0, 870, 1920, 210));
@@ -2349,12 +3007,13 @@ static void write(const QString &path, const QString &content) {
         QTemporaryDir files;
         QVERIFY(QDir().mkpath(files.path() + "/videos"));
         QProcess ffmpeg;
-        ffmpeg.start("ffmpeg", {"-v", "error", "-f", "lavfi", "-i", "color=c=blue:s=160x90:d=0.6", "-c:v", "libx264",
-                                "-pix_fmt", "yuv420p", files.path() + "/videos/demo.mp4"});
+        ffmpeg.start("ffmpeg",
+                     {"-v", "error", "-f", "lavfi", "-i", "color=c=blue:s=160x90:d=0.6", "-c:v",
+                      "libx264", "-pix_fmt", "yuv420p", files.path() + "/videos/demo.mp4"});
         QVERIFY(ffmpeg.waitForFinished(30000));
         QCOMPARE(ffmpeg.exitCode(), 0);
-        write(files.path() + "/talk.md",
-              "<Row>\n<Video src=\"demo.mp4\" aspect=\"16:9\" autoplay=\"false\"/>\n<Text>Beside it</Text>\n</Row>\n");
+        write(files.path() + "/talk.md", "<Row>\n<Video src=\"demo.mp4\" aspect=\"16:9\" "
+                                         "autoplay=\"false\"/>\n<Text>Beside it</Text>\n</Row>\n");
         Deck deck;
         QQuickStyle::setStyle("Basic");
         qmlRegisterType<SlideItem>("Hype", 1, 0, "SlideCanvas");
@@ -2370,7 +3029,8 @@ static void write(const QString &path, const QString &content) {
         const QVariantMap media = deck.media();
         QVERIFY(media["video"].toBool());
         const QRectF rect = media["rect"].toRectF();
-        QVERIFY2(rect.right() < 1000 && rect.width() > 400, qPrintable(QString::number(rect.right())));
+        QVERIFY2(rect.right() < 1000 && rect.width() > 400,
+                 qPrintable(QString::number(rect.right())));
         auto player = window->findChild<QMediaPlayer *>("player");
         QVERIFY(player);
         window->requestActivate();
@@ -2493,6 +3153,13 @@ static void write(const QString &path, const QString &content) {
         const int paused = animation->property("currentFrame").toInt();
         QTest::qWait(450);
         QCOMPARE(animation->property("currentFrame").toInt(), paused);
+        // A placed animation hugs its corner of the small box, like the rendered slide.
+        QCOMPARE(animation->property("horizontalAlignment").toInt(), int(Qt::AlignHCenter));
+        d.editSlide("# Headline\n\n![position=bottom-right size=20%](demo.webp)");
+        QTRY_COMPARE(animation->property("horizontalAlignment").toInt(), int(Qt::AlignRight));
+        QCOMPARE(animation->property("verticalAlignment").toInt(), int(Qt::AlignBottom));
+        d.editSlide("![fit background=#123456](demo.webp)");
+        QTRY_COMPARE(animation->property("horizontalAlignment").toInt(), int(Qt::AlignHCenter));
         window->setProperty("markdown", true);
         QTRY_VERIFY(!loader->property("active").toBool());
         QTRY_VERIFY(!loader->property("item").value<QObject *>());
@@ -2750,6 +3417,30 @@ static void write(const QString &path, const QString &content) {
         QVERIFY(d.slide(columns).contains("# S1\n") || d.slide(columns).trimmed() == "# S1");
         d.undo();
         QVERIFY(d.slide(0).contains("# S1"));
+        // Movement by five counts slides even in the grid; a range stays together.
+        d.select(2);
+        d.extendSelection(3);
+        QTest::keyClick(window, Qt::Key_PageDown, Qt::ControlModifier);
+        QCOMPARE(d.selectionFirst(), 7);
+        QCOMPARE(d.selectionLast(), 8);
+        QCOMPARE(d.slide(7).trimmed(), "# S3");
+        QCOMPARE(d.slide(8).trimmed(), "# S4");
+        QTest::keyClick(window, Qt::Key_PageUp, Qt::ControlModifier);
+        QCOMPARE(d.selectionFirst(), 2);
+        QCOMPARE(d.selectionLast(), 3);
+        QTest::keyClick(window, Qt::Key_Home, Qt::ControlModifier);
+        QCOMPARE(d.selectionFirst(), 0);
+        QCOMPARE(d.selectionLast(), 1);
+        QTest::keyClick(window, Qt::Key_End, Qt::ControlModifier);
+        QCOMPARE(d.selectionFirst(), 10);
+        QCOMPARE(d.selectionLast(), 11);
+        QTest::keyClick(window, Qt::Key_PageDown, Qt::ControlModifier);
+        QCOMPARE(d.selectionFirst(), 10);
+        QCOMPARE(d.selectionLast(), 11);
+        for (int i = 0; i < 4; ++i)
+            d.undo();
+        QCOMPARE(d.slide(2).trimmed(), "# S3");
+        QCOMPARE(d.slide(3).trimmed(), "# S4");
         // Dragging a slide onto the left half of another drops it before that slide.
         d.select(0);
         const QPoint from = center(0), to = center(2) - QPoint(int(cellWidth * 0.3), 0);
@@ -2849,6 +3540,51 @@ static void write(const QString &path, const QString &content) {
         QTest::qWait(300);
         auto list = window->findChild<QQuickItem *>("thumbnails");
         QVERIFY(list);
+        auto findFrame = [](auto &&self, QQuickItem *item, const QString &name) -> QQuickItem * {
+            if (item->objectName() == name)
+                return item;
+            for (auto child : item->childItems())
+                if (auto found = self(self, child, name))
+                    return found;
+            return nullptr;
+        };
+        auto currentFrame = findFrame(findFrame, list, "sidebarSlideFrame0");
+        auto passiveFrame = findFrame(findFrame, list, "sidebarSlideFrame1");
+        auto slideEditor = window->findChild<QQuickItem *>("slideEditor");
+        auto editorFrame = window->findChild<QQuickItem *>("slideEditorFrame");
+        QVERIFY(currentFrame && passiveFrame && slideEditor && editorFrame);
+        list->forceActiveFocus();
+        QTRY_VERIFY(list->hasActiveFocus());
+        const QColor idleEditorBorder = editorFrame->property("focusStroke").value<QColor>();
+        const QColor activeBorder = currentFrame->property("selectionStroke").value<QColor>();
+        QCOMPARE(currentFrame->property("selectionStrokeWidth").toInt(), 3);
+        slideEditor->forceActiveFocus();
+        QTRY_VERIFY(slideEditor->hasActiveFocus());
+        QCOMPARE(window->activeFocusItem(), slideEditor);
+        const QColor focusedEditorBorder = editorFrame->property("focusStroke").value<QColor>();
+        QVERIFY(focusedEditorBorder != idleEditorBorder);
+        const QSize originalWindowSize = window->size();
+        window->resize(originalWindowSize.width() - 80, originalWindowSize.height() - 40);
+        QTest::qWait(50);
+        const QImage resizedWindow = window->grabWindow();
+        QVERIFY(!resizedWindow.isNull());
+        const QPointF borderPoint =
+            editorFrame->mapToScene(QPointF(editorFrame->width() / 2, 0.5)) *
+            resizedWindow.devicePixelRatio();
+        const QPoint borderPixel(qFloor(borderPoint.x()), qFloor(borderPoint.y()));
+        QVERIFY(resizedWindow.rect().contains(borderPixel));
+        QCOMPARE(resizedWindow.pixelColor(borderPixel).name(), focusedEditorBorder.name());
+        window->resize(originalWindowSize);
+        const QColor editingBorder = currentFrame->property("selectionStroke").value<QColor>();
+        QVERIFY(editingBorder != activeBorder);
+        QVERIFY(editingBorder != passiveFrame->property("selectionStroke").value<QColor>());
+        QCOMPARE(currentFrame->property("selectionStrokeWidth").toInt(), 2);
+        QCOMPARE(passiveFrame->property("selectionStrokeWidth").toInt(), 1);
+        QCOMPARE(d.selected(), 0);
+        list->forceActiveFocus();
+        QTRY_VERIFY(list->hasActiveFocus());
+        QCOMPARE(editorFrame->property("focusStroke").value<QColor>(), idleEditorBorder);
+        QCOMPARE(currentFrame->property("selectionStroke").value<QColor>(), activeBorder);
         const double slideStep = list->property("slideStep").toDouble();
         auto a = list->mapToScene(QPointF(100, 50)).toPoint(),
              b = list->mapToScene(QPointF(100, 2 * slideStep + 90)).toPoint();
@@ -3000,6 +3736,16 @@ static void write(const QString &path, const QString &content) {
         QTest::keyClick(window, Qt::Key_Left, Qt::ControlModifier);
         QCOMPARE(d.selected(), 0);
         QCOMPARE(d.source(), many);
+        QTest::keyClick(window, Qt::Key_PageDown, Qt::ControlModifier);
+        QCOMPARE(d.selected(), 5);
+        QCOMPARE(d.slideSource().trimmed(), "# Slide 0");
+        QTest::keyClick(window, Qt::Key_PageUp, Qt::ControlModifier);
+        QCOMPARE(d.selected(), 0);
+        QTest::keyClick(window, Qt::Key_End, Qt::ControlModifier);
+        QCOMPARE(d.selected(), d.count() - 1);
+        QTest::keyClick(window, Qt::Key_Home, Qt::ControlModifier);
+        QCOMPARE(d.selected(), 0);
+        QCOMPARE(d.source(), many);
         QTest::keyClick(window, Qt::Key_Up, Qt::ControlModifier);
         QCOMPARE(d.selected(), 0);
         QCOMPARE(d.source(), many);
@@ -3122,10 +3868,16 @@ static void write(const QString &path, const QString &content) {
         editor->forceActiveFocus();
         QVERIFY(editor->hasActiveFocus());
         const QString beforeJump = d.source();
+        const QString editText = editor->property("text").toString();
+        const int lineEnd = editText.indexOf('\n') < 0 ? editText.size() : editText.indexOf('\n');
+        QVERIFY(lineEnd > 2);
+        editor->setProperty("cursorPosition", 2);
         QTest::keyClick(window, Qt::Key_End);
-        QCOMPARE(d.selected(), d.count() - 1);
+        QCOMPARE(d.selected(), 20);
+        QCOMPARE(editor->property("cursorPosition").toInt(), lineEnd);
         QTest::keyClick(window, Qt::Key_Home);
-        QCOMPARE(d.selected(), 0);
+        QCOMPARE(d.selected(), 20);
+        QCOMPARE(editor->property("cursorPosition").toInt(), 0);
         QCOMPARE(d.source(), beforeJump);
         d.select(20);
         const QString beforeTab = d.source();
@@ -3173,15 +3925,43 @@ static void write(const QString &path, const QString &content) {
         QCOMPARE(d.selected(), selected);
         QTest::keyClick(window, Qt::Key_PageUp);
         QCOMPARE(d.selected(), selected);
-        QString beforeToggle = d.source();
+        const QString beforeToggle = d.source();
+        editor->setProperty("cursorPosition", 0);
+        QTest::keyClick(window, Qt::Key_Right, Qt::ControlModifier);
+        QCOMPARE(d.selected(), selected);
+        QVERIFY(editor->property("cursorPosition").toInt() > 0);
+        QTest::keyClick(window, Qt::Key_Left, Qt::ControlModifier);
+        QCOMPARE(d.selected(), selected);
+        QCOMPARE(editor->property("cursorPosition").toInt(), 0);
+        QTest::keyClick(window, Qt::Key_Down, Qt::ControlModifier);
+        QCOMPARE(d.selected(), selected + 1);
+        QTest::keyClick(window, Qt::Key_PageDown, Qt::ControlModifier);
+        QCOMPARE(d.selected(), selected + 6);
+        QTest::keyClick(window, Qt::Key_Up, Qt::ControlModifier);
+        QCOMPARE(d.selected(), selected + 5);
+        QTest::keyClick(window, Qt::Key_PageUp, Qt::ControlModifier);
+        QCOMPARE(d.selected(), selected);
+        QTest::keyClick(window, Qt::Key_Down, Qt::ControlModifier | Qt::KeypadModifier);
+        QCOMPARE(d.selected(), selected + 1);
+        QTest::keyClick(window, Qt::Key_PageUp, Qt::ControlModifier | Qt::KeypadModifier);
+        QCOMPARE(d.selected(), selected - 4);
+        QTest::keyClick(window, Qt::Key_PageDown, Qt::ControlModifier | Qt::KeypadModifier);
+        QTest::keyClick(window, Qt::Key_Up, Qt::ControlModifier | Qt::KeypadModifier);
+        QCOMPARE(d.selected(), selected);
+        QVERIFY(editor->hasActiveFocus());
+        const int cursorBeforeToggle = editor->property("cursorPosition").toInt();
         QTest::keyClick(window, Qt::Key_Period, Qt::ControlModifier);
         QVERIFY(window->property("markdown").toBool());
         auto source = window->findChild<QQuickItem *>("sourceEditor");
-        QVERIFY(source && source->isVisible() && source->hasActiveFocus());
+        auto sourceFrame = window->findChild<QQuickItem *>("sourceEditorFrame");
+        QVERIFY(source && sourceFrame && source->isVisible() && source->hasActiveFocus());
+        const QColor focusedSourceBorder = sourceFrame->property("focusStroke").value<QColor>();
         QTest::keyClick(window, Qt::Key_Tab);
         QVERIFY(list->hasActiveFocus());
+        QVERIFY(sourceFrame->property("focusStroke").value<QColor>() != focusedSourceBorder);
         QTest::keyClick(window, Qt::Key_Tab);
         QVERIFY(source->hasActiveFocus());
+        QCOMPARE(sourceFrame->property("focusStroke").value<QColor>(), focusedSourceBorder);
         QTest::keyClick(window, Qt::Key_Tab, Qt::ShiftModifier);
         QVERIFY(list->hasActiveFocus());
         QTest::keyClick(window, Qt::Key_Tab, Qt::ShiftModifier);
@@ -3189,16 +3969,62 @@ static void write(const QString &path, const QString &content) {
         QCOMPARE(d.source(), beforeToggle);
         QVERIFY(!stage->isVisible());
         QCOMPARE(source->property("text").toString(), d.source());
-        QCOMPARE(source->property("cursorPosition").toInt(), d.sourcePosition());
+        const int sourceCursor =
+            d.sourcePosition() + d.slideSource().indexOf(d.slideText()) + cursorBeforeToggle;
+        QCOMPARE(source->property("cursorPosition").toInt(), sourceCursor);
         QTest::qWait(60);
         auto scroll = window->findChild<QObject *>("sourceScroll");
         auto flick = scroll->property("contentItem").value<QObject *>();
         QRectF rect;
         QVERIFY(QMetaObject::invokeMethod(source, "positionToRectangle", Q_RETURN_ARG(QRectF, rect),
-                                          Q_ARG(int, d.sourcePosition())));
-        QVERIFY(qAbs(flick->property("contentY").toDouble() - rect.y() +
-                     source->property("topPadding").toDouble()) < 2);
+                                          Q_ARG(int, sourceCursor)));
+        QVERIFY(rect.top() >= flick->property("contentY").toDouble());
+        QVERIFY(rect.bottom() <=
+                flick->property("contentY").toDouble() + flick->property("height").toDouble());
         QCOMPARE(d.source(), beforeToggle);
+        auto dividerVisible = [&] {
+            int start = d.sourcePosition();
+            if (start <= 0)
+                return false;
+            int divider = d.source().lastIndexOf('\n', start - 2) + 1;
+            if (d.source().mid(divider, 3) != "---")
+                return false;
+            QRectF dividerRect;
+            if (!QMetaObject::invokeMethod(source, "positionToRectangle",
+                                           Q_RETURN_ARG(QRectF, dividerRect),
+                                           Q_ARG(int, divider + 1)))
+                return false;
+            double y = dividerRect.y() - flick->property("contentY").toDouble();
+            return y >= source->property("topPadding").toDouble() + 2 &&
+                   y + dividerRect.height() <= flick->property("height").toDouble() -
+                                                   source->property("bottomPadding").toDouble() - 2;
+        };
+        // A caret rectangle can fit at the edge even when Qt clips the text glyphs.
+        auto dividerPainted = [&](int position) {
+            QRectF dividerRect;
+            if (!QMetaObject::invokeMethod(source, "positionToRectangle",
+                                           Q_RETURN_ARG(QRectF, dividerRect),
+                                           Q_ARG(int, position + 1)))
+                return false;
+            QImage image = window->grabWindow();
+            QPointF scene = source->mapToScene(QPointF(dividerRect.x() - 10, dividerRect.y()));
+            int x = qRound(scene.x() * image.devicePixelRatio());
+            int y = qRound(scene.y() * image.devicePixelRatio());
+            int height = qRound(dividerRect.height() * image.devicePixelRatio());
+            if (x < 0 || y < 0 || x + 80 >= image.width() || y + height >= image.height())
+                return false;
+            QColor background = image.pixelColor(x + 80, y + height / 2);
+            int ink = 0;
+            for (int row = y; row < y + height; ++row)
+                for (int col = x; col < x + 36; ++col) {
+                    QColor pixel = image.pixelColor(col, row);
+                    if (qAbs(pixel.red() - background.red()) > 40 ||
+                        qAbs(pixel.green() - background.green()) > 40 ||
+                        qAbs(pixel.blue() - background.blue()) > 40)
+                        ++ink;
+                }
+            return ink > 6;
+        };
         QTest::keyClick(window, Qt::Key_Home, Qt::ControlModifier);
         QCOMPARE(source->property("cursorPosition").toInt(), 0);
         QTest::keyClick(window, Qt::Key_PageDown);
@@ -3214,6 +4040,62 @@ static void write(const QString &path, const QString &content) {
         QTest::keyClick(window, Qt::Key_End, Qt::ControlModifier);
         QCOMPARE(source->property("cursorPosition").toInt(), d.source().size());
         QTest::keyClick(window, Qt::Key_Home, Qt::ControlModifier);
+        double visibleSlideY = flick->property("contentY").toDouble();
+        QTest::keyClick(window, Qt::Key_Down, Qt::ControlModifier);
+        QCOMPARE(d.selected(), 1);
+        QCOMPARE(source->property("cursorPosition").toInt(), d.sourcePosition() + 1);
+        QTRY_VERIFY(dividerVisible());
+        QCOMPARE(flick->property("contentY").toDouble(), visibleSlideY);
+        const int wordStart = source->property("cursorPosition").toInt();
+        QTest::keyClick(window, Qt::Key_Right, Qt::ControlModifier);
+        QCOMPARE(d.selected(), 1);
+        QVERIFY(source->property("cursorPosition").toInt() > wordStart);
+        QTest::keyClick(window, Qt::Key_Left, Qt::ControlModifier);
+        QCOMPARE(d.selected(), 1);
+        QCOMPARE(source->property("cursorPosition").toInt(), wordStart);
+        QTest::keyClick(window, Qt::Key_Down, Qt::ControlModifier);
+        QCOMPARE(d.selected(), 2);
+        QTest::keyClick(window, Qt::Key_PageDown, Qt::ControlModifier);
+        QCOMPARE(d.selected(), 7);
+        QCOMPARE(source->property("cursorPosition").toInt(), d.sourcePosition() + 1);
+        QTRY_VERIFY(dividerVisible());
+        QTest::keyClick(window, Qt::Key_PageDown, Qt::ControlModifier);
+        QCOMPARE(d.selected(), 12);
+        QRectF endDivider;
+        QVERIFY(QMetaObject::invokeMethod(source, "positionToRectangle",
+                                          Q_RETURN_ARG(QRectF, endDivider),
+                                          Q_ARG(int, d.sourceEndPosition() + 1)));
+        double neededY = endDivider.y() + endDivider.height() +
+                         source->property("bottomPadding").toDouble() + 2 -
+                         flick->property("height").toDouble();
+        QTRY_VERIFY(qAbs(flick->property("contentY").toDouble() - neededY) < 2);
+        QTRY_VERIFY(dividerVisible());
+        QTRY_VERIFY(dividerPainted(d.sourceEndPosition()));
+        QTest::keyClick(window, Qt::Key_PageUp, Qt::ControlModifier);
+        QCOMPARE(d.selected(), 7);
+        QTest::keyClick(window, Qt::Key_PageDown, Qt::ControlModifier);
+        QTest::keyClick(window, Qt::Key_PageDown, Qt::ControlModifier);
+        QTest::keyClick(window, Qt::Key_PageDown, Qt::ControlModifier);
+        QCOMPARE(d.selected(), 22);
+        QTest::keyClick(window, Qt::Key_PageUp, Qt::ControlModifier);
+        QCOMPARE(d.selected(), 17);
+        QTRY_VERIFY(dividerVisible());
+        QTRY_VERIFY(dividerPainted(d.source().lastIndexOf('\n', d.sourcePosition() - 2) + 1));
+        QTest::keyClick(window, Qt::Key_PageUp, Qt::ControlModifier);
+        QTest::keyClick(window, Qt::Key_PageUp, Qt::ControlModifier);
+        QCOMPARE(d.selected(), 7);
+        QTest::keyClick(window, Qt::Key_Up, Qt::ControlModifier);
+        QCOMPARE(d.selected(), 6);
+        QTest::keyClick(window, Qt::Key_Up, Qt::ControlModifier);
+        QCOMPARE(d.selected(), 5);
+        QTest::keyClick(window, Qt::Key_PageUp, Qt::ControlModifier);
+        QCOMPARE(d.selected(), 0);
+        QTest::keyClick(window, Qt::Key_PageDown, Qt::ControlModifier | Qt::KeypadModifier);
+        QCOMPARE(d.selected(), 5);
+        QCOMPARE(source->property("cursorPosition").toInt(), d.sourcePosition() + 1);
+        QTRY_VERIFY(dividerVisible());
+        QVERIFY(source->hasActiveFocus());
+        QCOMPARE(d.source(), beforeToggle);
         QTest::qWait(60);
         auto sourceFlick = window->findChild<QQuickItem *>("sourceFlick");
         QPointF sourcePoint = sourceFlick->mapToScene(QPointF(100, 100));
@@ -3228,14 +4110,34 @@ static void write(const QString &path, const QString &content) {
         QTest::keyClick(window, Qt::Key_Period, Qt::ControlModifier);
         QVERIFY(!window->property("markdown").toBool());
         QVERIFY(stage->isVisible() && editor->isVisible());
-        QVERIFY(stage->hasActiveFocus());
+        QVERIFY(editor->hasActiveFocus());
         QTest::keyClick(window, Qt::Key_Space, Qt::ControlModifier);
         QVERIFY(window->property("presenting").toBool());
         QVERIFY(!window->findChild<QQuickItem *>("editorPane")->isVisible());
         QVERIFY(stage->isVisible());
+        QVERIFY2(!window->findChild<QQuickWindow *>("presenterWindow")->isVisible(),
+                 "Presenter View opened on the only screen, covering the slides");
         QTest::keyClick(window, Qt::Key_Space, Qt::ControlModifier);
         QVERIFY(!window->property("presenting").toBool());
         QVERIFY(editor->isVisible());
+        QVERIFY(d.count() > 1);
+        d.select(d.count() - 1);
+        QTest::keyClick(window, Qt::Key_F5, Qt::ShiftModifier);
+        QVERIFY(window->property("presenting").toBool());
+        QCOMPARE(d.selected(), 0);
+        d.select(d.count() - 1);
+        QTest::keyClick(window, Qt::Key_F5, Qt::ShiftModifier);
+        QVERIFY(window->property("presenting").toBool());
+        QCOMPARE(d.selected(), 0);
+        QTest::keyClick(window, Qt::Key_Escape);
+        QVERIFY(!window->property("presenting").toBool());
+        auto presenterWindow = window->findChild<QQuickWindow *>("presenterWindow");
+        QVERIFY(presenterWindow);
+        window->setProperty("presenting", true);
+        presenterWindow->show();
+        presenterWindow->requestActivate();
+        QTest::keyClick(presenterWindow, Qt::Key_Escape);
+        QTRY_VERIFY(!window->property("presenting").toBool());
         QString trial2025 = QFINDTESTDATA("../trials/rails-world-2025/presentation.md");
         if (!trial2025.isEmpty()) {
             QVERIFY(d.loadPath(trial2025));
@@ -3316,6 +4218,147 @@ static void write(const QString &path, const QString &content) {
         const double afterInsert = list->property("contentY").toDouble() - list->property("originY").toDouble();
         QVERIFY(qAbs(afterInsert - expected) < 1);
         QVERIFY(afterInsert - beforeInsert <= slideStep);
+        // Map the live cursor through the padding omitted by the slide editor.
+        QString cursorSlides;
+        for (int i = 0; i < 10; ++i)
+            cursorSlides += (i ? "\n\n---\n\n\n" : "\n\n") +
+                            QString("# Slide %1\n\nfirst paragraph\nsecond word here").arg(i) +
+                            QString("\nmore text").repeated(20);
+        d.editSource("---\ntitle: Cursor\n---\n" + cursorSlides + "\n\n");
+        d.select(7);
+        auto bodyStart = [&] {
+            return d.source().indexOf(QString("# Slide %1").arg(d.selected()));
+        };
+        editor->forceActiveFocus();
+        int slideCursor = d.slideText().indexOf("word") + 2;
+        editor->setProperty("cursorPosition", slideCursor);
+        QTest::keyClick(window, Qt::Key_Period, Qt::ControlModifier);
+        QVERIFY(source->hasActiveFocus());
+        QCOMPARE(d.selected(), 7);
+        QCOMPARE(source->property("cursorPosition").toInt(), bodyStart() + slideCursor);
+        slideCursor = d.slideText().size() - 4;
+        source->setProperty("cursorPosition", bodyStart() + slideCursor);
+        QTest::keyClick(window, Qt::Key_X);
+        ++slideCursor;
+        QTest::keyClick(window, Qt::Key_Period, Qt::ControlModifier);
+        QVERIFY(editor->hasActiveFocus());
+        QCOMPARE(editor->property("cursorPosition").toInt(), slideCursor);
+        auto slideFlick =
+            window->findChild<QObject *>("slideScroll")->property("contentItem").value<QObject *>();
+        QVERIFY(QMetaObject::invokeMethod(editor, "positionToRectangle", Q_RETURN_ARG(QRectF, rect),
+                                          Q_ARG(int, slideCursor)));
+        QTRY_VERIFY(rect.top() >= slideFlick->property("contentY").toDouble() &&
+                    rect.bottom() <= slideFlick->property("contentY").toDouble() +
+                                         slideFlick->property("height").toDouble());
+        QTest::keyClick(window, Qt::Key_Y);
+        ++slideCursor;
+        auto modeButton = window->findChild<QQuickItem *>("modeButton");
+        QVERIFY(modeButton);
+        QTest::mouseClick(
+            window, Qt::LeftButton, Qt::NoModifier,
+            modeButton->mapToScene(QPointF(modeButton->width() / 2, modeButton->height() / 2))
+                .toPoint());
+        QVERIFY(source->hasActiveFocus());
+        QCOMPARE(source->property("cursorPosition").toInt(), bodyStart() + slideCursor);
+
+        QTest::keyClick(window, Qt::Key_Tab);
+        for (int i = 0; i < 2; ++i) {
+            QTest::keyClick(window, Qt::Key_Period, Qt::ControlModifier);
+            QVERIFY(list->hasActiveFocus());
+        }
+        QTest::keyClick(window, Qt::Key_Tab);
+        QCOMPARE(d.selected(), 7);
+        QCOMPARE(source->property("cursorPosition").toInt(), bodyStart() + slideCursor);
+
+        d.select(0);
+        const int headerCursor = d.source().indexOf("Cursor") + 2;
+        source->setProperty("cursorPosition", headerCursor);
+        QTest::keyClick(window, Qt::Key_Period, Qt::ControlModifier);
+        QTest::keyClick(window, Qt::Key_Period, Qt::ControlModifier);
+        QCOMPARE(source->property("cursorPosition").toInt(), headerCursor);
+
+        // A sidebar slide change cancels the old position in either editor.
+        for (auto activeEditor : {source, editor}) {
+            activeEditor->setProperty("cursorPosition",
+                                      activeEditor->property("cursorPosition").toInt() + 4);
+            QTest::keyClick(window, Qt::Key_Tab);
+            QTest::keyClick(window, Qt::Key_Right);
+            QTest::keyClick(window, Qt::Key_Tab);
+            QVERIFY(activeEditor->hasActiveFocus());
+            QCOMPARE(activeEditor->property("cursorPosition").toInt(),
+                     activeEditor == source ? bodyStart() : 0);
+            QTest::keyClick(window, Qt::Key_Period, Qt::ControlModifier);
+        }
+        QCOMPARE(d.selected(), 2);
+
+        // Tab preserves source-only positions and the current slide's cursor and viewport.
+        d.editSource("---\ntitle: Test\n---\n\n" + many);
+        d.select(20);
+        QVERIFY(QMetaObject::invokeMethod(window, "openMarkdown"));
+        const int metadataCursor = d.source().indexOf("Test") + 2;
+        source->setProperty("cursorPosition", metadataCursor);
+        QCOMPARE(d.selected(), 0);
+        QTest::keyClick(window, Qt::Key_Tab);
+        QVERIFY(list->hasActiveFocus());
+        QTest::keyClick(window, Qt::Key_Tab);
+        QVERIFY(source->hasActiveFocus());
+        QCOMPARE(source->property("cursorPosition").toInt(), metadataCursor);
+        const int retainedCursor = d.source().indexOf("# Slide 20") + 6;
+        source->setProperty("cursorPosition", retainedCursor);
+        QCOMPARE(d.selected(), 20);
+        QTest::qWait(60);
+        const double retainedScroll = flick->property("contentY").toDouble();
+        QTest::keyClick(window, Qt::Key_Tab);
+        QTest::keyClick(window, Qt::Key_Tab);
+        QVERIFY(source->hasActiveFocus());
+        QCOMPARE(source->property("cursorPosition").toInt(), retainedCursor);
+        QTRY_COMPARE(flick->property("contentY").toDouble(), retainedScroll);
+        QTest::keyClick(window, Qt::Key_Tab);
+        QTest::keyClick(window, Qt::Key_Down);
+        QCOMPARE(d.selected(), 21);
+        QTest::keyClick(window, Qt::Key_Tab);
+        QCOMPARE(source->property("cursorPosition").toInt(), int(d.source().indexOf("# Slide 21")));
+        QTest::keyClick(window, Qt::Key_Tab);
+        QVERIFY(list->hasActiveFocus());
+        d.select(0);
+        QTest::keyClick(window, Qt::Key_Tab);
+        QCOMPARE(source->property("cursorPosition").toInt(), int(d.source().indexOf("# Slide 0")));
+
+        d.editSource("---\ntitle: Test\n---\n\n" + many);
+        d.select(d.count() - 1);
+        QVERIFY(QMetaObject::invokeMethod(window, "openMarkdown"));
+        QTRY_VERIFY(list->property("contentY").toDouble() > list->property("originY").toDouble());
+        QTest::keyClick(window, Qt::Key_Home, Qt::ControlModifier);
+        QCOMPARE(source->property("cursorPosition").toInt(), 0);
+        QCOMPARE(d.selected(), 0);
+        QTRY_VERIFY(
+            qAbs(list->property("contentY").toDouble() - list->property("originY").toDouble()) < 1);
+        QVERIFY(source->hasActiveFocus());
+
+        d.editSource("---\ntitle: Test\n---\n\n# First\n\n---\n\n# Second\n");
+        d.select(1);
+        QVERIFY(QMetaObject::invokeMethod(window, "openMarkdown"));
+        QTest::keyClick(window, Qt::Key_Up, Qt::ControlModifier);
+        QCOMPARE(d.selected(), 0);
+        QCOMPARE(source->property("cursorPosition").toInt(), d.sourcePosition() + 1);
+        QTRY_VERIFY(dividerVisible()); // The closing frontmatter --- anchors slide one.
+        QString tall = "---\ntitle: Test\n---\n\n# First\n\n---\n\n# Tall\n";
+        for (int line = 0; line < 100; ++line)
+            tall += QString("Line %1\n").arg(line);
+        tall += "\n---\n\n# Last\n";
+        d.editSource(tall);
+        d.select(0);
+        QVERIFY(QMetaObject::invokeMethod(window, "openMarkdown"));
+        QTest::keyClick(window, Qt::Key_Down, Qt::ControlModifier);
+        QCOMPARE(d.selected(), 1);
+        int divider = d.source().lastIndexOf('\n', d.sourcePosition() - 2) + 1;
+        QRectF startDivider;
+        QVERIFY(QMetaObject::invokeMethod(source, "positionToRectangle",
+                                          Q_RETURN_ARG(QRectF, startDivider),
+                                          Q_ARG(int, divider + 1)));
+        QTRY_VERIFY(qAbs(flick->property("contentY").toDouble() -
+                         (startDivider.y() - source->property("topPadding").toDouble() - 2)) < 2);
+        QTRY_VERIFY(dividerVisible());
         window->setProperty("allowClose", true);
         window->close();
     }
@@ -3372,6 +4415,108 @@ static void write(const QString &path, const QString &content) {
         QVERIFY(QFile::exists(destination + "/images/a.png"));
         QCOMPARE(d.path(), destination + "/presentation.md");
     }
+    void saveCopyCopiesNestedMedia() {
+        QTemporaryDir tmp;
+        const QString original = nestedMediaDeck(tmp);
+        Deck d;
+        QVERIFY(d.loadPath(original + "/talk.md"));
+        QCOMPARE(d.count(), 4);
+        for (int i = 0; i < 3; ++i)
+            QVERIFY(slideProblems(d.slide(i), d.baseDir()).isEmpty());
+        QCOMPARE(slideProblems(d.slide(3), d.baseDir()),
+                 QStringList{"Missing media: images/gone.png"});
+        const QString copy = tmp.filePath("copy");
+        QVERIFY(QDir().mkpath(copy + "/images"));
+        write(copy + "/images/.hype-poster-0123456789abcdef.jpg", "other cache");
+        QVERIFY2(d.saveCopyPath(copy + "/talk.md"), qPrintable(d.status()));
+        QCOMPARE(d.path(), copy + "/talk.md");
+        for (const QString &relative :
+             {QString("images/nested/photo.png"), QString("videos/clips/talk.mp4"),
+              QString("images/posters/.cover.png"), QString("images/.private/logo.png"),
+              QString("images/unused/extra.txt")}) {
+            QFile a(original + '/' + relative), b(copy + '/' + relative);
+            QVERIFY2(b.open(QIODevice::ReadOnly), qPrintable(relative));
+            QVERIFY(a.open(QIODevice::ReadOnly));
+            QCOMPARE(b.readAll(), a.readAll());
+        }
+        QFile cache(copy + "/images/.hype-poster-0123456789abcdef.jpg");
+        QVERIFY(cache.open(QIODevice::ReadOnly));
+        QCOMPARE(cache.readAll(), QByteArray("other cache"));
+        for (int i = 0; i < 3; ++i)
+            QVERIFY(slideProblems(d.slide(i), d.baseDir()).isEmpty());
+        QCOMPARE(slideProblems(d.slide(3), d.baseDir()),
+                 QStringList{"Missing media: images/gone.png"});
+    }
+    void saveCopyRemovesCreatedDirectories() {
+        QTemporaryDir tmp;
+        const QString original = nestedMediaDeck(tmp), blocked = tmp.filePath("blocked");
+        Deck d;
+        QVERIFY(d.loadPath(original + "/talk.md"));
+        QVERIFY(QDir().mkpath(blocked + "/talk.md"));
+        QVERIFY(!d.saveCopyPath(blocked + "/talk.md"));
+        QVERIFY(!QFileInfo::exists(blocked + "/images"));
+        QVERIFY(!QFileInfo::exists(blocked + "/videos"));
+        QCOMPARE(d.path(), original + "/talk.md");
+    }
+    void saveCopyRejectsNestedCollision() {
+        QTemporaryDir tmp;
+        const QString original = nestedMediaDeck(tmp), clash = tmp.filePath("clash");
+        Deck d;
+        QVERIFY(d.loadPath(original + "/talk.md"));
+        QVERIFY(QDir().mkpath(clash + "/images/nested"));
+        write(clash + "/images/nested/photo.png", "different");
+        QVERIFY(!d.saveCopyPath(clash + "/talk.md"));
+        QVERIFY2(d.status().contains("images/nested/photo.png"), qPrintable(d.status()));
+        QVERIFY(!QFileInfo::exists(clash + "/videos"));
+        QVERIFY(!QFileInfo::exists(clash + "/images/posters"));
+        QFile kept(clash + "/images/nested/photo.png");
+        QVERIFY(kept.open(QIODevice::ReadOnly));
+        QCOMPARE(kept.readAll(), QByteArray("different"));
+    }
+    void saveCopyRejectsBrokenReferences() {
+        QTemporaryDir tmp;
+        const QString escape = tmp.filePath("escape"), copy = tmp.filePath("deep/copy");
+        QImage image(8, 8, QImage::Format_RGB32);
+        image.fill(Qt::green);
+        QVERIFY(image.save(tmp.filePath("outside.png")));
+        QVERIFY(QDir().mkpath(escape + "/images"));
+        QVERIFY(image.save(escape + "/images/kept.png"));
+        write(escape + "/talk.md",
+              "![](images/kept.png)\n\n---\n\n![](images/../../outside.png)\n");
+        Deck d;
+        QVERIFY(d.loadPath(escape + "/talk.md"));
+        QCOMPARE(d.count(), 2);
+        QVERIFY(slideProblems(d.slide(0), d.baseDir()).isEmpty());
+        QVERIFY(slideProblems(d.slide(1), d.baseDir()).isEmpty());
+        QVERIFY(QDir().mkpath(copy));
+        QVERIFY(!d.saveCopyPath(copy + "/talk.md"));
+        QVERIFY(!QFileInfo::exists(copy + "/talk.md"));
+        QVERIFY(!QFileInfo::exists(copy + "/images"));
+        QCOMPARE(d.path(), escape + "/talk.md");
+        QVERIFY2(d.status().contains("slide 2"), qPrintable(d.status()));
+        QVERIFY2(d.status().contains("Missing media"), qPrintable(d.status()));
+    }
+    void saveCopyIgnoresItsStagingDirectory() {
+        QTemporaryDir tmp;
+        const QString original = tmp.filePath("original"),
+                      copy = tmp.filePath("original/videos/copy");
+        QVERIFY(QDir().mkpath(original + "/images"));
+        QVERIFY(QDir().mkpath(copy));
+        write(original + "/images/extra.txt", "extra");
+        write(original + "/talk.md", "# Hello");
+        Deck d;
+        QVERIFY(d.loadPath(original + "/talk.md"));
+        QVERIFY(d.saveCopyPath(copy + "/talk.md"));
+        QFile extra(copy + "/images/extra.txt");
+        QVERIFY(extra.open(QIODevice::ReadOnly));
+        QCOMPARE(extra.readAll(), QByteArray("extra"));
+        for (QDirIterator it(copy, QDir::AllEntries | QDir::Hidden | QDir::NoDotAndDotDot,
+                             QDirIterator::Subdirectories);
+             it.hasNext();) {
+            const QString entry = it.next();
+            QVERIFY2(!entry.contains(".hype-save-"), qPrintable(entry));
+        }
+    }
     void mediaControlsPreserveCodeAndAltText() {
         Deck d;
         const QString examples = "```markdown\n![](fenced.png)\n```\n"
@@ -3403,6 +4548,112 @@ static void write(const QString &path, const QString &content) {
         d.setMediaMode("invalid");
         QCOMPARE(d.source(), original);
     }
+    void placementControls() {
+        Deck d;
+        d.editSlide("# Headline\n![span background=blur alt=\"Company\"](logo.png)");
+        d.setMediaPosition("bottom-right");
+        auto m = parseMedia(d.slideText(), {});
+        QVERIFY2(m.error.isEmpty(), qPrintable(m.error));
+        QCOMPARE(m.position, QString("bottom-right"));
+        QCOMPARE(m.size, 10.0);
+        QVERIFY(m.background.isEmpty());
+        QVERIFY(d.slideText().contains("alt=\"Company\""));
+        QCOMPARE(d.media()["position"].toString(), QString("bottom-right"));
+        QCOMPARE(d.media()["size"].toDouble(), 10.0);
+        QCOMPARE(d.media()["alignment"].toInt(), int(Qt::AlignRight | Qt::AlignBottom));
+        QCOMPARE(d.property("mediaPositions").toStringList(), mediaPositions());
+        d.setMediaSize(12.5);
+        QCOMPARE(parseMedia(d.slideText(), {}).size, 12.5);
+        d.setMediaSize(20);
+        QCOMPARE(parseMedia(d.slideText(), {}).size, 20.0);
+        d.setMediaPosition("top-left");
+        m = parseMedia(d.slideText(), {});
+        QCOMPARE(m.position, QString("top-left"));
+        QCOMPARE(m.size, 20.0); // Moving keeps the chosen size.
+        d.setMediaMode("fit");
+        m = parseMedia(d.slideText(), {});
+        QVERIFY(m.error.isEmpty());
+        QVERIFY(!m.placed());
+        const QString unplaced = d.source();
+        d.setMediaSize(10); // Size only applies to placed images.
+        QCOMPARE(d.source(), unplaced);
+        d.setMediaPosition("nowhere");
+        QCOMPARE(d.source(), unplaced);
+        d.editSlide("![](demo.mp4)");
+        const QString video = d.source();
+        d.setMediaPosition("bottom-right");
+        QCOMPARE(d.source(), video);
+        // Choosing a background returns a placed image to a full layout.
+        d.editSlide("![position=bottom-right size=20%](logo.png)");
+        d.setMediaBackground("white");
+        m = parseMedia(d.slideText(), {});
+        QVERIFY2(m.error.isEmpty(), qPrintable(m.error));
+        QVERIFY(!m.placed());
+        QCOMPARE(m.background, QString("white"));
+    }
+    void placementUndoesStepByStep() {
+        Deck d;
+        d.editSource("# Headline\n\n![fit background=white alt=\"Logo\"](logo.png)\n");
+        const QString original = d.source();
+        d.setMediaPosition("bottom-right");
+        const QString placed = d.source();
+        d.setMediaSize(20);
+        QCOMPARE(parseMedia(d.slideSource(), {}).size, 20.0);
+        d.undo();
+        QCOMPARE(d.source(), placed);
+        d.undo();
+        QCOMPARE(d.source(), original); // fit, background, and alt text all come back.
+        d.redo();
+        QCOMPARE(d.source(), placed);
+    }
+    void replacingPlacedMediaKeepsPlacement() {
+        const QString placed =
+            "# Headline\n\n![position=bottom-right size=20% alt=\"Old\"](old.png)\n";
+        auto m = parseMedia(withReplacedMedia(placed, "new.png"), {});
+        QCOMPARE(m.file, QString("new.png"));
+        QCOMPARE(m.position, QString("bottom-right"));
+        QCOMPARE(m.size, 20.0);
+        QVERIFY(m.error.isEmpty());
+        // Videos cannot be placed, and unplaced media is replaced as before.
+        QVERIFY(!parseMedia(withReplacedMedia(placed, "demo.mp4"), {}).placed());
+        QVERIFY(parseMedia(withReplacedMedia(placed, "demo.mp4"), {}).error.isEmpty());
+        QCOMPARE(withReplacedMedia("# Headline\n![fit](old.png)", "new.png"),
+                 QString("# Headline\n![](<new.png>)"));
+        QCOMPARE(withReplacedMedia("# Headline", "new.png"),
+                 QString("# Headline\n![](<new.png>)\n"));
+
+        // Importing a file onto a placed slide keeps it in the corner.
+        QTemporaryDir tmp;
+        Deck deck;
+        QVERIFY(deck.savePath(tmp.path() + "/talk.md"));
+        QImage logo(40, 20, QImage::Format_RGB32);
+        logo.fill(Qt::red);
+        QVERIFY(logo.save(tmp.path() + "/new.png"));
+        deck.editSlide(placed);
+        QVERIFY(deck.importMedia(QUrl::fromLocalFile(tmp.path() + "/new.png")));
+        m = parseMedia(deck.slideSource(), deck.baseDir());
+        QCOMPARE(m.position, QString("bottom-right"));
+
+        // Keep enough detail to enlarge the image after pasting it into a small box.
+        deck.editSlide(placed);
+        QImage large(4800, 3600, QImage::Format_RGB32);
+        large.fill(Qt::blue);
+        QApplication::clipboard()->setImage(large);
+        QVERIFY(deck.pasteMedia());
+        QTRY_VERIFY_WITH_TIMEOUT(!deck.compressingImage(), 10000);
+        QVERIFY(deck.savePastedMedia("pasted").isEmpty());
+        m = parseMedia(deck.slideSource(), deck.baseDir());
+        QCOMPARE(m.position, QString("bottom-right"));
+        QCOMPARE(m.size, 20.0);
+        QCOMPARE(QImage(m.path).size(), QSize(2880, 2160));
+        const QString pastedPath = m.path;
+        deck.setMediaSize(35);
+        deck.setMediaMode("fit");
+        m = parseMedia(deck.slideSource(), deck.baseDir());
+        QCOMPARE(m.path, pastedPath);
+        QVERIFY(!m.placed());
+        QCOMPARE(QImage(m.path).size(), QSize(2880, 2160));
+    }
     void mediaImportCollisionAndPortability() {
         QTemporaryDir tmp;
         QDir().mkdir(tmp.path() + "/deck");
@@ -3428,6 +4679,115 @@ static void write(const QString &path, const QString &content) {
         write(tmp.path() + "/source/invalid.png", "not an image");
         QVERIFY(!d.importMedia(QUrl::fromLocalFile(tmp.path() + "/source/invalid.png"), true));
         QCOMPARE(d.count(), 2);
+    }
+    void navigationKeepsDocumentControlsStable() {
+        if (!qEnvironmentVariableIsSet("HYPE_GUI_TESTS"))
+            QSKIP("Set HYPE_GUI_TESTS=1 with local multimedia access");
+        QQuickStyle::setStyle("Basic");
+        qmlRegisterType<SlideItem>("Hype", 1, 0, "SlideCanvas");
+        qmlRegisterType<AppTheme>("Hype", 1, 0, "AppTheme");
+        Deck d;
+        d.editSource("# One\n\n---\n\n# Two\n\n---\n\n# Three\n");
+        QQmlApplicationEngine engine;
+        engine.rootContext()->setContextProperty("deck", &d);
+        engine.addImageProvider("slides", new Thumbnails(&d));
+        engine.load(QUrl("qrc:/Main.qml"));
+        QVERIFY(!engine.rootObjects().isEmpty());
+        auto window = qobject_cast<QQuickWindow *>(engine.rootObjects().first());
+        QVERIFY(window);
+        auto fonts = window->findChild<QObject *>("fontPicker");
+        auto source = window->findChild<QQuickItem *>("sourceEditor");
+        auto slide = window->findChild<QQuickItem *>("slideEditor");
+        QVERIFY(fonts && source && slide);
+        QTest::qWait(100);
+        QSignalSpy fontListChanges(fonts, SIGNAL(visibleFontsChanged()));
+        QSignalSpy sourceChanges(source, SIGNAL(textChanged()));
+        QSignalSpy documentChanges(&d, &Deck::changed);
+        QVERIFY(fontListChanges.isValid() && sourceChanges.isValid());
+        const QString original = d.source();
+        const int revision = d.revision();
+        d.select(1);
+        QCOMPARE(slide->property("text").toString(), d.slideText());
+        d.extendSelection(2);
+        QCOMPARE(d.selectionCount(), 2);
+        QCOMPARE(d.revision(), revision);
+        QCOMPARE(d.source(), original);
+        QCOMPARE(documentChanges.count(), 0);
+        QCOMPARE(fontListChanges.count(), 0);
+        QCOMPARE(sourceChanges.count(), 0);
+        // Content changes must still synchronize both editors, without rebuilding
+        // the font picker on every typed character.
+        d.select(1);
+        d.editSlide("# Edited");
+        QCOMPARE(source->property("text").toString(), d.source());
+        QCOMPARE(slide->property("text").toString(), d.slideText());
+        QVERIFY(sourceChanges.count() > 0);
+        QCOMPARE(fontListChanges.count(), 0);
+        d.undo();
+        QCOMPARE(source->property("text").toString(), original);
+        d.redo();
+        QCOMPARE(slide->property("text").toString(), QString("# Edited"));
+        QString family = d.fontNames().first();
+        if (family == d.fontName()) family = d.fontNames().last();
+        d.chooseFont(family);
+        QCOMPARE(fonts->property("displayText").toString(), family);
+        QVERIFY(fontListChanges.count() > 0);
+        // Saving only changes path/dirty state; those bindings must also refresh.
+        QTemporaryDir tmp;
+        QVERIFY(d.savePath(tmp.filePath("navigation.md")));
+        QVERIFY(!window->title().contains(QString::fromUtf8(" •")));
+        QCOMPARE(source->property("text").toString(), d.source());
+        QVERIFY(QMetaObject::invokeMethod(window, "openMarkdown"));
+        QTest::qWait(50);
+        source->setProperty("cursorPosition", d.source().size());
+        QCOMPARE(d.selected(), 2);
+        QVERIFY(QMetaObject::invokeMethod(window, "setMode", Q_ARG(QVariant, "visual")));
+        QCOMPARE(slide->property("text").toString(), d.slideText());
+    }
+    void documentChangesNotifySelectionAfterDocument() {
+        Deck d;
+        QStringList order;
+        connect(&d, &Deck::changed, [&] { order << "changed"; });
+        connect(&d, &Deck::selectionChanged, [&] { order << "selection"; });
+        QSignalSpy fontChanges(&d, &Deck::fontChanged);
+        d.editSource("# One\n\n---\n\n# Two\n");
+        QCOMPARE(order, QStringList({"changed", "selection"}));
+        order.clear();
+        // Identical text only moves the selection.
+        d.editSource(d.source());
+        QCOMPARE(order, QStringList({"selection"}));
+        // Edits that keep the font do not notify the font picker.
+        const int fonts = fontChanges.count();
+        d.editSource(d.source() + "\nMore");
+        QCOMPARE(fontChanges.count(), fonts);
+    }
+    void replacedMediaRefreshesThumbnails() {
+        QTemporaryDir dir;
+        QVERIFY(QDir(dir.path()).mkpath("images"));
+        const QString image = dir.filePath("images/photo.png");
+        auto write = [&](QColor color, int size) {
+            QImage picture(size, size, QImage::Format_RGB32);
+            picture.fill(color);
+            QVERIFY(picture.save(image));
+        };
+        write(Qt::red, 40);
+        const QString path = dir.filePath("presentation.md");
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write("# One\n\n---\n\n![](photo.png)\n");
+        file.close();
+        Deck d;
+        QVERIFY(d.loadPath(path));
+        const QString before = d.renderId(1);
+        const qint64 bytes = d.totalBytes();
+        const int revision = d.revision();
+        QSignalSpy changes(&d, &Deck::changed);
+        write(Qt::blue, 80);
+        QTRY_VERIFY(changes.count() > 0);
+        QVERIFY(d.revision() > revision);
+        QVERIFY(d.renderId(1) != before);
+        QVERIFY(d.totalBytes() != bytes);
+        QCOMPARE(d.dirty(), false);
     }
     void fontSelection() {
         Deck d;
@@ -3486,6 +4846,95 @@ static void write(const QString &path, const QString &content) {
         QVERIFY(!lateTexture || lateTexture->textureSize().isEmpty());
         provider.shutdown(); // Idempotent for aboutToQuit, scope guard, and destructor.
     }
+    void benchmarkNavigation() {
+        if (!qEnvironmentVariableIsSet("HYPE_NAV_BENCHMARK"))
+            QSKIP("Set HYPE_NAV_BENCHMARK=1 to measure keyboard slide navigation");
+        QQuickStyle::setStyle("Basic");
+        qmlRegisterType<SlideItem>("Hype", 1, 0, "SlideCanvas");
+        qmlRegisterType<AppTheme>("Hype", 1, 0, "AppTheme");
+        Deck d;
+        QString path = qEnvironmentVariable("HYPE_NAV_DECK");
+        if (path.isEmpty()) path = QFINDTESTDATA("fixtures/navigation.md");
+        QVERIFY(d.loadPath(path, false));
+        const auto parsed = parseDeck(d.source());
+        QVERIFY(d.count() >= 3);
+        QQmlApplicationEngine engine;
+        engine.rootContext()->setContextProperty("deck", &d);
+        engine.addImageProvider("slides", new Thumbnails(&d));
+        engine.load(QUrl("qrc:/Main.qml"));
+        QVERIFY(!engine.rootObjects().isEmpty());
+        auto window = qobject_cast<QQuickWindow *>(engine.rootObjects().first());
+        QVERIFY(window);
+        window->resize(1280, 800);
+        auto source = window->findChild<QQuickItem *>("sourceEditor");
+        auto list = window->findChild<QQuickItem *>("thumbnails");
+        QVERIFY(source && list);
+        const QString original = d.source();
+        auto report = [](const QString &scenario, const QString &metric, QList<double> values) {
+            std::sort(values.begin(), values.end());
+            double total = 0;
+            int slow = 0;
+            for (double v : values) { total += v; slow += v > 16.67; }
+            qInfo().noquote() << QString("NAV %1 %2 n=%3 median=%4 p95=%5 max=%6 mean=%7 over16ms=%8")
+                .arg(scenario, metric).arg(values.size())
+                .arg(values[values.size()/2], 0, 'f', 3)
+                .arg(values[qMin(values.size()-1, qsizetype(values.size()*0.95))], 0, 'f', 3)
+                .arg(values.last(), 0, 'f', 3).arg(total/values.size(), 0, 'f', 3).arg(slow);
+        };
+        const QString only = qEnvironmentVariable("HYPE_NAV_SCENARIO");
+        for (const QString &scenario : {QString("markdown-cursor"), QString("markdown-sidebar"), QString("visual-sidebar")}) {
+            if (!only.isEmpty() && only != scenario) continue;
+            const bool markdown = scenario.startsWith("markdown");
+            const bool cursor = scenario.endsWith("cursor");
+            QVERIFY(QMetaObject::invokeMethod(window, "setMode", Q_ARG(QVariant, markdown ? "markdown" : "visual")));
+            if (cursor) source->forceActiveFocus(); else list->forceActiveFocus();
+            d.select(0);
+            QTest::qWait(300);
+            QList<double> dispatch, frame;
+            // Both directions; enough time between keys for the prefetch timer and
+            // one-second metadata caches to run, like held/repeated arrow keys.
+            for (int direction : {1, -1}) {
+                const int limit = qMin(d.count()-1, 60);
+                for (int step = 0; step < limit; ++step) {
+                    const int from = direction > 0 ? step : limit-step;
+                    const int to = from + direction;
+                    d.select(from);
+                    if (cursor) {
+                        // Cross a real separator with one native Up/Down event.
+                        const int boundary = parsed.slides[qMax(from, to)].start;
+                        const int position = direction > 0 ? original.lastIndexOf('\n', boundary-2)+1 : boundary;
+                        source->setProperty("cursorPosition", position);
+                        QCOMPARE(d.selected(), from);
+                    }
+                    QTest::qWait(70);
+                    QEventLoop loop;
+                    QTimer timeout;
+                    timeout.setSingleShot(true);
+                    bool painted = false;
+                    const auto connection = connect(window, &QQuickWindow::frameSwapped, &loop, [&] {
+                        painted = true;
+                        loop.quit();
+                    }, Qt::QueuedConnection);
+                    connect(&timeout, &QTimer::timeout, &loop, &QEventLoop::quit);
+                    QElapsedTimer timer;
+                    timer.start();
+                    QTest::keyClick(window, direction > 0 ? Qt::Key_Down : Qt::Key_Up);
+                    dispatch.append(timer.nsecsElapsed()/1e6);
+                    QCOMPARE(d.selected(), to);
+                    window->update();
+                    timeout.start(2000);
+                    loop.exec();
+                    frame.append(timer.nsecsElapsed()/1e6);
+                    disconnect(connection);
+                    QVERIFY2(painted, "No frame was presented within two seconds");
+                }
+            }
+            report(scenario, "key-ms", dispatch);
+            report(scenario, "frame-ms", frame);
+            QCOMPARE(d.source(), original);
+        }
+    }
+
     void navigationLatency() {
         if (!qEnvironmentVariableIsSet("HYPE_BENCHMARK"))
             QSKIP("Set HYPE_BENCHMARK=1 for navigation timings");
@@ -3660,7 +5109,9 @@ static void write(const QString &path, const QString &content) {
         QVERIFY(!engine.rootObjects().isEmpty());
         auto window = qobject_cast<QQuickWindow *>(engine.rootObjects()[0]);
         auto preview = window->findChild<QQuickItem *>("slidePreview");
-        QVERIFY(preview);
+        auto quick = window->findChild<QQuickItem *>("slideQuickPreview");
+        auto frame = window->findChild<QQuickItem *>("slideFrame");
+        QVERIFY(preview && quick && frame);
         for (int i = 0; i < 40; ++i) {
             deck.select((i * 7) % 18);
             QTest::qWait(5);
@@ -3676,6 +5127,22 @@ static void write(const QString &path, const QString &content) {
         capture = preview->grabToImage();
         QTRY_VERIFY(!capture->image().isNull());
         QCOMPARE(capture->image().pixelColor(capture->image().width() / 2, capture->image().height() / 2),
+                 QColor::fromRgb(QColor::fromHsv(17 * 19, 230, 210).rgb()));
+        // A late thumbnail must never cover the full render, even if its visible
+        // state lags behind the full image's Ready notification.
+        quick->setProperty("source", "image://slides/" + deck.renderId(0));
+        QTRY_COMPARE_WITH_TIMEOUT(quick->property("status").toInt(), 1, 5000);
+        quick->setVisible(true);
+        QVERIFY(quick->isVisible());
+        auto thumbnailCapture = quick->grabToImage();
+        QTRY_VERIFY(!thumbnailCapture->image().isNull());
+        QCOMPARE(thumbnailCapture->image().pixelColor(thumbnailCapture->image().width() / 2,
+                                                      thumbnailCapture->image().height() / 2),
+                 QColor::fromRgb(QColor::fromHsv(0, 230, 210).rgb()));
+        auto stageCapture = frame->grabToImage();
+        QTRY_VERIFY(!stageCapture->image().isNull());
+        QCOMPARE(stageCapture->image().pixelColor(stageCapture->image().width() / 2,
+                                                  stageCapture->image().height() / 2),
                  QColor::fromRgb(QColor::fromHsv(17 * 19, 230, 210).rgb()));
     }
     void imageTextOverlaysEveryLayout() {
@@ -3959,6 +5426,59 @@ static void write(const QString &path, const QString &content) {
         highlightCode(plain, palette);
         QCOMPARE(plain.toPlainText(), original);
     }
+    void tablesKeepColumnAlignmentAndRules() {
+        Deck deck;
+        QTextDocument doc;
+        layoutSlideText(doc, "| Plan | Price | Seats |\n| --- | :---: | ---: |\n| Basic | $9 | 1 |\n| Team | $29 | 10 |",
+                        deck.palette(), 60, 1660, true, false);
+        QTextTable *table = nullptr;
+        for (auto it = doc.rootFrame()->begin(); !it.atEnd() && !table; ++it)
+            table = qobject_cast<QTextTable *>(it.currentFrame());
+        QVERIFY(table);
+        QCOMPARE(table->rows(), 3);
+        // Sized to its content, not stretched across the slide.
+        QVERIFY2(doc.documentLayout()->frameBoundingRect(table).width() < 1660 / 2,
+                 qPrintable(QString::number(doc.documentLayout()->frameBoundingRect(table).width())));
+        const Qt::Alignment expected[] = {Qt::AlignLeft, Qt::AlignHCenter, Qt::AlignRight};
+        for (int row = 0; row < table->rows(); ++row)
+            for (int column = 0; column < 3; ++column)
+                QCOMPARE(table->cellAt(row, column).firstCursorPosition().blockFormat().alignment() &
+                             Qt::AlignHorizontal_Mask, expected[column]);
+        auto rule = [&](int row) { return table->cellAt(row, 0).format().toTableCellFormat(); };
+        QCOMPARE(rule(0).bottomBorderBrush().color(), QColor(deck.palette()["accent"].toString()));
+        QVERIFY(rule(0).bottomBorder() > rule(1).bottomBorder());
+        QCOMPARE(rule(2).bottomBorder(), 0.0);
+    }
+    void tableCellsKeepExtraSpaces() {
+        Deck deck;
+        auto width = [&](const QString &markdown) {
+            QTextDocument doc;
+            layoutSlideText(doc, markdown, deck.palette(), 60, 1660, true, false);
+            return doc.idealWidth();
+        };
+        const qreal plain = width("| A | B |\n| --- | ---: |\n| x | 1 |");
+        QCOMPARE(width("|A|B|\n|---|---:|\n|x|1|"), plain);
+        QVERIFY(width("| A | B |\n| --- | ---: |\n| x |    1 |") > plain);
+        QVERIFY(width("| A      | B |\n| --- | ---: |\n| x | 1 |") > plain);
+        QTextDocument code;
+        layoutSlideText(code, "| A | B |\n| --- | --- |\n| `a  |  b` | 1 |", deck.palette(), 60, 1660, true, false);
+        QVERIFY(code.toPlainText().contains("a  |  b"));
+    }
+    void tablesWithoutOuterPipesAlignLeft() {
+        Deck deck;
+        QImage table(1920, 1080, QImage::Format_ARGB32);
+        {
+            QPainter painter(&table);
+            paintSlide(&painter, table.rect(), "# Tools\n\nTool | Use\n--- | ---\ncheck | Find problems",
+                       QDir::tempPath(), deck.palette());
+        }
+        // The headline sits above the table, so a left edge near the margin means it was left aligned.
+        int left = table.width();
+        for (int y = 0; y < table.height() / 3; ++y)
+            for (int x = 0; x < left; ++x)
+                if (table.pixelColor(x, y) != table.pixelColor(0, 0)) left = x;
+        QVERIFY2(left < 200, qPrintable(QString::number(left)));
+    }
     void headlineFormattingStaysLocal() {
         Deck deck;
         const QStringList markedWords{"_Ruby_", "*Ruby*", "**Ruby**", "~~Ruby~~", "`Ruby`"};
@@ -4048,6 +5568,45 @@ static void write(const QString &path, const QString &content) {
         cr.replace("\n", "\r");
         QCOMPARE(render(cr), render(explicitBreaks));
         QCOMPARE(render("`one`\n`two`"), render("`one`\\\n`two`"));
+    }
+    void svgStaysSharp() {
+        QTemporaryDir tmp;
+        QVERIFY(QDir().mkpath(tmp.path() + "/images"));
+        // An SVG declaring a small size, as icons and design-tool exports usually do.
+        write(tmp.path() + "/images/chart.svg",
+              "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 400 240\">"
+              "<rect x=\"20\" y=\"140\" width=\"60\" height=\"80\" fill=\"#7aa2f7\"/>"
+              "<text x=\"20\" y=\"30\" font-size=\"20\" fill=\"#c0caf5\">Requests per "
+              "second</text></svg>");
+        // Loaded for a slide, it takes the slide's size rather than its declared 400 by 240.
+        const QImage loaded =
+            readSizedImage(tmp.path() + "/images/chart.svg", QSize(1780, 980), false);
+        QCOMPARE(loaded.size(), QSize(1633, 980));
+        // Alone on a slide, it stays vector in a PDF: its text is text, and no picture is embedded.
+        write(tmp.path() + "/talk.md", "![fit](chart.svg)\n");
+        Deck deck;
+        QVERIFY(deck.loadPath(tmp.path() + "/talk.md"));
+        QVERIFY(deck.exportPdf(tmp.path() + "/vector.pdf"));
+        QPdfDocument pdf;
+        QCOMPARE(pdf.load(tmp.path() + "/vector.pdf"), QPdfDocument::Error::None);
+        QVERIFY(pdf.getAllText(0).text().contains("Requests per second"));
+        QFile file(tmp.path() + "/vector.pdf");
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        QVERIFY(!file.readAll().contains("/Subtype /Image"));
+        // A placed logo has no softening even beside text, so it should remain vector too.
+        deck.editSource("# Growth\n\n![position=bottom-right size=20%](chart.svg)\n");
+        QVERIFY(deck.exportPdf(tmp.path() + "/placed.pdf"));
+        QFile placed(tmp.path() + "/placed.pdf");
+        QVERIFY(placed.open(QIODevice::ReadOnly));
+        QVERIFY(!placed.readAll().contains("/Subtype /Image"));
+        // Under an ordinary headline it is still softened, from a sharp full-size copy.
+        deck.editSource("![fit](chart.svg)\n\n# Growth\n");
+        QVERIFY(deck.exportPdf(tmp.path() + "/softened.pdf"));
+        QFile softened(tmp.path() + "/softened.pdf");
+        QVERIFY(softened.open(QIODevice::ReadOnly));
+        const QByteArray bytes = softened.readAll();
+        QVERIFY(bytes.contains("/Subtype /Image"));
+        QVERIFY(!bytes.contains("/Width 400"));
     }
     void workSizesToTheMachine() {
         const qint64 mb = 1 << 20, gb = 1LL << 30;

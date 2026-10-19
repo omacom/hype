@@ -48,19 +48,21 @@ const Icon *find(const QString &name) {
 }
 int distance(const QString &a, const QString &b) {
     QVector<int> row(b.size() + 1);
-    for (int j = 0; j <= b.size(); ++j) row[j] = j;
+    for (int j = 0; j <= b.size(); ++j)
+        row[j] = j;
     for (int i = 1; i <= a.size(); ++i) {
         int previous = row[0];
         row[0] = i;
         for (int j = 1; j <= b.size(); ++j) {
             const int current = row[j];
-            row[j] = qMin(qMin(row[j] + 1, row[j - 1] + 1), previous + (a[i - 1] == b[j - 1] ? 0 : 1));
+            row[j] =
+                qMin(qMin(row[j] + 1, row[j - 1] + 1), previous + (a[i - 1] == b[j - 1] ? 0 : 1));
             previous = current;
         }
     }
     return row[b.size()];
 }
-}
+} // namespace
 
 bool iconExists(const QString &name) { return find(name); }
 
@@ -73,13 +75,15 @@ QStringList iconSuggestions(const QString &name) {
             near.append({distance(name, it.key()), it.key()});
         std::sort(near.begin(), near.end());
         for (int i = 0; i < near.size() && found.size() < 3; ++i)
-            if (!found.contains(near[i].second)) found << near[i].second;
+            if (!found.contains(near[i].second))
+                found << near[i].second;
     }
     return found;
 }
 
 QStringList searchIcons(const QString &query, int limit) {
-    const QStringList words = query.toLower().split(QRegularExpression("[\\s,]+"), Qt::SkipEmptyParts);
+    const QStringList words =
+        query.toLower().split(QRegularExpression("[\\s,]+"), Qt::SkipEmptyParts);
     QVector<QPair<int, QString>> scored;
     for (auto it = icons().cbegin(); it != icons().cend(); ++it) {
         if (!it->alias.isEmpty() && !words.isEmpty())
@@ -88,12 +92,20 @@ QStringList searchIcons(const QString &query, int limit) {
         bool all = true;
         for (const QString &word : words) {
             const QStringList parts = it.key().split('-');
-            if (it.key() == word) score += 100;
-            else if (parts.contains(word)) score += 40;
-            else if (it.key().contains(word)) score += 20;
-            else if (it->tags.split(' ').contains(word)) score += 10;
-            else if (it->tags.contains(word)) score += 4;
-            else { all = false; break; }
+            if (it.key() == word)
+                score += 100;
+            else if (parts.contains(word))
+                score += 40;
+            else if (it.key().contains(word))
+                score += 20;
+            else if (it->tags.split(' ').contains(word))
+                score += 10;
+            else if (it->tags.contains(word))
+                score += 4;
+            else {
+                all = false;
+                break;
+            }
         }
         if (all)
             scored.append({-score * 1000 + int(it.key().size()), it.key()});
@@ -101,20 +113,22 @@ QStringList searchIcons(const QString &query, int limit) {
     std::sort(scored.begin(), scored.end());
     QStringList names;
     for (const auto &entry : scored) {
-        if (limit > 0 && names.size() >= limit) break;
+        if (limit > 0 && names.size() >= limit)
+            break;
         names << entry.second;
     }
     return names;
 }
 
-void paintIcon(QPainter *p, const QString &name, const QRectF &rect, const QColor &color, qreal stroke) {
+void paintIcon(QPainter *p, const QString &name, const QRectF &rect, const QColor &color,
+               qreal stroke) {
     const Icon *icon = find(name);
     if (!icon || rect.isEmpty())
         return;
     const QByteArray svg =
         "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"" +
-        color.name(QColor::HexRgb).toLatin1() + "\" stroke-opacity=\"" + QByteArray::number(color.alphaF()) +
-        "\" stroke-width=\"" + QByteArray::number(stroke) +
+        color.name(QColor::HexRgb).toLatin1() + "\" stroke-opacity=\"" +
+        QByteArray::number(color.alphaF()) + "\" stroke-width=\"" + QByteArray::number(stroke) +
         "\" stroke-linecap=\"round\" stroke-linejoin=\"round\">" + icon->body + "</svg>";
     QSvgRenderer renderer(svg);
     const qreal side = qMin(rect.width(), rect.height());
