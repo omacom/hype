@@ -105,6 +105,19 @@ class ExportTests(unittest.TestCase):
                 if name.endswith(('.xml', '.rels')):
                     ET.fromstring(archive.read(name))
 
+    def test_component_video_sits_where_the_layout_puts_it(self):
+        self.movie(size='640x360')
+        self.export('<Row>\n<Video src="demo.mp4" aspect="16:9"/>\n<Text>Beside the video</Text>\n</Row>\n')
+        with zipfile.ZipFile(self.output) as archive:
+            slide = ET.fromstring(archive.read('ppt/slides/slide1.xml'))
+            movie = next(pic for pic in slide.iter('{http://schemas.openxmlformats.org/presentationml/2006/main}pic')
+                         if pic.find('.//a:hlinkClick', NS) is not None)
+            offset, extent = movie.find('.//a:off', NS), movie.find('.//a:ext', NS)
+            width = 12192000
+            # The left half of the row, not the middle of the slide.
+            self.assertLess(int(offset.get('x')) + int(extent.get('cx')), width * 0.55)
+            self.assertGreater(int(extent.get('cx')), width * 0.3)
+
     def test_repeated_movie_is_embedded_once(self):
         self.movie(codec='mpeg4')
         self.export('![fit](demo.mp4)\n---\n![span muted](demo.mp4)\n')
@@ -268,6 +281,25 @@ class ExportTests(unittest.TestCase):
         self.assertIn('ffmpeg', result.stderr)
         self.assertEqual(self.output.read_bytes(), original)
         self.assertEqual(list((self.root / 'videos').iterdir()), [])
+
+    @unittest.skipUnless(shutil.which('pdftoppm') and shutil.which('pdftotext'), 'Needs poppler')
+    def test_gradient_text_keeps_its_colors_and_words_in_pdf(self):
+        source = self.root / 'presentation.md'
+        source.write_text('<!-- hype: frame="none" -->\n<Background fill="#000000"/>\n'
+                          '<Text size="200" weight="900" tone="#ff2050 #4060ff">Hello</Text>\n')
+        pdf = self.root / 'talk.pdf'
+        result = subprocess.run([str(self.app), str(source), '--pdf', str(pdf)],
+                                env=self.env, capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        subprocess.run(['pdftoppm', '-r', '20', '-singlefile', str(pdf), str(self.root / 'page')], check=True)
+        data = (self.root / 'page.ppm').read_bytes()
+        _, width, height, _, pixels = data.split(maxsplit=4)
+        reds = sum(1 for i in range(0, int(width) * int(height) * 3, 3) if pixels[i] > 160 and pixels[i + 2] < 160)
+        blues = sum(1 for i in range(0, int(width) * int(height) * 3, 3) if pixels[i + 2] > 160 and pixels[i] < 160)
+        self.assertGreater(reds, 20)  # Qt's PDF engine alone draws this text black on black
+        self.assertGreater(blues, 20)
+        text = subprocess.run(['pdftotext', str(pdf), '-'], capture_output=True, text=True, check=True).stdout
+        self.assertIn('Hello', text)
 
     @unittest.skipUnless(os.environ.get('HYPE_OFFICE_TESTS') and shutil.which('libreoffice'),
                          'Set HYPE_OFFICE_TESTS=1 to verify with LibreOffice')

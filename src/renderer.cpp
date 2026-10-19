@@ -1,4 +1,5 @@
 #include "renderer.h"
+#include "blocks.h"
 #include "budget.h"
 #include "images.h"
 #include "syntax.h"
@@ -26,6 +27,8 @@
 #include <QTimer>
 #include <QWaitCondition>
 #include <QXmlStreamReader>
+#include <algorithm>
+#include <limits>
 
 static QRegularExpression mediaRe(R"(!\[([^\]]*)\]\((?:<([^>]+)>|([^\s)]+))\))");
 namespace {
@@ -49,7 +52,7 @@ class ImageCache {
     }
 };
 }
-static QString outsideCode(QString source, bool maskInline = true) {
+QString outsideCode(QString source, bool maskInline) {
     int position = 0, fenceLength = 0;
     QChar fence;
     static const QRegularExpression marker("^ {0,3}(`{3,}|~{3,})(.*)$");
@@ -97,6 +100,42 @@ static QString withoutComments(QString source) {
     for (auto it = ranges.crbegin(); it != ranges.crend(); ++it)
         source.remove(it->first, it->second);
     return source;
+}
+QString slideProperty(const QString &source, const QString &key) {
+    QRegularExpression re("<!--\\s*hype:[\\s\\S]*?\\b" + key + "=\"([^\"]*)\"[\\s\\S]*?-->");
+    return re.match(outsideCode(source)).captured(1);
+}
+static WordCloud readWordCloud(const QString &markdown) {
+    WordCloud result;
+    static const QRegularExpression heading("^(#{2,6})[ \\t]+\\S");
+    for (const auto &line : withoutComments(markdown).split('\n')) {
+        const QString trimmed = line.trimmed();
+        if (trimmed.isEmpty())
+            continue;
+        const auto match = heading.match(trimmed);
+        QTextDocument doc;
+        doc.setMarkdown(trimmed, QTextDocument::MarkdownDialectGitHub);
+        if (match.hasMatch() && result.footer.isEmpty()) {
+            CloudLabel label;
+            label.text = doc.toPlainText().trimmed();
+            label.level = match.captured(1).size();
+            if (label.text.isEmpty()) {
+                result.error = "Word cloud labels cannot be empty";
+                return result;
+            }
+            result.labels.append(label);
+        } else if (trimmed.startsWith("> ")) {
+            if (!result.footer.isEmpty())
+                result.footer += ' ';
+            result.footer += doc.toPlainText().trimmed();
+        } else {
+            result.error = "Word cloud needs ## to ###### labels, followed by an optional > footer";
+            return result;
+        }
+    }
+    if (result.labels.isEmpty())
+        result.error = "Word cloud needs at least one ## to ###### label";
+    return result;
 }
 QString speakerNotes(const QString &source) {
     const QString visible = outsideCode(source);
@@ -206,7 +245,79 @@ QString withMediaDirectives(const QString &source, const QStringList &remove,
 static Media readMedia(const QString &source, const QString &base) {
     Media result;
     result.text = withoutComments(source);
+    if (hasComponents(source)) {
+        result.layout = "components";
+        result.text = withoutDefinitions(result.text);
+        // A <Video> on a component slide plays in place, wherever the layout puts it.
+        const auto video = componentVideo(source);
+        if (!video.value("src").isEmpty()) {
+            auto flag = [&](const QString &key, bool fallback) {
+                return video.contains(key) ? video.value(key) != "false" : fallback;
+            };
+            result.file = video.value("src");
+            result.video = true;
+            result.path = assetPath(base, result.file, true);
+            result.loop = flag("loop", false);
+            result.muted = flag("muted", false);
+            result.autoplay = flag("autoplay", true);
+            if (!video.value("poster").isEmpty())
+                result.poster = assetPath(base, video.value("poster"), false);
+        }
+        return result;
+    }
     auto m = mediaRe.match(outsideCode(result.text));
+    if (slideProperty(source, "layout") == "gallery") {
+        result.layout = "gallery";
+        for (const auto &line : result.text.split('\n')) {
+            const QString trimmed = line.trimmed();
+            if (trimmed.isEmpty())
+                continue;
+            const auto image = mediaRe.match(trimmed);
+            if (trimmed.startsWith("# ") && result.heading.isEmpty() && result.gallery.isEmpty()) {
+                result.heading = trimmed;
+            } else if (trimmed.startsWith("## ") && !result.heading.isEmpty() &&
+                       result.footer.isEmpty() &&
+                       (result.gallery.isEmpty() || !result.gallery.last().file.isEmpty())) {
+                result.gallery.append({trimmed.mid(3).trimmed(), {}, {}});
+            } else if (image.hasMatch() && image.capturedStart() == 0 &&
+                       image.capturedLength() == trimmed.size() && !result.gallery.isEmpty() &&
+                       result.gallery.last().file.isEmpty() && result.footer.isEmpty()) {
+                auto &item = result.gallery.last();
+                item.file = image.captured(2).isEmpty() ? image.captured(3) : image.captured(2);
+                item.path = assetPath(base, item.file, false);
+            } else if (trimmed.startsWith("> ") && !result.gallery.isEmpty() &&
+                       !result.gallery.last().file.isEmpty()) {
+                if (!result.footer.isEmpty())
+                    result.footer += '\n';
+                result.footer += trimmed.mid(2);
+            } else {
+                result.error = "Gallery needs a # title, pairs of ## labels and images, then an "
+                               "optional > footer";
+                break;
+            }
+        }
+        if (result.heading.isEmpty() || result.gallery.isEmpty() ||
+            (!result.gallery.isEmpty() && result.gallery.last().file.isEmpty()))
+            result.error = "Gallery needs a # title and an image for every ## label";
+        if (result.gallery.size() > 9)
+            result.error = "Gallery supports at most nine groups per slide";
+        return result;
+    }
+    if (slideProperty(source, "layout") == "cloud") {
+        result.layout = "cloud";
+        const auto heading = QRegularExpression("^# [^\\n]+", QRegularExpression::MultilineOption)
+                                 .match(outsideCode(result.text));
+        if (heading.hasMatch()) {
+            result.heading = result.text.mid(heading.capturedStart(), heading.capturedLength());
+            result.text.remove(heading.capturedStart(), heading.capturedLength());
+        }
+        result.error = readWordCloud(result.text).error;
+        if (!heading.hasMatch())
+            result.error = "Word cloud needs a # title";
+        if (m.hasMatch())
+            result.error = "Word cloud is a text-only layout";
+        return result;
+    }
     if (!m.hasMatch())
         return result;
     result.file = m.captured(2).isEmpty() ? m.captured(3) : m.captured(2);
@@ -250,7 +361,14 @@ static Media readMedia(const QString &source, const QString &base) {
                 result.autoplay = value != "false";
             else if (key == "overlay")
                 explicitOverlay = value;
-            else if (key == "position") {
+            else if (key == "layout") {
+                if (value != "title" && value != "overlay" && value != "split" &&
+                    value != "caption" && value != "caption-right")
+                    result.error =
+                        "Layout must be title, overlay, split, caption, or caption-right";
+                else
+                    result.layout = value;
+            } else if (key == "position") {
                 // Errors name the directive, never the author's value, which may hold markup.
                 result.position = value;
                 if (!mediaPositions().contains(value))
@@ -283,8 +401,9 @@ static Media readMedia(const QString &source, const QString &base) {
     if (result.placed()) {
         if (result.video)
             result.error = "Only images can be placed";
-        else if (fit || span || !result.background.isEmpty() || !explicitOverlay.isEmpty())
-            result.error = "A placed image cannot use fit, span, background, or overlay";
+        else if (fit || span || !result.background.isEmpty() || !explicitOverlay.isEmpty() ||
+                 !result.layout.isEmpty())
+            result.error = "A placed image cannot use fit, span, background, overlay, or layout";
         if (result.size == 0)
             result.size = defaultPlacedSize;
         for (const auto &[position, alignment] : placements())
@@ -298,7 +417,28 @@ static Media readMedia(const QString &source, const QString &base) {
     // A background choice implies fitting unless span was explicitly requested.
     if (!span && (result.background == "blur" || result.background == "auto"))
         result.span = false;
-    result.overlay = (!result.video || result.span) && !result.text.trimmed().isEmpty() ? 0.25 : 0;
+    if (result.layout == "title" || result.layout == "caption" ||
+        result.layout == "caption-right") {
+        const auto heading = QRegularExpression("^# [^\\n]+", QRegularExpression::MultilineOption)
+                                 .match(outsideCode(result.text));
+        if (heading.hasMatch()) {
+            result.heading = result.text.mid(heading.capturedStart(), heading.capturedLength());
+            result.text.remove(heading.capturedStart(), heading.capturedLength());
+        } else if (result.layout == "title")
+            result.error = "Title layout needs a # heading";
+        if (!span)
+            result.span = false;
+    }
+    if ((result.layout == "split" || result.layout == "caption" ||
+         result.layout == "caption-right") &&
+        !span)
+        result.span = false;
+    result.overlay = result.layout != "split" && result.layout != "caption" &&
+                             result.layout != "caption-right" &&
+                             (!result.video || result.span || result.layout == "title") &&
+                             !result.text.trimmed().isEmpty()
+                         ? 0.25
+                         : 0;
     if (!explicitOverlay.isEmpty()) {
         bool ok;
         double opacity = explicitOverlay.toDouble(&ok);
@@ -476,11 +616,21 @@ QString ensurePoster(const QString &video, const QString &base) {
     }
     return result;
 }
-QStringList slideProblems(const QString &source, const QString &base) {
+QStringList slideProblems(const QString &source, const QString &base, const QVariantMap &palette) {
+    if (isComposedSlide(source, palette))
+        return composedProblems(source, base, palette);
     QStringList errors;
     auto media = parseMedia(source, base);
     if (!media.error.isEmpty())
         errors << media.error;
+    for (const auto &item : media.gallery) {
+        if (item.file.isEmpty())
+            continue;
+        if (!QFileInfo::exists(item.path))
+            errors << "Missing media: " + item.file;
+        else if (!QImageReader(item.path).canRead())
+            errors << "Cannot decode gallery image: " + item.file;
+    }
     if (media.svgBlocks) {
         if (const QString problem = svgProblem(media.svg); !problem.isEmpty())
             errors << problem;
@@ -498,7 +648,7 @@ QStringList slideProblems(const QString &source, const QString &base) {
         matches.next();
         ++count;
     }
-    if (count + media.svgBlocks > 1)
+    if (count + media.svgBlocks > 1 && (media.layout != "gallery" || media.svgBlocks))
         errors << "Use one media item per slide (combine artwork before importing)";
     return errors;
 }
@@ -526,7 +676,7 @@ static QImage loadedImage(const QString &path, QSize canvas, bool span) {
         cache.put(key, image);
     return image;
 }
-static QImage boxBlur(QImage image, int radius) {
+QImage boxBlur(QImage image, int radius) {
     image = image.convertToFormat(QImage::Format_ARGB32_Premultiplied);
     const int width = image.width(), height = image.height(), diameter = radius * 2 + 1;
     // Three separable box passes approximate a Gaussian. Clamp the edges and
@@ -602,11 +752,7 @@ QImage softenedImage(const QImage &image, const QSizeF &slideSize) {
     }
     return softened;
 }
-static QString slideProperty(const QString &source, const QString &key) {
-    QRegularExpression re("<!--\\s*hype:[\\s\\S]*?\\b" + key + "=\"([^\"]*)\"[\\s\\S]*?-->");
-    return re.match(source).captured(1);
-}
-static QString preserveLineBreaks(QString markdown) {
+QString preserveLineBreaks(QString markdown) {
     markdown.replace("\r\n", "\n").replace('\r', '\n');
     const QStringList visible = outsideCode(markdown, false).split('\n');
     QStringList lines = markdown.split('\n');
@@ -667,7 +813,7 @@ static QString padTableCells(const QString &markdown) {
     return lines.join('\n');
 }
 static void sizeSlideText(QTextDocument &doc, const QVariantMap &palette, qreal fontSize,
-                          qreal width, bool centered, bool code) {
+                          qreal width, bool centered, bool code, bool equalColumns = false) {
     // A null page size suspends layout while every format below changes; the
     // final setTextWidth lays the document out once instead of once per run.
     doc.setPageSize(QSizeF(0, 0));
@@ -737,8 +883,17 @@ static void sizeSlideText(QTextDocument &doc, const QVariantMap &palette, qreal 
             fmt.setBorderCollapse(true);
             fmt.setCellPadding(fontSize * 0.25);
             fmt.setCellSpacing(0);
-            // Size to the content rather than the slide, so columns stay close enough to read across.
-            fmt.setWidth(QTextLength());
+            if (equalColumns) {
+                // A caption's table, say names under a row of portraits: one equal column under
+                // each.
+                fmt.setWidth(QTextLength(QTextLength::PercentageLength, 100));
+                fmt.setColumnWidthConstraints(
+                    QList<QTextLength>(table->columns(), QTextLength(QTextLength::PercentageLength,
+                                                                     100.0 / table->columns())));
+            } else
+                // Size to the content rather than the slide, so columns stay close enough to read
+                // across.
+                fmt.setWidth(QTextLength());
             fmt.setAlignment(centered ? Qt::AlignHCenter : Qt::AlignLeft);
             table->setFormat(fmt);
             // Qt aligns body cells by the delimiter row but leaves the header at the default.
@@ -759,7 +914,7 @@ static void sizeSlideText(QTextDocument &doc, const QVariantMap &palette, qreal 
                         cf.setLeftPadding(fontSize * 0.8);
                     if (column + 1 < table->columns())
                         cf.setRightPadding(fontSize * 0.8);
-                    if (row + 1 < table->rows()) {
+                    if (row + 1 < table->rows() && !equalColumns) {
                         cf.setBottomBorder(row ? fontSize * 0.03 : fontSize * 0.06);
                         cf.setBottomBorderStyle(QTextFrameFormat::BorderStyle_Solid);
                         cf.setBottomBorderBrush(row ? rule : QColor(palette["accent"].toString()));
@@ -770,10 +925,89 @@ static void sizeSlideText(QTextDocument &doc, const QVariantMap &palette, qreal 
     doc.setTextWidth(width);
 }
 void layoutSlideText(QTextDocument &doc, const QString &markdown, const QVariantMap &palette,
-                     qreal fontSize, qreal width, bool centered, bool code) {
+                     qreal fontSize, qreal width, bool centered, bool code, bool equalColumns) {
     doc.setUndoRedoEnabled(false);
     doc.setMarkdown(preserveLineBreaks(padTableCells(markdown)), QTextDocument::MarkdownDialectGitHub);
-    sizeSlideText(doc, palette, fontSize, width, centered, code);
+    sizeSlideText(doc, palette, fontSize, width, centered, code, equalColumns);
+}
+WordCloud layoutWordCloud(const QString &markdown, const QVariantMap &palette, const QRectF &area) {
+    WordCloud result = readWordCloud(markdown);
+    if (!result.error.isEmpty())
+        return result;
+    // Place larger labels first. Stable ordering and geometric candidates make
+    // the result repeatable at every render size, without a random seed.
+    std::stable_sort(result.labels.begin(), result.labels.end(),
+                     [](const auto &a, const auto &b) { return a.level < b.level; });
+    const int sizes[] = {116, 88, 64, 50, 38};
+    for (qreal scale = 1; scale >= 0.20; scale *= 0.94) {
+        QVector<QRectF> occupied;
+        bool fits = true;
+        for (auto &label : result.labels) {
+            QFont font(palette.value("font", "JetBrains Mono").toString());
+            font.setHintingPreference(QFont::PreferNoHinting);
+            font.setPixelSize(qMax(8, qRound(sizes[label.level - 2] * scale)));
+            font.setWeight(label.level == 2   ? QFont::Bold
+                           : label.level == 3 ? QFont::DemiBold
+                           : label.level == 4 ? QFont::Medium
+                                              : QFont::Normal);
+            const QFontMetricsF metrics(font);
+            const qreal w = qMax(metrics.horizontalAdvance(label.text),
+                                 metrics.boundingRect(label.text).width()) +
+                            10;
+            const qreal h = metrics.height() + 8;
+            const qreal gap = 20 * scale;
+            QVector<qreal> xs{area.center().x() - w / 2, area.left(), area.right() - w};
+            QVector<qreal> ys{area.center().y() - h / 2, area.top(), area.bottom() - h};
+            for (const auto &other : occupied) {
+                xs << other.left() << other.right() - w << other.left() - gap - w
+                   << other.right() + gap;
+                ys << other.top() << other.bottom() - h << other.top() - gap - h
+                   << other.bottom() + gap;
+            }
+            qreal bestScore = std::numeric_limits<qreal>::max();
+            QRectF best;
+            for (qreal x : xs)
+                for (qreal y : ys) {
+                    const QRectF candidate(x, y, w, h);
+                    if (!area.contains(candidate))
+                        continue;
+                    const qreal dx = (candidate.center().x() - area.center().x()) / area.width();
+                    const qreal dy = (candidate.center().y() - area.center().y()) / area.height();
+                    const qreal score = dx * dx + dy * dy;
+                    if (score >= bestScore)
+                        continue;
+                    bool collision = false;
+                    for (const auto &other : occupied)
+                        if (candidate.adjusted(-gap / 2, -gap / 2, gap / 2, gap / 2)
+                                .intersects(other)) {
+                            collision = true;
+                            break;
+                        }
+                    if (!collision) {
+                        best = candidate;
+                        bestScore = score;
+                    }
+                }
+            if (best.isEmpty()) {
+                fits = false;
+                break;
+            }
+            label.font = font;
+            label.rect = best;
+            occupied.append(best);
+        }
+        if (fits) {
+            QRectF bounds;
+            for (const auto &rect : occupied)
+                bounds = bounds.united(rect);
+            const QPointF offset = area.center() - bounds.center();
+            for (auto &label : result.labels)
+                label.rect.translate(offset);
+            return result;
+        }
+    }
+    result.error = "Word cloud is too full; shorten labels or split the slide";
+    return result;
 }
 static QMutex fitMutex;
 static QCache<QString, qreal> fittedSizes(4096);
@@ -796,6 +1030,8 @@ static QRectF alignedRect(const QSizeF &size, const QRectF &within, Qt::Alignmen
     return QRectF(QPointF(x, y), size);
 }
 QRectF mediaRect(const Media &media) {
+    if (!media.box.isEmpty())
+        return media.box;
     if (media.placed()) {
         const QSizeF box(1920 * media.size / 100, 1080 * media.size / 100);
         // The margin shrinks as the box grows, so large images stay on the slide.
@@ -803,6 +1039,14 @@ QRectF mediaRect(const Media &media) {
         return alignedRect(box, QRectF(0, 0, 1920, 1080).adjusted(margin, margin, -margin, -margin),
                            media.alignment);
     }
+    if (media.layout == "caption")
+        return media.heading.isEmpty() ? QRectF(130, 100, 1660, 530) : QRectF(130, 190, 1660, 440);
+    if (media.layout == "caption-right")
+        return media.heading.isEmpty() ? QRectF(70, 50, 1780, 800) : QRectF(70, 180, 1780, 680);
+    if (media.layout == "split")
+        return QRectF(1030, 100, 790, 880);
+    if (media.layout == "title")
+        return QRectF(70, 200, 1780, 830);
     return media.span ? QRectF(0, 0, 1920, 1080)
                       : (!media.video || media.text.trimmed().isEmpty() ? QRectF(70, 50, 1780, 980)
                                                         : QRectF(100, 280, 1720, 730));
@@ -828,11 +1072,35 @@ void paintSlide(QPainter *p, const QRectF &target, const QString &source, const 
         palette["background"] = bg;
     if (QColor(fg).isValid())
         palette["foreground"] = fg;
+    const QVariantMap headingPalette = palette;
+    if (isComposedSlide(source, palette)) {
+        // Components paint their own backdrop; there is no media to place under them.
+        if (!overlayOnly) {
+            QStringList problems;
+            paintComposed(p, source, base, palette, warning, &problems);
+            if (!problems.isEmpty()) {
+                p->setPen(Qt::white);
+                p->fillRect(QRectF(0, 1000, 1920, 80), QColor("#9b3030"));
+                QFont diagnostic("sans");
+                diagnostic.setPixelSize(21);
+                p->setFont(diagnostic);
+                p->drawText(QRectF(30, 1005, 1860, 70), Qt::AlignVCenter | Qt::TextWordWrap,
+                            problems.join(" · "));
+                if (warning)
+                    *warning = problems.join("; ");
+            }
+        }
+        p->restore();
+        return;
+    }
     if (!overlayOnly)
         p->fillRect(QRectF(0, 0, 1920, 1080), QColor(palette["background"].toString()));
     auto media = parseMedia(source, base);
+    const bool split = media.layout == "split";
+    const bool fullCaption = media.layout == "caption";
+    const bool caption = fullCaption || media.layout == "caption-right";
     QString text = media.text.trimmed();
-    auto problems = slideProblems(source, base);
+    auto problems = slideProblems(source, base, palette);
     QRectF area(130, 90, 1660, 900);
     if (!media.svg.isEmpty() && media.file.isEmpty()) {
         // Like a video, a drawing under a headline leaves the headline a band at the top.
@@ -868,7 +1136,8 @@ void paintSlide(QPainter *p, const QRectF &target, const QString &source, const 
                 p->drawImage(QRectF(0, 0, 1920, 1080), blurredBackground(backdrop));
         }
         if ((!media.video || !media.background.isEmpty()) && !media.span && !media.placed() &&
-            media.background != "theme" && (bg.isEmpty() || !media.background.isEmpty())) {
+            media.background != "theme" && (!(split || caption) || !media.background.isEmpty()) &&
+            (bg.isEmpty() || !media.background.isEmpty())) {
             QColor color(media.background);
             if ((media.background.isEmpty() || media.background == "auto") && !backdrop.isNull()) {
                 // Quantized edge votes ignore transparent pixels and tolerate compression noise.
@@ -921,7 +1190,8 @@ void paintSlide(QPainter *p, const QRectF &target, const QString &source, const 
                 svg.setAspectRatioMode(Qt::KeepAspectRatio);
                 svg.render(p, dest);
             } else
-                p->drawImage(dest, !media.video && !media.placed() && !text.isEmpty()
+                p->drawImage(dest, !media.video && !media.placed() && !text.isEmpty() && !split &&
+                                           !caption
                                        ? softenedImage(image, dest.size())
                                        : image);
             p->restore();
@@ -943,17 +1213,121 @@ void paintSlide(QPainter *p, const QRectF &target, const QString &source, const 
             p->restore();
         }
         // Text beside a placed image keeps the theme's colors and full area.
-        if (!media.placed() && (!media.video || media.span)) {
+        if ((split || caption) && !media.placed()) {
+            if (!backgroundOnly)
+                p->fillRect(rect, QColor(0, 0, 0, qRound(media.overlay * 255)));
+            area = fullCaption ? QRectF(130, 650, 1660, 260)
+                   : caption   ? QRectF(1030, 870, 790, 160)
+                               : QRectF(130, 100, 800, 880);
+        } else if (!media.placed() && (!media.video || media.span || media.layout == "title")) {
             if (!backgroundOnly)
                 p->fillRect(QRectF(0, 0, 1920, 1080), QColor(0, 0, 0, qRound(media.overlay * 255)));
             if (fg.isEmpty() && !text.isEmpty())
                 palette["foreground"] = "#ffffff";
         } else if (!media.placed() && !text.isEmpty())
             area = QRectF(130, 40, 1660, 205);
+        if (media.layout == "title" && !media.placed())
+            area = mediaRect(media).adjusted(60, 40, -60, -40);
     }
     if (backgroundOnly) {
         p->restore();
         return;
+    }
+    if (!media.heading.isEmpty()) {
+        QTextDocument title;
+        qreal size = 44;
+        layoutSlideText(title, media.heading, headingPalette, size, 1660, true, false);
+        while (size > 8 && (title.size().height() > 145 || title.idealWidth() > 1661)) {
+            size = qMax(8.0, size - 2);
+            sizeSlideText(title, headingPalette, size, 1660, true, false);
+        }
+        if (size < 24 && warning)
+            *warning = "Title fits below 24px on a 1080p slide";
+        p->save();
+        p->translate(130, 25 + qMax(0.0, (145 - title.size().height()) / 2));
+        QAbstractTextDocumentLayout::PaintContext context;
+        context.palette.setColor(QPalette::Text, QColor(headingPalette["foreground"].toString()));
+        title.documentLayout()->draw(p, context);
+        p->restore();
+    }
+    if (media.layout == "gallery") {
+        const int count = media.gallery.size();
+        const int columns = qMin(3, count), rows = columns ? (count + columns - 1) / columns : 0;
+        const QRectF grid(130, 200, 1660, media.footer.isEmpty() ? 790 : 710);
+        auto drawText = [&](const QString &markdown, const QRectF &rect, qreal maximum) {
+            QTextDocument doc;
+            qreal size = maximum;
+            layoutSlideText(doc, markdown, palette, size, rect.width(), true, false);
+            while (size > 8 &&
+                   (doc.size().height() > rect.height() || doc.idealWidth() > rect.width() + 1)) {
+                size -= 2;
+                sizeSlideText(doc, palette, size, rect.width(), true, false);
+            }
+            if (size < 24 && warning)
+                *warning = "Gallery label fits below 24px on a 1080p slide";
+            p->save();
+            p->translate(rect.x(), rect.y() + qMax(0.0, (rect.height() - doc.size().height()) / 2));
+            QAbstractTextDocumentLayout::PaintContext context;
+            context.palette.setColor(QPalette::Text, QColor(palette["foreground"].toString()));
+            doc.documentLayout()->draw(p, context);
+            p->restore();
+        };
+        for (int i = 0; i < count && count <= 9; ++i) {
+            const auto &item = media.gallery[i];
+            const int row = i / columns, column = i % columns;
+            const int rowCount = qMin(columns, count - row * columns);
+            const qreal width = (grid.width() - 50 * (columns - 1)) / columns;
+            const qreal height = (grid.height() - 30 * (rows - 1)) / rows;
+            const qreal x = grid.x() +
+                            (grid.width() - (rowCount * width + (rowCount - 1) * 50)) / 2 +
+                            column * (width + 50);
+            const qreal y = grid.y() + row * (height + 30);
+            drawText(item.label, QRectF(x, y, width, 60), 44);
+            const QRectF rect(x, y + 75, width, height - 75);
+            if (!overlayOnly) {
+                const QImage picture = loadedImage(
+                    item.path, p->deviceTransform().mapRect(rect).size().toSize(), false);
+                if (!picture.isNull()) {
+                    QSizeF size = picture.size();
+                    size.scale(rect.size(), Qt::KeepAspectRatio);
+                    p->drawImage(
+                        QRectF(rect.center() - QPointF(size.width() / 2, size.height() / 2), size),
+                        picture);
+                }
+            }
+        }
+        if (!media.footer.isEmpty())
+            drawText(media.footer, QRectF(130, 950, 1660, 85), 36);
+        text.clear();
+    }
+    if (media.layout == "cloud") {
+        const bool footer = !readWordCloud(text).footer.isEmpty();
+        const auto cloud =
+            layoutWordCloud(text, palette, QRectF(120, 210, 1680, footer ? 720 : 790));
+        if (!cloud.error.isEmpty()) {
+            if (!problems.contains(cloud.error))
+                problems << cloud.error;
+        } else {
+            const QStringList colors{"accent", "magenta", "bright_foreground", "green",
+                                     "foreground"};
+            for (const auto &label : cloud.labels) {
+                p->setFont(label.font);
+                p->setPen(QColor(
+                    palette.value(colors[label.level - 2], palette["foreground"]).toString()));
+                p->drawText(label.rect, Qt::AlignCenter | Qt::TextSingleLine, label.text);
+                if (label.font.pixelSize() < 24 && warning)
+                    *warning = "Word cloud text fits below 24px on a 1080p slide";
+            }
+            if (!cloud.footer.isEmpty()) {
+                QFont font(palette.value("font", "JetBrains Mono").toString());
+                font.setPixelSize(28);
+                p->setFont(font);
+                p->setPen(QColor(palette["foreground"].toString()));
+                p->drawText(QRectF(130, 962, 1660, 76), Qt::AlignCenter | Qt::TextWordWrap,
+                            cloud.footer);
+            }
+        }
+        text.clear();
     }
     if (!text.isEmpty()) {
         bool code = text.contains(
@@ -964,7 +1338,9 @@ void paintSlide(QPainter *p, const QRectF &target, const QString &source, const 
         bool table = text.contains(tableDelimiter());
         // A table alone on its slide sits in the middle; beside other text it lines up with it.
         const bool tableOnly = table && !text.split('\n').filter(QRegularExpression("^(?!.*\\|).*\\S")).size();
-        bool centered = tableOnly || !(code || quote || list || table);
+        bool centered =
+            fullCaption || (tableOnly && !split) || !(code || quote || list || table || split);
+        const bool equalColumns = fullCaption && table;
         const QString alignment = slideProperty(source, "alignment");
         if (alignment == "left")
             centered = false;
@@ -973,31 +1349,42 @@ void paintSlide(QPainter *p, const QRectF &target, const QString &source, const 
         bool stack = (text.contains('\n') || text.contains('\r')) && !text.startsWith('#') &&
                      !quote && !list && !code;
         qreal low = 8, high = code ? 56 : quote ? 64 : list || table ? 72 : stack ? 128 : 76;
-        if (media.video && !media.span)
+        if (fullCaption)
+            high = 44;
+        else if (split || caption)
+            high = 48;
+        else if (media.video && !media.span)
             high = 48;
         QTextDocument doc;
         // Layout happens in 1080p slide units, so every render size, the PDF and
         // a theme change all reuse one search. Colors never affect the fit.
-        const QString fit = QString("%1 %2 %3 %4 %5 ").arg(high).arg(area.width()).arg(area.height())
-                                .arg(centered).arg(code) + palette.value("font").toString() + '\n' + text;
+        const QString fit = QString("%1 %2 %3 %4 %5 %6 ")
+                                .arg(high)
+                                .arg(area.width())
+                                .arg(area.height())
+                                .arg(centered)
+                                .arg(code)
+                                .arg(equalColumns) +
+                            palette.value("font").toString() +
+                            palette.value("font_epoch").toString() + '\n' + text;
         if (const qreal fitted = fittedSize(fit); fitted > 0) {
             low = fitted;
-            layoutSlideText(doc, text, palette, low, area.width(), centered, code);
+            layoutSlideText(doc, text, palette, low, area.width(), centered, code, equalColumns);
         } else {
-            layoutSlideText(doc, text, palette, high, area.width(), centered, code);
+            layoutSlideText(doc, text, palette, high, area.width(), centered, code, equalColumns);
             const bool fits = doc.size().height() <= area.height() && doc.idealWidth() <= area.width() + 1;
             if (fits)
                 low = high;
             for (int iteration = 0; !fits && iteration < 9; ++iteration) {
                 qreal size = (low + high) / 2;
-                sizeSlideText(doc, palette, size, area.width(), centered, code);
+                sizeSlideText(doc, palette, size, area.width(), centered, code, equalColumns);
                 if (doc.size().height() <= area.height() && doc.idealWidth() <= area.width() + 1)
                     low = size;
                 else
                     high = size;
             }
             if (!fits)
-                sizeSlideText(doc, palette, low, area.width(), centered, code);
+                sizeSlideText(doc, palette, low, area.width(), centered, code, equalColumns);
             rememberFit(fit, low);
         }
         highlightCode(doc, palette);

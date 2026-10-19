@@ -79,6 +79,50 @@ Tables use GitHub's pipe syntax. Colons in the line under the header align a col
 
 The single-slide editor hides the blank lines around slide separators, leaving just your content to edit.
 
+## Group images with editable labels
+
+For a gallery, add `<!-- hype: layout="gallery" -->` before the slide's `#`
+title. Follow it with pairs of `##` labels and plain `![](image.png)` references.
+An optional `>` footer sits below the groups. Hype arranges up to nine groups
+in three columns, with native editable labels and proportional still images.
+Labels have equal, regular weight unless you add bold explicitly.
+
+## Design slides with components
+
+For designed slides, such as card rows, stats, charts, Gantt roadmaps,
+timelines, process steps, logo walls, and split panels, write MDX-style
+components in the slide's Markdown:
+
+```markdown
+<Eyebrow>The rollout</Eyebrow>
+# Every desk on Omarchy
+
+<Row>
+<Stat value="420" label="Desks moved" trend="up" delta="+18%"/>
+<Stat value="28 min" label="Setup time"/>
+</Row>
+
+<Chart type="column" goal="400">
+| Quarter | Desks |
+| --- | --- |
+| Q4 25 | 340 |
+| Q1 26 | 420 |
+</Chart>
+```
+
+Everything stays editable text: data lives in Markdown tables and lists, icons
+come from the bundled [Lucide](https://lucide.dev) set, and colors follow the
+theme. Slides fit their content, shrinking when full and growing when sparse.
+`hype check` names any unknown component, prop, color, or icon, with a
+suggestion.
+
+A template (`template: acme` in the front matter) brings a brand's colors,
+fonts, logos, a frame that appears on every slide, and your own reusable
+components, defined with `<Define>`. Any presentation can be a template, so
+the deck you made last time can start the next one, and `<Define>` works on
+any slide. Run `hype help components` for the full reference, and see
+`examples/showcase/` for a complete presentation built on a template.
+
 ## Add images and video
 
 Paste an image or a copied image/video file with **Ctrl+V**. Hype asks for a name, saves the file, and adds it to the selected slide. Pasting onto a slide that already has media replaces that media while keeping the text. You can also drag a file onto the preview or use **+ Image / video** to replace the media. Dropping several files puts each additional file on a new slide.
@@ -115,9 +159,21 @@ Use just the filename; Hype finds the right directory:
 ![](demo.mp4)
 ```
 
-A lone image fits without cropping. Text on an image slide is always overlaid, with white lettering, subtle darkening, and a very light blur of the picture for readability. The text stays sharp, and pictures without text stay unblurred. An image with a headline spans by default; `fit` or `background=blur` keeps the whole image visible beneath the text. Videos fit the slide and play once when you reach them during a presentation.
+A lone image fits without cropping. By default, text on an image slide is overlaid, with white lettering, subtle darkening, and a very light blur of the picture for readability. The text stays sharp, and pictures without text stay unblurred. An image with a headline spans by default; `fit` or `background=blur` keeps the whole image visible beneath the text. Videos fit the slide and play once when you reach them during a presentation.
 
 Choose **Fit** or **Span** from the **Layout** menu above the editor, or put layout options inside the brackets:
+
+Choose **Title above media**, or use `![layout=title](chart.svg)`, to place the first `# Heading` above a chart or picture. Remaining text overlays the media, so duplicating the slide and adding numbers creates a reveal without moving the chart. The title stays editable, and a title by itself does not blur or darken the image. Use `overlay=0.65` to dim the chart behind the numbers.
+
+Choose **Text beside media**, or use `![layout=split](art.png)`, for editable text on the left and an image or video on the right. Media fits its column and stays sharp; text is left-aligned and uses the theme colors. `span` crops within the media column, and an explicit `overlay` darkens only that column.
+
+Choose **Caption below right half**, or use `![layout=caption-right](collage.png)`, for a wide image with an editable caption beneath its right half. The media stays sharp and undimmed by default. Caption text uses the theme colors; `span` and explicit `overlay` apply within the media area.
+
+Add an optional `# Heading` to that layout for a title above the media. The remaining text stays in the caption below the right half.
+
+Use **Caption below media**, or `![layout=caption](portraits.png)`, for a caption below the full image. Markdown tables use equal-width centered columns, so names and roles can line up under a row of portraits. An optional first heading appears above the media; the image stays sharp and undimmed by default.
+
+For an editable word cloud, add `<!-- hype: layout="cloud" -->`, a `# Title`, and one `##` through `######` heading per label. Fewer hashes mean larger, bolder text. Labels pack automatically, use theme colors, and remain horizontal. An optional final `> Quote` becomes a footer. All labels stay editable in Markdown; the layout needs no image. See `hype help format` for an example.
 
 | Markdown | Result |
 | --- | --- |
@@ -155,11 +211,13 @@ Each slide supports one image or video. Copy the whole presentation folder when 
 
 ## Choose your look
 
-The palette and font icons in the toolbar choose an installed Omarchy theme and a presentation font. Hover to see the current choices. Theme colors apply to text, code, and slide backgrounds; your images keep their original colors. Code stays monospaced. Hype’s interface follows your current desktop theme independently and updates when you change it.
+The palette icon opens your presentation's look: a template, or an installed Omarchy theme. A template brings colors, fonts, a frame, and components of its own; any presentation can be one, and **File › Save as template…** adds yours to the list, as a link that follows it or as a copy. Hype comes with an Omarchy template, and **Desktop theme** follows whichever theme your desktop has, changing as it does. With a template chosen, **Ctrl+Shift+Enter** adds a slide that starts as one of the template's own: search them, browse them by section, and add one or a whole section, such as a case study.
+
+The font icon chooses a presentation font. Choose **Google Fonts…** at the end of the font list to search the open-source Google Fonts library; Hype downloads the font you pick, with its license, and keeps it for all your presentations. Hover to see the current choices. Theme colors apply to text, code, and slide backgrounds; your images keep their original colors. Code stays monospaced. Hype’s interface follows your current desktop theme independently and updates when you change it.
 
 The header shows the presentation's name with your position in it, such as “Slide 4 of 45”; saving and exporting report their progress on that line. The file icon beside it holds New, Open, Save, Export, and Version history, and is highlighted when you have unsaved changes.
 
-Colors and the font choice are saved in the Markdown file. Install the same font on another computer to keep the typography consistent.
+Colors and the font choice are saved in the Markdown file. Another computer running Hype downloads a Google font itself. For other fonts, or to work offline, put the font files in a `fonts/` folder beside the presentation; `hype fonts add "Poppins" --into presentation.md` copies a Google font there.
 
 ## Present and export
 
@@ -187,6 +245,8 @@ hype render talk/presentation.md --slide 3 -o slide.png
 hype render talk/presentation.md -o slides/       # every slide, plus slides.json
 hype export talk/presentation.md talk.pdf         # or talk.pptx
 hype themes
+hype templates                                    # templates a presentation can name
+hype template save talk/presentation.md           # make this presentation a template
 ```
 
 `check` reports all problems at once, such as missing media, invalid layout options, and unfinished code fences, and warns when a slide holds so much text that it shrinks below a readable size. `render --slide` writes a PNG even for a slide with problems, showing them on a banner, so you can look at what went wrong. Add `--json` to any command for structured output, and `--width` to `render` for another size. Commands exit 0 on success and 1 on failure, with errors on stderr.

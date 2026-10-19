@@ -28,10 +28,32 @@ font: "JetBrains Mono"
 ```
 
 `hype new` writes this for you, along with the theme's `color_*` values.
-`hype themes` lists the installed themes. Any `color_*` value can be
+`hype themes` lists the installed themes. `theme: current` follows the
+desktop's Omarchy theme instead, and changes when the desktop's does. Any
+`color_*` value can be
 overridden with a `#rrggbb` color: `color_background`, `color_foreground`,
 `color_accent`, `color_green`, `color_red`, `color_yellow`, `color_magenta`,
 `color_cyan`, `color_dark_foreground`.
+
+## Fonts
+
+`font` can be any installed family or any [Google Fonts](https://fonts.google.com)
+family, such as `font: "Poppins"`. Hype downloads a Google font the first time a
+presentation names it, along with its license, and keeps it in
+`~/.local/share/hype/fonts/` for every presentation. Font files in a `fonts/`
+folder beside the presentation are loaded too.
+
+```text
+hype fonts talk/presentation.md                      where each font comes from
+hype fonts add "Encode Sans" --into talk/presentation.md
+                                                     copy a family into talk/fonts/
+hype fonts search serif                              search Google Fonts
+```
+
+Copy fonts into `fonts/` with `--into` to send a presentation to someone who is
+offline, or to keep its exact files with it. `hype check` warns about any font
+that is neither installed nor on Google Fonts, and suggests the closest names.
+Set `HYPE_FONT_DOWNLOADS=0` to never download.
 
 ## Slides
 
@@ -69,15 +91,86 @@ puts "Code is highlighted when you name the language"
 - `<!-- comments -->` are hidden from the slide; use them for speaker notes.
 - A `---` inside a code fence does not split the slide.
 
+## Components
+
+Cards, stats, charts, Gantt roadmaps, timelines, process steps, logo walls,
+split panels, and brand templates are written as MDX-style tags:
+
+```markdown
+# Results
+
+<Row>
+<Stat value="420" label="Desks moved" trend="up" delta="+18%"/>
+<Stat value="28 min" label="Setup time"/>
+</Row>
+```
+
+`hype help components` prints the full reference. `hype icons <word>` searches
+the icons.
+
+## Word clouds
+
+Use `<!-- hype: layout="cloud" -->` for a text-only word cloud. The first
+`# Heading` is the title. Each `##` through `######` heading is one label:
+fewer hashes make it larger and bolder. Labels use the theme colors, stay
+horizontal, and pack automatically without overlapping. The source order
+breaks ties between equal-sized labels. An optional final `> Quote` is a footer.
+
+```markdown
+<!-- hype: layout="cloud" -->
+# A few good ideas
+
+## Make something
+### Learn something
+#### Share it
+##### Ask questions
+###### Start small
+
+> Work in progress
+```
+
+Change the labels or their heading levels in either editor mode; no image
+generation is involved. This layout accepts a title, label headings, and an
+optional footer. Use a separate slide for lists, tables, code, or media.
+
+## Galleries
+
+Use `<!-- hype: layout="gallery" -->` to group several images under editable
+labels. Start with a `#` title, then pair each `##` label with one image.
+An optional final `>` paragraph sits below the gallery. The layout fits up to
+nine groups into three columns, centers the last row, and preserves image
+proportions. Labels use regular-weight text unless you explicitly add bold.
+
+```markdown
+<!-- hype: layout="gallery" -->
+# Our teams
+
+## Core
+![](core-portraits.png)
+
+## Design
+![](design-portraits.png)
+
+> More coming soon
+```
+
+Gallery images are stills. Use plain image references without layout, overlay,
+or video options; put each caption above its image. Edit the labels and image
+references directly in Markdown.
+
 ## Images and video
 
-Each slide takes one image or video. Options go inside the brackets:
+Outside a gallery, each slide takes one image or video. Options go inside the brackets:
 
 | Markdown | Result |
 | --- | --- |
 | `![](diagram.png)` | Show the whole image |
 | `![span](photo.jpg)` | Fill the slide, cropping as needed |
 | `![fit](photo.jpg)` | Show the whole image, with any text overlaid |
+| `![layout=title](chart.svg)` | Put the first `# Heading` above the media; remaining text overlays it |
+| `![layout=split](art.png)` | Put editable text on the left and sharp media on the right |
+| `![layout=caption](portraits.png)` | Put an editable caption or table below sharp media |
+| `![layout=caption-right](collage.png)` | Show sharp media above an editable caption under its right half |
 | `![fit background=#ffffff](diagram.png)` | Fill the space around it with a color |
 | `![fit background=blur](portrait.jpg)` | Fill it with a blurred copy of the image |
 | `![fit background=auto](portrait.jpg)` | Match the image's edge color |
@@ -101,14 +194,41 @@ without a color take the theme's text color, and text takes the font.
 ```
 ````
 
-Text on an image slide is overlaid in white over a slightly darkened picture.
+By default, text on an image slide is overlaid in white over a slightly darkened picture.
 An image with a headline spans the slide unless you say `fit`.
+
+Use `layout=title` for a chart with an editable title above it. The media fits
+below the title and stays in the same position when you add stats beneath the
+heading. A title alone leaves the image sharp and undimmed. Add `overlay=0.65`
+to darken the whole slide backdrop beneath the title and stats. The Layout menu
+offers the same choice.
+
+Use `layout=split` for an episode card, portrait, or product image with text
+beside it. Text is left-aligned in the left column; media fits in the right
+column without blurring or automatic dimming. The slide uses the theme colors
+unless you choose a background explicitly. `span` crops media within its column,
+and an explicit `overlay` darkens only the media column. The Layout menu calls
+this **Text beside media**.
+
+Use `layout=caption-right` for a wide image with a caption beneath its right half.
+Media fits above the caption and stays sharp, with no automatic dimming. The
+caption is ordinary Markdown, centered within the right column and using the
+theme colors. `span` crops within the media area; an explicit `overlay` dims only
+the media. The Layout menu calls this **Caption below right half**.
+An optional first `# Heading` appears above the media; the remaining text stays
+in the caption area below its right half.
+
+Use `layout=caption` for a caption across the full width below media. A Markdown
+table in the caption has equal-width, centered columns, useful for editable names
+and roles beneath a row of portraits. An optional first `# Heading` goes above
+the media. Media stays sharp and undimmed by default. The Layout menu calls this
+**Caption below media**.
 
 A placed image leaves the slide's text and theme colors alone. `position` is
 `top-left`, `top`, `top-right`, `left`, `center`, `right`, `bottom-left`,
 `bottom`, or `bottom-right`; `size` is the share of the slide it may fill, from
 1% to 100% (default 10%). Placement is for images only and cannot be combined
-with `fit`, `span`, `background`, or `overlay`.
+with `fit`, `span`, `background`, `overlay`, or `layout`.
 
 ## Commands
 
@@ -119,6 +239,10 @@ hype slides talk/presentation.md --json    an outline of the slides
 hype render talk/presentation.md --slide 3 -o slide.png
 hype render talk/presentation.md -o slides/        every slide, plus slides.json
 hype export talk/presentation.md talk.pdf          or talk.pptx
+hype icons chart                                   icons for components
+hype new talk/presentation.md --template acme      start from a template
+hype templates                                     templates you can name
+hype template save talk/presentation.md            make a presentation a template
 ```
 
 Commands need no display. They exit 0 on success and 1 on failure, with errors

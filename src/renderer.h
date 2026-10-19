@@ -1,5 +1,6 @@
 #pragma once
 #include "deck.h"
+#include <QFont>
 #include <QMutex>
 #include <QQuickImageProvider>
 #include <QQuickPaintedItem>
@@ -7,13 +8,19 @@
 #include <atomic>
 #include <memory>
 class QTextDocument;
+struct GalleryItem {
+    QString label, file, path;
+};
 struct Media {
-    QString file, path, poster, error, background;
+    QString file, path, poster, error, background, layout, heading;
     QString svg; // A ```svg fence, drawn as vectors where a picture would be
     int svgBlocks = 0;
     bool video = false, span = false, loop = false, muted = false, autoplay = true;
     double overlay = 0;
+    QRectF box; // Where a component layout puts the video; empty for the fixed layouts.
     QString text;
+    QVector<GalleryItem> gallery;
+    QString footer;
     // A placed image sits at a position, sized as a percentage of the slide.
     QString position;
     double size = 0;
@@ -32,9 +39,27 @@ QString withMediaDirectives(const QString &source, const QStringList &remove,
 QString speakerNotes(const QString &source);
 Media parseMedia(const QString &source, const QString &base);
 QString ensurePoster(const QString &video, const QString &base);
-QStringList slideProblems(const QString &source, const QString &base);
+QStringList slideProblems(const QString &source, const QString &base,
+                          const QVariantMap &palette = {});
+// Shared with the component engine.
+QString outsideCode(QString source, bool maskInline = true);
+QString slideProperty(const QString &source, const QString &key);
+QString preserveLineBreaks(QString markdown);
+QImage boxBlur(QImage image, int radius);
 void layoutSlideText(QTextDocument &document, const QString &markdown, const QVariantMap &palette,
-                     qreal fontSize, qreal width, bool centered, bool code);
+                     qreal fontSize, qreal width, bool centered, bool code,
+                     bool equalColumns = false);
+struct CloudLabel {
+    QString text;
+    int level = 0;
+    QFont font;
+    QRectF rect;
+};
+struct WordCloud {
+    QVector<CloudLabel> labels;
+    QString footer, error;
+};
+WordCloud layoutWordCloud(const QString &markdown, const QVariantMap &palette, const QRectF &area);
 void paintSlide(QPainter *painter, const QRectF &target, const QString &source, const QString &base,
                 const QVariantMap &palette, QString *warning = nullptr, bool overlayOnly = false,
                 bool backgroundOnly = false);
