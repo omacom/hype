@@ -399,6 +399,10 @@ bool readSlide(const QJsonObject &entry, const QDir &base, PowerPointSlide &slid
         Media media;
         media.video = true;
         media.text = entry["title"].toBool() ? "Title" : "";
+        // A component slide says where its video sits; the fixed layouts derive it.
+        const QJsonArray placed = entry["box"].toArray();
+        if (placed.size() == 4)
+            media.box = QRectF(placed[0].toDouble(), placed[1].toDouble(), placed[2].toDouble(), placed[3].toDouble());
         const QRectF box = mediaRect(media);
         const double boxX = box.x(), boxY = box.y();
         const double boxWidth = box.width(), boxHeight = box.height();

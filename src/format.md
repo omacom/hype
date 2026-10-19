@@ -28,10 +28,32 @@ font: "JetBrains Mono"
 ```
 
 `hype new` writes this for you, along with the theme's `color_*` values.
-`hype themes` lists the installed themes. Any `color_*` value can be
+`hype themes` lists the installed themes. `theme: current` follows the
+desktop's Omarchy theme instead, and changes when the desktop's does. Any
+`color_*` value can be
 overridden with a `#rrggbb` color: `color_background`, `color_foreground`,
 `color_accent`, `color_green`, `color_red`, `color_yellow`, `color_magenta`,
 `color_cyan`, `color_dark_foreground`.
+
+## Fonts
+
+`font` can be any installed family or any [Google Fonts](https://fonts.google.com)
+family, such as `font: "Poppins"`. Hype downloads a Google font the first time a
+presentation names it, along with its license, and keeps it in
+`~/.local/share/hype/fonts/` for every presentation. Font files in a `fonts/`
+folder beside the presentation are loaded too.
+
+```text
+hype fonts talk/presentation.md                      where each font comes from
+hype fonts add "Encode Sans" --into talk/presentation.md
+                                                     copy a family into talk/fonts/
+hype fonts search serif                              search Google Fonts
+```
+
+Copy fonts into `fonts/` with `--into` to send a presentation to someone who is
+offline, or to keep its exact files with it. `hype check` warns about any font
+that is neither installed nor on Google Fonts, and suggests the closest names.
+Set `HYPE_FONT_DOWNLOADS=0` to never download.
 
 ## Slides
 
@@ -66,6 +88,23 @@ puts "Code is highlighted when you name the language"
 - Ordinary line breaks stay visible on the slide.
 - `<!-- comments -->` are hidden from the slide; use them for speaker notes.
 - A `---` inside a code fence does not split the slide.
+
+## Components
+
+Cards, stats, charts, Gantt roadmaps, timelines, process steps, logo walls,
+split panels, and brand templates are written as MDX-style tags:
+
+```markdown
+# Results
+
+<Row>
+<Stat value="420" label="Desks moved" trend="up" delta="+18%"/>
+<Stat value="28 min" label="Setup time"/>
+</Row>
+```
+
+`hype help components` prints the full reference. `hype icons <word>` searches
+the icons.
 
 ## Word clouds
 
@@ -177,6 +216,10 @@ hype slides talk/presentation.md --json    an outline of the slides
 hype render talk/presentation.md --slide 3 -o slide.png
 hype render talk/presentation.md -o slides/        every slide, plus slides.json
 hype export talk/presentation.md talk.pdf          or talk.pptx
+hype icons chart                                   icons for components
+hype new talk/presentation.md --template acme      start from a template
+hype templates                                     templates you can name
+hype template save talk/presentation.md            make a presentation a template
 ```
 
 Commands need no display. They exit 0 on success and 1 on failure, with errors

@@ -1,4 +1,5 @@
 #include "renderer.h"
+#include "blocks.h"
 #include "budget.h"
 #include "images.h"
 #include "syntax.h"
@@ -49,7 +50,7 @@ class ImageCache {
     }
 };
 }
-static QString outsideCode(QString source, bool maskInline = true) {
+QString outsideCode(QString source, bool maskInline) {
     int position = 0, fenceLength = 0;
     QChar fence;
     static const QRegularExpression marker("^ {0,3}(`{3,}|~{3,})(.*)$");
@@ -98,7 +99,7 @@ static QString withoutComments(QString source) {
         source.remove(it->first, it->second);
     return source;
 }
-static QString slideProperty(const QString &source, const QString &key) {
+QString slideProperty(const QString &source, const QString &key) {
     QRegularExpression re("<!--\\s*hype:[\\s\\S]*?\\b" + key + "=\"([^\"]*)\"[\\s\\S]*?-->");
     return re.match(outsideCode(source)).captured(1);
 }
@@ -190,6 +191,25 @@ QString withMediaDirectives(const QString &source, const QStringList &remove,
 static Media readMedia(const QString &source, const QString &base) {
     Media result;
     result.text = withoutComments(source);
+    if (hasComponents(source)) {
+        result.layout = "components";
+        result.text = withoutDefinitions(result.text);
+        // A <Video> on a component slide plays in place, wherever the layout puts it.
+        const auto video = componentVideo(source);
+        if (!video.value("src").isEmpty()) {
+            auto flag = [&](const QString &key, bool fallback) {
+                return video.contains(key) ? video.value(key) != "false" : fallback;
+            };
+            result.file = video.value("src");
+            result.video = true;
+            result.path = assetPath(base, result.file, true);
+            result.loop = flag("loop", false);
+            result.muted = flag("muted", false);
+            result.autoplay = flag("autoplay", true);
+            if (!video.value("poster").isEmpty()) result.poster = assetPath(base, video.value("poster"), false);
+        }
+        return result;
+    }
     auto m = mediaRe.match(outsideCode(result.text));
     if (slideProperty(source, "layout") == "gallery") {
         result.layout = "gallery";
@@ -394,7 +414,9 @@ QString ensurePoster(const QString &video, const QString &base) {
     }
     return result;
 }
-QStringList slideProblems(const QString &source, const QString &base) {
+QStringList slideProblems(const QString &source, const QString &base, const QVariantMap &palette) {
+    if (isComposedSlide(source, palette))
+        return composedProblems(source, base, palette);
     QStringList errors;
     auto media = parseMedia(source, base);
     if (!media.error.isEmpty())
@@ -447,7 +469,7 @@ static QImage loadedImage(const QString &path, QSize canvas, bool span) {
         cache.put(key, image);
     return image;
 }
-static QImage boxBlur(QImage image, int radius) {
+QImage boxBlur(QImage image, int radius) {
     image = image.convertToFormat(QImage::Format_ARGB32_Premultiplied);
     const int width = image.width(), height = image.height(), diameter = radius * 2 + 1;
     // Three separable box passes approximate a Gaussian. Clamp the edges and
@@ -523,7 +545,7 @@ QImage softenedImage(const QImage &image, const QSizeF &slideSize) {
     }
     return softened;
 }
-static QString preserveLineBreaks(QString markdown) {
+QString preserveLineBreaks(QString markdown) {
     markdown.replace("\r\n", "\n").replace('\r', '\n');
     const QStringList visible = outsideCode(markdown, false).split('\n');
     QStringList lines = markdown.split('\n');
@@ -694,6 +716,8 @@ static void rememberFit(const QString &key, qreal size) {
     fittedSizes.insert(key, new qreal(size));
 }
 QRectF mediaRect(const Media &media) {
+    if (!media.box.isEmpty())
+        return media.box;
     if (media.layout == "caption")
         return media.heading.isEmpty() ? QRectF(130, 100, 1660, 530)
                                        : QRectF(130, 190, 1660, 440);
@@ -723,6 +747,25 @@ void paintSlide(QPainter *p, const QRectF &target, const QString &source, const 
     if (QColor(fg).isValid())
         palette["foreground"] = fg;
     const QVariantMap headingPalette = palette;
+    if (isComposedSlide(source, palette)) {
+        // Components paint their own backdrop; there is no media to place under them.
+        if (!overlayOnly) {
+            QStringList problems;
+            paintComposed(p, source, base, palette, warning, &problems);
+            if (!problems.isEmpty()) {
+                p->setPen(Qt::white);
+                p->fillRect(QRectF(0, 1000, 1920, 80), QColor("#9b3030"));
+                QFont diagnostic("sans");
+                diagnostic.setPixelSize(21);
+                p->setFont(diagnostic);
+                p->drawText(QRectF(30, 1005, 1860, 70), Qt::AlignVCenter | Qt::TextWordWrap, problems.join(" · "));
+                if (warning)
+                    *warning = problems.join("; ");
+            }
+        }
+        p->restore();
+        return;
+    }
     if (!overlayOnly)
         p->fillRect(QRectF(0, 0, 1920, 1080), QColor(palette["background"].toString()));
     auto media = parseMedia(source, base);
@@ -730,7 +773,7 @@ void paintSlide(QPainter *p, const QRectF &target, const QString &source, const 
     const bool fullCaption = media.layout == "caption";
     const bool caption = fullCaption || media.layout == "caption-right";
     QString text = media.text.trimmed();
-    auto problems = slideProblems(source, base);
+    auto problems = slideProblems(source, base, palette);
     QRectF area(130, 90, 1660, 900);
     if (!media.file.isEmpty()) {
         QString path =
@@ -941,7 +984,8 @@ void paintSlide(QPainter *p, const QRectF &target, const QString &source, const 
         // Layout happens in 1080p slide units, so every render size, the PDF and
         // a theme change all reuse one search. Colors never affect the fit.
         const QString fit = QString("%1 %2 %3 %4 %5 %6 ").arg(high).arg(area.width()).arg(area.height())
-                                .arg(centered).arg(code).arg(equalColumns) + palette.value("font").toString() + '\n' + text;
+                                .arg(centered).arg(code).arg(equalColumns) + palette.value("font").toString() +
+                                palette.value("font_epoch").toString() + '\n' + text;
         if (const qreal fitted = fittedSize(fit); fitted > 0) {
             low = fitted;
             layoutSlideText(doc, text, palette, low, area.width(), centered, code, equalColumns);

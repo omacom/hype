@@ -26,6 +26,21 @@ def image(path):
                      chunk(b'IEND', b''))
 
 
+def image_size(data):
+    """Width and height of a PNG, or of a JPEG from its start-of-frame marker."""
+    if data[:8] == b'\x89PNG\r\n\x1a\n':
+        return struct.unpack('>II', data[16:24])
+    assert data[:2] == b'\xff\xd8', 'neither PNG nor JPEG'
+    offset = 2
+    while offset < len(data):
+        marker, length = data[offset + 1], struct.unpack('>H', data[offset + 2:offset + 4])[0]
+        if marker in (0xc0, 0xc1, 0xc2):
+            height, width = struct.unpack('>HH', data[offset + 5:offset + 9])
+            return width, height
+        offset += 2 + length
+    raise AssertionError('JPEG without a frame header')
+
+
 class ExportTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -76,10 +91,12 @@ class ExportTests(unittest.TestCase):
             presentation = ET.fromstring(archive.read('ppt/presentation.xml'))
             self.assertEqual(len(presentation.findall('p:sldIdLst/p:sldId', NS)), 2)
             self.assertEqual(presentation.get('autoCompressPictures'), '0')
-            images = [name for name in archive.namelist() if name.endswith('.png')]
+            # Opaque slides are stored as JPEG; a slide with transparency would stay PNG.
+            images = [name for name in archive.namelist() if name.startswith('ppt/media/')
+                      and name.endswith(('.png', '.jpg'))]
             self.assertEqual(len(images), 2)
             for name in images:
-                self.assertEqual(struct.unpack('>II', archive.read(name)[16:24]), (3840, 2160))
+                self.assertEqual(image_size(archive.read(name)), (3840, 2160))
             size = presentation.find('p:sldSz', NS)
             self.assertAlmostEqual(int(size.get('cx')) / int(size.get('cy')), 16 / 9, places=5)
             core = ET.fromstring(archive.read('docProps/core.xml'))
@@ -87,6 +104,19 @@ class ExportTests(unittest.TestCase):
             for name in archive.namelist():
                 if name.endswith(('.xml', '.rels')):
                     ET.fromstring(archive.read(name))
+
+    def test_component_video_sits_where_the_layout_puts_it(self):
+        self.movie(size='640x360')
+        self.export('<Row>\n<Video src="demo.mp4" aspect="16:9"/>\n<Text>Beside the video</Text>\n</Row>\n')
+        with zipfile.ZipFile(self.output) as archive:
+            slide = ET.fromstring(archive.read('ppt/slides/slide1.xml'))
+            movie = next(pic for pic in slide.iter('{http://schemas.openxmlformats.org/presentationml/2006/main}pic')
+                         if pic.find('.//a:hlinkClick', NS) is not None)
+            offset, extent = movie.find('.//a:off', NS), movie.find('.//a:ext', NS)
+            width = 12192000
+            # The left half of the row, not the middle of the slide.
+            self.assertLess(int(offset.get('x')) + int(extent.get('cx')), width * 0.55)
+            self.assertGreater(int(extent.get('cx')), width * 0.3)
 
     def test_repeated_movie_is_embedded_once(self):
         self.movie(codec='mpeg4')
@@ -240,6 +270,25 @@ class ExportTests(unittest.TestCase):
         self.assertIn('ffmpeg', result.stderr)
         self.assertEqual(self.output.read_bytes(), original)
         self.assertEqual(list((self.root / 'videos').iterdir()), [])
+
+    @unittest.skipUnless(shutil.which('pdftoppm') and shutil.which('pdftotext'), 'Needs poppler')
+    def test_gradient_text_keeps_its_colors_and_words_in_pdf(self):
+        source = self.root / 'presentation.md'
+        source.write_text('<!-- hype: frame="none" -->\n<Background fill="#000000"/>\n'
+                          '<Text size="200" weight="900" tone="#ff2050 #4060ff">Hello</Text>\n')
+        pdf = self.root / 'talk.pdf'
+        result = subprocess.run([str(self.app), str(source), '--pdf', str(pdf)],
+                                env=self.env, capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        subprocess.run(['pdftoppm', '-r', '20', '-singlefile', str(pdf), str(self.root / 'page')], check=True)
+        data = (self.root / 'page.ppm').read_bytes()
+        _, width, height, _, pixels = data.split(maxsplit=4)
+        reds = sum(1 for i in range(0, int(width) * int(height) * 3, 3) if pixels[i] > 160 and pixels[i + 2] < 160)
+        blues = sum(1 for i in range(0, int(width) * int(height) * 3, 3) if pixels[i + 2] > 160 and pixels[i] < 160)
+        self.assertGreater(reds, 20)  # Qt's PDF engine alone draws this text black on black
+        self.assertGreater(blues, 20)
+        text = subprocess.run(['pdftotext', str(pdf), '-'], capture_output=True, text=True, check=True).stdout
+        self.assertIn('Hello', text)
 
     @unittest.skipUnless(os.environ.get('HYPE_OFFICE_TESTS') and shutil.which('libreoffice'),
                          'Set HYPE_OFFICE_TESTS=1 to verify with LibreOffice')

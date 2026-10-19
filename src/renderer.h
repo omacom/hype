@@ -15,6 +15,7 @@ struct Media {
     QString file, path, poster, error, background, layout, heading;
     bool video = false, span = false, loop = false, muted = false, autoplay = true;
     double overlay = 0;
+    QRectF box; // Where a component layout puts the video; empty for the fixed layouts.
     QString text;
     QVector<GalleryItem> gallery;
     QString footer;
@@ -26,7 +27,12 @@ QString withMediaDirectives(const QString &source, const QStringList &remove,
                             const QStringList &add);
 Media parseMedia(const QString &source, const QString &base);
 QString ensurePoster(const QString &video, const QString &base);
-QStringList slideProblems(const QString &source, const QString &base);
+QStringList slideProblems(const QString &source, const QString &base, const QVariantMap &palette = {});
+// Shared with the component engine.
+QString outsideCode(QString source, bool maskInline = true);
+QString slideProperty(const QString &source, const QString &key);
+QString preserveLineBreaks(QString markdown);
+QImage boxBlur(QImage image, int radius);
 void layoutSlideText(QTextDocument &document, const QString &markdown, const QVariantMap &palette,
                      qreal fontSize, qreal width, bool centered, bool code, bool equalColumns = false);
 struct CloudLabel {

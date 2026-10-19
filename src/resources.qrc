@@ -1,1 +1,1 @@
-<RCC><qresource prefix="/"><file>Main.qml</file><file>AppIcon.qml</file><file>Markdown.js</file><file>format.md</file><file>skill.md</file></qresource></RCC>
+<RCC><qresource prefix="/"><file>Main.qml</file><file>AppIcon.qml</file><file>Markdown.js</file><file>format.md</file><file>skill.md</file><file>components.md</file><file>icons.tsv</file><file>templates/omarchy/presentation.md</file></qresource></RCC>

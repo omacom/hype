@@ -1,4 +1,4 @@
-QT += core gui qml quick quickcontrols2 multimedia widgets testlib pdf concurrent dbus
+QT += svg network core gui qml quick quickcontrols2 multimedia widgets testlib pdf concurrent dbus
 CONFIG += c++17 testcase
 TEMPLATE = app
 TARGET = hype-tests
@@ -23,3 +23,10 @@ HEADERS += ../src/images.h
 SOURCES += ../src/filedialog.cpp
 SOURCES += ../src/recovery.cpp
 HEADERS += ../src/filedialog.h
+
+SOURCES += ../src/templates.cpp
+HEADERS += ../src/templates.h
+SOURCES += ../src/blocks.cpp ../src/layout.cpp ../src/diagrams.cpp ../src/icons.cpp ../src/qrcodegen.c
+HEADERS += ../src/blocks.h ../src/blocks_p.h ../src/qrcodegen.h
+SOURCES += ../src/fonts.cpp
+HEADERS += ../src/fonts.h
