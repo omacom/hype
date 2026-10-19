@@ -10,6 +10,8 @@ frame: Frame
 chart_colors: "accent, green, yellow, magenta"
 ---
 
+<!-- hype: section="Openers" -->
+
 <!--
 The Omarchy template: the desktop's own colors (theme: current follows
 whichever theme Omarchy has, as it changes), JetBrains Mono, and square tiles
@@ -17,7 +19,7 @@ with an accent border, like Hyprland's windows. Every slide is framed as the
 focused window, with its number as the workspace.
 
 Components: Title, Section, Window, Terminal, Keys. Start a new slide from any
-slide here.
+slide here; they are grouped into Openers, Content, and Closing.
 -->
 
 <Define name="Frame">
@@ -58,6 +60,8 @@ The setup
 </Section>
 
 ---
+
+<!-- hype: section="Content" -->
 
 <Define name="Window" title="" icon="" justify="start">
 <Card title="{title}" icon="{icon}" icon-style="plain" border="accent" radius="0" justify="{justify}" grow>
@@ -136,6 +140,8 @@ hype export talk/presentation.md talk.pdf
 </Row>
 
 ---
+
+<!-- hype: section="Closing" -->
 
 <Title eyebrow="Thank you" subtitle="github.com/you · you@example.com">
 Questions?
