@@ -777,6 +777,7 @@ QString cliSummary() {
            "  templates [presentation]        List the templates a presentation can use\n"
            "  template save <presentation>    Add a presentation to the template library\n"
            "  template remove <name>          Remove a template from the library\n"
+           "  template slides <template> [n]  List a template's slides, or print one\n"
            "  icons [query]                   Search icons for components\n"
            "  fonts <presentation>            Show where each font comes from\n"
            "  fonts add <family>… [--into p]  Add Google Fonts, optionally into a presentation\n"
