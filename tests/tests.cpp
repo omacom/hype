@@ -2831,6 +2831,13 @@ static void write(const QString &path, const QString &content) {
         QTest::keyClick(window, Qt::Key_Home);
         QCOMPARE(d.selected(), 20);
         QCOMPARE(editor->property("cursorPosition").toInt(), 0);
+        QTest::keyClick(window, Qt::Key_End, Qt::ShiftModifier);
+        QCOMPARE(editor->property("selectionStart").toInt(), 0);
+        QCOMPARE(editor->property("selectionEnd").toInt(), lineEnd);
+        QTest::keyClick(window, Qt::Key_Home, Qt::ShiftModifier);
+        QCOMPARE(editor->property("selectionStart").toInt(), 0);
+        QCOMPARE(editor->property("selectionEnd").toInt(), 0);
+        QCOMPARE(editor->property("cursorPosition").toInt(), 0);
         QCOMPARE(d.source(), beforeJump);
         d.select(20);
         const QString beforeTab = d.source();
