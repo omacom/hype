@@ -63,11 +63,11 @@ enable_testing()
 
 # The tests read exports back with Qt Pdf, which ships in qt6-webengine, so
 # building the app alone doesn't need it; testing without it fails, not skips.
-find_package(Qt6 6.9 COMPONENTS Pdf)
+find_package(Qt6 6.9 COMPONENTS Pdf GuiPrivate)
 if(TARGET Qt6::Pdf)
   # The window-level tests load the same QML as the app, so they embed it too.
   add_executable(hype_tests tests/tests.cpp src/resources.qrc)
-  target_link_libraries(hype_tests PRIVATE hype_core Qt6::Widgets Qt6::Pdf Qt6::Test)
+  target_link_libraries(hype_tests PRIVATE hype_core Qt6::GuiPrivate Qt6::Widgets Qt6::Pdf Qt6::Test)
   set_target_properties(hype_tests PROPERTIES INTERPROCEDURAL_OPTIMIZATION ON)
   add_test(NAME hype_tests COMMAND hype_tests)
 else()
