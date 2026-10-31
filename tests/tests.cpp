@@ -46,6 +46,36 @@
 #include <QVideoSink>
 #include <QVideoFrame>
 #include <QtTest>
+#include <private/qguiapplication_p.h>
+#include <qpa/qplatformtheme.h>
+
+// Wraps the active platform theme and swaps the keys for the start and end
+// of a line, as a theme like KDE Plasma's or qt6ct may change them.
+class SwappedLineKeysTheme : public QPlatformTheme {
+  public:
+    explicit SwappedLineKeysTheme(QPlatformTheme *base) : base(base) {}
+    QList<QKeySequence> keyBindings(QKeySequence::StandardKey key) const override {
+        switch (key) {
+        case QKeySequence::MoveToStartOfLine:
+            return base->keyBindings(QKeySequence::MoveToEndOfLine);
+        case QKeySequence::MoveToEndOfLine:
+            return base->keyBindings(QKeySequence::MoveToStartOfLine);
+        case QKeySequence::SelectStartOfLine:
+            return base->keyBindings(QKeySequence::SelectEndOfLine);
+        case QKeySequence::SelectEndOfLine:
+            return base->keyBindings(QKeySequence::SelectStartOfLine);
+        default:
+            return base->keyBindings(key);
+        }
+    }
+    const QPalette *palette(Palette type) const override { return base->palette(type); }
+    const QFont *font(Font type) const override { return base->font(type); }
+    QVariant themeHint(ThemeHint hint) const override { return base->themeHint(hint); }
+    Qt::ColorScheme colorScheme() const override { return base->colorScheme(); }
+
+  private:
+    QPlatformTheme *base;
+};
 
 class TestFilePortal : public QDBusVirtualObject {
   public:
@@ -2179,6 +2209,72 @@ static void write(const QString &path, const QString &content) {
         QCOMPARE(d.count(), slidesBefore + 1);
         QTRY_VERIFY(slideEditor->hasActiveFocus());
     }
+    void caretEdgesFollowThePlatformTheme() {
+        if (!qEnvironmentVariableIsSet("HYPE_GUI_TESTS"))
+            QSKIP("Set HYPE_GUI_TESTS=1 with local multimedia access");
+        QQuickStyle::setStyle("Basic");
+        qmlRegisterType<SlideItem>("Hype", 1, 0, "SlideCanvas");
+        qmlRegisterType<AppTheme>("Hype", 1, 0, "AppTheme");
+        Deck d;
+        const QString longLine = QString("word ").repeated(200).trimmed();
+        d.editSource("# One\n\n" + longLine + "\n\nlast\n\n---\n\n# Two\n");
+        QQmlApplicationEngine engine;
+        engine.rootContext()->setContextProperty("deck", &d);
+        engine.addImageProvider("slides", new Thumbnails(&d));
+        engine.load(QUrl("qrc:/Main.qml"));
+        QVERIFY(!engine.rootObjects().isEmpty());
+        auto window = qobject_cast<QQuickWindow *>(engine.rootObjects()[0]);
+        QVERIFY(window);
+        QTest::qWait(300);
+
+        // Qt has no public way to change standard keys, so the test swaps
+        // the platform theme that Qt asks for them.
+        QPlatformTheme *originalTheme = QGuiApplicationPrivate::platform_theme;
+        QVERIFY(originalTheme);
+        SwappedLineKeysTheme swappedTheme(originalTheme);
+        QGuiApplicationPrivate::platform_theme = &swappedTheme;
+        const auto restoreTheme = qScopeGuard(
+            [originalTheme] { QGuiApplicationPrivate::platform_theme = originalTheme; });
+
+        auto checkEdges = [&](QQuickItem *editor) {
+            editor->forceActiveFocus();
+            QVERIFY(editor->hasActiveFocus());
+            const QString text = editor->property("text").toString();
+            const int lineStart = text.indexOf(longLine);
+            QVERIFY(lineStart >= 0);
+            const int lineEnd = lineStart + longLine.size();
+            editor->setProperty("cursorPosition", lineStart + 2);
+            QTest::keyClick(window, Qt::Key_Home);
+            QCOMPARE(editor->property("cursorPosition").toInt(), lineEnd);
+            QTest::keyClick(window, Qt::Key_End);
+            QCOMPARE(editor->property("cursorPosition").toInt(), lineStart);
+            QTest::keyClick(window, Qt::Key_Home, Qt::ShiftModifier);
+            QCOMPARE(editor->property("selectionStart").toInt(), lineStart);
+            QCOMPARE(editor->property("selectionEnd").toInt(), lineEnd);
+        };
+
+        auto slideEditor = window->findChild<QQuickItem *>("slideEditor");
+        QVERIFY(slideEditor && slideEditor->isVisible());
+        QRectF first, last;
+        const int slideLineStart = slideEditor->property("text").toString().indexOf(longLine);
+        QVERIFY(QMetaObject::invokeMethod(slideEditor, "positionToRectangle",
+                                          Q_RETURN_ARG(QRectF, first), Q_ARG(int, slideLineStart)));
+        QVERIFY(QMetaObject::invokeMethod(slideEditor, "positionToRectangle",
+                                          Q_RETURN_ARG(QRectF, last),
+                                          Q_ARG(int, slideLineStart + longLine.size())));
+        // The line wraps, so Hype's logical-line move and Qt's own visual-line
+        // move land in different places.
+        QVERIFY(last.y() > first.y());
+        checkEdges(slideEditor);
+        if (QTest::currentTestFailed())
+            return;
+
+        QTest::keyClick(window, Qt::Key_Period, Qt::ControlModifier);
+        QVERIFY(window->property("markdown").toBool());
+        auto sourceEditor = window->findChild<QQuickItem *>("sourceEditor");
+        QVERIFY(sourceEditor && sourceEditor->isVisible());
+        checkEdges(sourceEditor);
+    }
     void visualOperations() {
         if (!qEnvironmentVariableIsSet("HYPE_GUI_TESTS"))
             QSKIP("Set HYPE_GUI_TESTS=1 with local multimedia access");
@@ -2534,6 +2630,13 @@ static void write(const QString &path, const QString &content) {
         QCOMPARE(editor->property("cursorPosition").toInt(), lineEnd);
         QTest::keyClick(window, Qt::Key_Home);
         QCOMPARE(d.selected(), 20);
+        QCOMPARE(editor->property("cursorPosition").toInt(), 0);
+        QTest::keyClick(window, Qt::Key_End, Qt::ShiftModifier);
+        QCOMPARE(editor->property("selectionStart").toInt(), 0);
+        QCOMPARE(editor->property("selectionEnd").toInt(), lineEnd);
+        QTest::keyClick(window, Qt::Key_Home, Qt::ShiftModifier);
+        QCOMPARE(editor->property("selectionStart").toInt(), 0);
+        QCOMPARE(editor->property("selectionEnd").toInt(), 0);
         QCOMPARE(editor->property("cursorPosition").toInt(), 0);
         QCOMPARE(d.source(), beforeJump);
         d.select(20);

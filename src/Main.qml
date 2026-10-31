@@ -181,6 +181,22 @@ ApplicationWindow {
         else if (markdown) restoreSource(sourceEditor.cursorPosition)
         else slideEditor.forceActiveFocus()
     }
+    function caretEdge(event) {
+        const edges = [
+            [StandardKey.MoveToStartOfLine, "lineStart", false],
+            [StandardKey.SelectStartOfLine, "lineStart", true],
+            [StandardKey.MoveToEndOfLine, "lineEnd", false],
+            [StandardKey.SelectEndOfLine, "lineEnd", true],
+            [StandardKey.MoveToStartOfDocument, "documentStart", false],
+            [StandardKey.SelectStartOfDocument, "documentStart", true],
+            [StandardKey.MoveToEndOfDocument, "documentEnd", false],
+            [StandardKey.SelectEndOfDocument, "documentEnd", true],
+        ]
+        for (const [key, name, extend] of edges) {
+            if (event.matches(key)) return { name: name, extend: extend }
+        }
+        return null
+    }
     function editorKey(editor, flick, event) {
         if ((event.key === Qt.Key_Tab || event.key === Qt.Key_Backtab) && !(event.modifiers & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier))) {
             event.accepted = true
@@ -215,19 +231,27 @@ ApplicationWindow {
         let position = editor.cursorPosition
         let scroll = flick.contentY
         let page = event.key === Qt.Key_PageDown || event.key === Qt.Key_PageUp
+        let edge = page ? null : caretEdge(event)
         if (page) {
             let amount = Math.max(40, flick.height - 40) * (event.key === Qt.Key_PageDown ? 1 : -1)
             let rect = editor.positionToRectangle(position)
             position = editor.positionAt(rect.x, Math.max(0, rect.y + rect.height / 2 + amount))
             scroll += amount
-        } else if (event.key === Qt.Key_Home) {
-            position = control || position === 0 ? 0 : editor.text.lastIndexOf("\n", position - 1) + 1
-        } else if (event.key === Qt.Key_End) {
+        } else if (!edge) {
+            return
+        } else if (edge.name === "documentStart") {
+            position = 0
+        } else if (edge.name === "documentEnd") {
+            position = editor.length
+        } else if (edge.name === "lineStart") {
+            position = position === 0 ? 0 : editor.text.lastIndexOf("\n", position - 1) + 1
+        } else {
             let end = editor.text.indexOf("\n", position)
-            position = control || end < 0 ? editor.length : end
-        } else return
+            position = end < 0 ? editor.length : end
+        }
         event.accepted = true
-        if (event.modifiers & Qt.ShiftModifier) editor.moveCursorSelection(position, TextEdit.SelectCharacters)
+        let extend = page ? event.modifiers & Qt.ShiftModifier : edge.extend
+        if (extend) editor.moveCursorSelection(position, TextEdit.SelectCharacters)
         else editor.cursorPosition = position
         if (page) flick.contentY = Math.max(0, Math.min(Math.max(0, flick.contentHeight - flick.height + flick.bottomMargin), scroll))
     }
