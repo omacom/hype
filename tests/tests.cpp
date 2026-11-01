@@ -2475,6 +2475,15 @@ static void write(const QString &path, const QString &content) {
         QCOMPARE(d.selected(), d.count() - 1);
         QTest::keyClick(window, Qt::Key_Home);
         QCOMPARE(d.selected(), 0);
+        // While presenting, Page Down and Page Up move one slide, like PowerPoint and Keynote.
+        QVERIFY(QMetaObject::invokeMethod(window, "togglePresent"));
+        QVERIFY(window->property("presenting").toBool());
+        QTest::keyClick(window, Qt::Key_PageDown);
+        QCOMPARE(d.selected(), 1);
+        QTest::keyClick(window, Qt::Key_PageUp);
+        QCOMPARE(d.selected(), 0);
+        QVERIFY(QMetaObject::invokeMethod(window, "togglePresent"));
+        QVERIFY(!window->property("presenting").toBool());
         QTest::qWait(100);
         auto point = list->mapToScene(QPointF(100, 70));
         auto wheel = [&](int angle, int pixels = 0) {
