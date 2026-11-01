@@ -232,6 +232,10 @@ ApplicationWindow {
         if (page) flick.contentY = Math.max(0, Math.min(Math.max(0, flick.contentHeight - flick.height + flick.bottomMargin), scroll))
     }
     function formatSlide(kind) {
+        if (deck.slideIncluded) {
+            deck.setStatus("Included slides are read-only. Edit the included presentation instead.")
+            return
+        }
         if (markdown) {
             const sourceEdit = Markdown.format(sourceEditor.text, sourceEditor.selectionStart, sourceEditor.selectionEnd, kind)
             sourceEditor.forceActiveFocus()
@@ -244,6 +248,9 @@ ApplicationWindow {
         slideEditor.forceActiveFocus()
         deck.editSlide(edit.text)
         slideEditor.select(edit.start, edit.end)
+    }
+    function warnIncludedReadOnly() {
+        deck.setStatus("Included slides are read-only. Edit the included presentation instead.")
     }
     // An existing presentation opens for browsing; a new one opens ready to type.
     function focusForDeck(existing) {
@@ -1583,7 +1590,18 @@ ApplicationWindow {
                             wrapMode: TextEdit.Wrap; leftPadding: 24; topPadding: 16
                             placeholderText: deck.slideIncluded ? "Included slide (read-only)" : "# Your headline"
                             onTextChanged: {
-                                if (!win.syncingEditor && activeFocus && !deck.slideIncluded) {
+                                if (win.syncingEditor) return
+                                if (deck.slideIncluded) {
+                                    // readOnly should block edits; if text still drifts, revert and explain.
+                                    if (activeFocus && text !== deck.slideText) {
+                                        win.warnIncludedReadOnly()
+                                        win.syncingEditor = true
+                                        text = deck.slideText
+                                        win.syncingEditor = false
+                                    }
+                                    return
+                                }
+                                if (activeFocus) {
                                     const previousCount = deck.count
                                     win.editingSlide = true
                                     deck.editSlide(text)
@@ -1592,7 +1610,20 @@ ApplicationWindow {
                                 }
                             }
                             onCursorPositionChanged: { if (!win.syncingEditor && activeFocus) win.sourceOnlyCursor = -1 }
-                            Keys.onPressed: function(event) { win.editorKey(slideEditor, slideScroll.contentItem, event) }
+                            Keys.onPressed: function(event) {
+                                if (deck.slideIncluded) {
+                                    const typing = event.text.length > 0
+                                    const erasing = event.key === Qt.Key_Backspace || event.key === Qt.Key_Delete
+                                        || event.key === Qt.Key_Return || event.key === Qt.Key_Enter
+                                    const clipping = event.matches(StandardKey.Cut) || event.matches(StandardKey.Paste)
+                                    if (typing || erasing || clipping) {
+                                        win.warnIncludedReadOnly()
+                                        event.accepted = true
+                                        return
+                                    }
+                                }
+                                win.editorKey(slideEditor, slideScroll.contentItem, event)
+                            }
                         }
                     }
                 }
