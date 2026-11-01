@@ -144,6 +144,7 @@ class Deck : public QAbstractListModel {
     Q_INVOKABLE void setMediaMode(const QString &mode);
     Q_INVOKABLE void setMediaPosition(const QString &position);
     Q_INVOKABLE void setMediaSize(double percent);
+    Q_INVOKABLE void setMediaContinuous(bool enabled);
     Q_INVOKABLE void setStatus(const QString &status);
   signals:
     void changed(); // Document content, path, saved state, or media files; always followed by selectionChanged.

@@ -623,6 +623,7 @@ QVariantMap Deck::media() const {
                     {"loop", m.loop},
                     {"muted", m.muted},
                     {"autoplay", m.autoplay},
+                    {"continuous", m.continuous},
                     {"title", title},
                     {"rect", mediaRect(m)},
                     {"background", m.background},
@@ -1270,6 +1271,15 @@ void Deck::setMediaSize(double percent) {
     if (!media.placed() || percent < 1 || percent > 100)
         return;
     editSlide(withMediaDirectives(slideSource(), {"size"}, {QString("size=%1%").arg(percent)}));
+}
+void Deck::setMediaContinuous(bool enabled) {
+    const auto media = parseMedia(slideSource(), baseDir());
+    if (!media.video || media.continuous == enabled)
+        return;
+    if (enabled)
+        editSlide(withMediaDirectives(slideSource(), {"continuous"}, {"continuous"}));
+    else
+        editSlide(withMediaDirectives(slideSource(), {"continuous"}, {}));
 }
 void Deck::exportDialog(const QString &format) {
     if (m_exporting)
