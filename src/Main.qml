@@ -406,10 +406,12 @@ ApplicationWindow {
             win.syncEditors()
             if (win.dragIndex < 0 && win.lastSelected !== deck.selected) Qt.callLater(thumbnails.revealSelection)
             const nextVideo = deck.media.video ? deck.media.url.toString() : ""
-            // continuous keeps the same file playing across slides; otherwise restart.
-            const sameVideo = nextVideo !== "" && player.source.toString() === nextVideo
+            const sameFile = player.source.toString() === nextVideo
+            const slideChanged = win.lastSelected !== deck.selected
             win.lastSelected = deck.selected
-            if (sameVideo && deck.media.continuous)
+            // Same slide (edits, media refresh): keep playback. Across slides, only
+            // continue when the incoming slide opts in with continuous.
+            if (sameFile && (!slideChanged || (nextVideo !== "" && deck.media.continuous)))
                 return
             player.stop()
             video.clearOutput()
