@@ -12,6 +12,8 @@ struct Media {
     QString svg; // A ```svg fence, drawn as vectors where a picture would be
     int svgBlocks = 0;
     bool video = false, span = false, loop = false, muted = false, autoplay = true;
+    // Keep playing when advancing to another slide that uses the same file.
+    bool continuous = false;
     double overlay = 0;
     QString text;
     // A placed image sits at a position, sized as a percentage of the slide.

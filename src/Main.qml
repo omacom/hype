@@ -406,14 +406,15 @@ ApplicationWindow {
             win.syncEditors()
             if (win.dragIndex < 0 && win.lastSelected !== deck.selected) Qt.callLater(thumbnails.revealSelection)
             const nextVideo = deck.media.video ? deck.media.url.toString() : ""
-            const changedVideo = win.lastSelected !== deck.selected || player.source.toString() !== nextVideo
+            // continuous keeps the same file playing across slides; otherwise restart.
+            const sameVideo = nextVideo !== "" && player.source.toString() === nextVideo
             win.lastSelected = deck.selected
-            if (changedVideo) {
-                player.stop()
-                video.clearOutput()
-                player.source = nextVideo
-                if (win.presenting && deck.media.video && deck.media.autoplay) player.play()
-            }
+            if (sameVideo && deck.media.continuous)
+                return
+            player.stop()
+            video.clearOutput()
+            player.source = nextVideo
+            if (win.presenting && deck.media.video && deck.media.autoplay) player.play()
         }
         function onModelAboutToBeReset() {
             thumbnails.cancelFlick()
@@ -924,6 +925,15 @@ ApplicationWindow {
                         AppMenuItem { text: "Small (10%)"; checkable: true; checked: deck.media.size === 10; onTriggered: deck.setMediaSize(10) }
                         AppMenuItem { text: "Medium (20%)"; checkable: true; checked: deck.media.size === 20; onTriggered: deck.setMediaSize(20) }
                         AppMenuItem { text: "Large (35%)"; checkable: true; checked: deck.media.size === 35; onTriggered: deck.setMediaSize(35) }
+                    }
+                    AppMenuSeparator {}
+                    AppMenuItem {
+                        objectName: editorBar.scope + "continuousVideoItem"
+                        text: "Play across slides"
+                        enabled: deck.media.video
+                        checkable: true
+                        checked: !!deck.media.continuous
+                        onTriggered: deck.setMediaContinuous(!deck.media.continuous)
                     }
                     AppMenuSeparator {}
                     AppMenuItem { text: "Match image edges"; enabled: !mediaMenu.placed; checkable: true; checked: deck.media.background === "auto"; onTriggered: deck.matchImageBackground(true) }

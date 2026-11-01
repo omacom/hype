@@ -125,6 +125,9 @@ Choose **Fit** or **Span** from the **Layout** menu above the editor, or put lay
 | `![span](photo.jpg)` | Fill the slide, cropping as needed |
 | `![loop muted](demo.mp4)` | Loop a video without sound |
 | `![autoplay=false](demo.mp4)` | Wait for Space to play the video |
+| `![continuous](demo.mp4)` | Keep playing when the next slide uses the same file |
+
+Choose **Play across slides** from the **Layout** menu for a video background that should continue through a run of slides (lyric decks, for example). Without `continuous`, each slide starts the video over. A different file, or a slide with no video, still starts clean. Continuous playback applies while presenting in Hype; PowerPoint export still embeds each slide’s video separately.
 
 For images that leave space around them, Hype matches the background to the image’s edge color when possible. Choose **White**, **Black**, or **Use theme color** from the **Layout** menu to override it, or specify any color: `![fit background=#ffffff](diagram.png)`. Choosing White or Black also switches spanning media to fit so the background is visible.
 

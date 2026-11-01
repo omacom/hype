@@ -1133,6 +1133,10 @@ static void write(const QString &path, const QString &content) {
         QCOMPARE(m.poster, QString("/tmp/deck/images/demo still.jpg"));
         m = parseMedia("![autoplay=false](demo.mp4)", "/tmp/deck");
         QVERIFY(!m.autoplay);
+        m = parseMedia("![span loop muted continuous](demo.mp4)", "/tmp/deck");
+        QVERIFY(m.video && m.continuous && m.loop && m.muted);
+        m = parseMedia("![continuous](photo.jpg)", "/tmp/deck");
+        QVERIFY(m.error.contains("continuous"));
         m = parseMedia("![span fit](photo.jpg)", "/tmp/deck");
         QVERIFY(!m.error.isEmpty());
         // Side placement is gone; a lone "left" is ordinary alt text again.
@@ -3204,6 +3208,16 @@ static void write(const QString &path, const QString &content) {
         const QString original = d.source();
         d.setMediaMode("invalid");
         QCOMPARE(d.source(), original);
+        d.editSlide("![span loop muted](demo.mp4)");
+        d.setMediaContinuous(true);
+        QVERIFY(parseMedia(d.slideText(), {}).continuous);
+        QVERIFY(d.slideText().contains("continuous"));
+        d.setMediaContinuous(false);
+        QVERIFY(!parseMedia(d.slideText(), {}).continuous);
+        QVERIFY(!d.slideText().contains("continuous"));
+        d.editSlide("![span](photo.png)");
+        d.setMediaContinuous(true); // Images cannot be continuous.
+        QVERIFY(!d.slideText().contains("continuous"));
     }
     void placementControls() {
         Deck d;
