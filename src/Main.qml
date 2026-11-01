@@ -713,8 +713,8 @@ ApplicationWindow {
     Shortcut { sequence: "Up"; context: win.presenting ? Qt.ApplicationShortcut : Qt.WindowShortcut; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!slideEditor.activeFocus && !sourceEditor.activeFocus)); onActivated: deck.select(deck.selected + (win.presenting ? -1 : -win.rowStep)) }
     Shortcut { sequence: "Ctrl+Up"; enabled: !win.popupOpen && !deck.compressingImage && !win.presenting && !slideEditor.activeFocus && !sourceEditor.activeFocus; onActivated: win.moveSlides(-win.rowStep) }
     Shortcut { sequence: "Shift+Up"; enabled: !win.popupOpen && !deck.compressingImage && !win.presenting && !slideEditor.activeFocus && !sourceEditor.activeFocus; onActivated: { deck.extendSelection(deck.selected + -win.rowStep); if (win.markdown) win.alignSource(false) } }
-    Shortcut { sequence: "PgDown"; context: win.presenting ? Qt.ApplicationShortcut : Qt.WindowShortcut; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!slideEditor.activeFocus && !sourceEditor.activeFocus)); onActivated: deck.select(deck.selected + 5 * win.rowStep) }
-    Shortcut { sequence: "PgUp"; context: win.presenting ? Qt.ApplicationShortcut : Qt.WindowShortcut; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!slideEditor.activeFocus && !sourceEditor.activeFocus)); onActivated: deck.select(deck.selected - 5 * win.rowStep) }
+    Shortcut { sequence: "PgDown"; context: win.presenting ? Qt.ApplicationShortcut : Qt.WindowShortcut; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!slideEditor.activeFocus && !sourceEditor.activeFocus)); onActivated: deck.select(deck.selected + (win.presenting ? 1 : 5 * win.rowStep)) }
+    Shortcut { sequence: "PgUp"; context: win.presenting ? Qt.ApplicationShortcut : Qt.WindowShortcut; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!slideEditor.activeFocus && !sourceEditor.activeFocus)); onActivated: deck.select(deck.selected - (win.presenting ? 1 : 5 * win.rowStep)) }
     Shortcut { sequence: "Ctrl+PgDown"; enabled: !win.popupOpen && !deck.compressingImage && !win.presenting && !slideEditor.activeFocus && !sourceEditor.activeFocus; onActivated: win.moveSlides(5) }
     Shortcut { sequence: "Ctrl+PgUp"; enabled: !win.popupOpen && !deck.compressingImage && !win.presenting && !slideEditor.activeFocus && !sourceEditor.activeFocus; onActivated: win.moveSlides(-5) }
     Shortcut { sequence: "Home"; context: win.presenting ? Qt.ApplicationShortcut : Qt.WindowShortcut; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!win.markdown && !slideEditor.activeFocus)); onActivated: deck.select(0) }
@@ -1128,7 +1128,7 @@ ApplicationWindow {
                 ["Tab", "Switch between slides and editor"], ["Enter", "Open slide from Overview"],
                 ["? / F1", "Show these shortcuts"] ] },
             { title: "Slides", keys: [
-                ["Arrows", "Previous or next slide, by row in Overview"], ["Page Up / Page Down", "Jump five slides, or five rows in Overview"],
+                ["Arrows", "Previous or next slide, by row in Overview"], ["Page Up / Page Down", "Previous or next slide while presenting; jump five slides, or five rows in Overview"],
                 ["Home / End", "First or last slide when focused in Slides list"], ["Shift+Arrows", "Extend the selection"],
                 ["Ctrl+Arrows", "Move selected slides"], ["Ctrl+Page Up / Page Down", "Move selected slides five places"],
                 ["Ctrl+Home / End", "Move selected slides to first or last"], ["Ctrl+Enter", "Add a slide"],
