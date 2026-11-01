@@ -478,6 +478,13 @@ QString ensurePoster(const QString &video, const QString &base) {
 }
 QStringList slideProblems(const QString &source, const QString &base) {
     QStringList errors;
+    if (const QString target = includeTarget(source); !target.isEmpty()) {
+        if (resolveIncludePath(target, base).isEmpty())
+            errors << "Missing include: " + target;
+        else
+            errors << "Include was not expanded";
+        return errors;
+    }
     auto media = parseMedia(source, base);
     if (!media.error.isEmpty())
         errors << media.error;
@@ -1034,7 +1041,8 @@ void SlideItem::setDeck(Deck *deck) {
 }
 void SlideItem::paint(QPainter *p) {
     if (m_deck)
-        paintSlide(p, boundingRect(), m_deck->slideSource(), m_deck->baseDir(), m_deck->palette(),
+        paintSlide(p, boundingRect(), m_deck->slideSource(), m_deck->slideBase(m_deck->selected()),
+                   m_deck->palette(),
                    nullptr, m_overlayOnly);
 }
 // Qt multiplies an Image's sourceSize by the screen's scale, so a 340px thumbnail arrives as
@@ -1136,7 +1144,7 @@ Thumbnails::Thumbnails(Deck *deck) {
             if (index < 0 || index >= deck->count())
                 continue;
             // Do not start video decoding or animation playback speculatively.
-            const auto media = parseMedia(deck->slide(index), deck->baseDir());
+            const auto media = parseMedia(deck->slide(index), deck->slideBase(index));
             QImageReader reader(media.path);
             if (media.video || (!media.path.isEmpty() && reader.supportsAnimation() && reader.imageCount() > 1))
                 continue;

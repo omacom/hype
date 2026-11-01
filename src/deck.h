@@ -13,6 +13,11 @@ struct Slide {
     QString source;
     int start = 0;
     int end = 0;
+    // Media directory for this slide. Empty means the open presentation's folder.
+    QString base;
+    // Absolute path of an included presentation, when this slide came from ![[...]].
+    QString originPath;
+    bool included = false;
 };
 struct ParsedDeck {
     QString header;
@@ -21,6 +26,12 @@ struct ParsedDeck {
     int errorOffset = -1; // Where the unfinished front matter or code fence opens.
 };
 ParsedDeck parseDeck(const QString &source);
+// Expand ![[path]] slides into the target presentation's slides. Paths are relative
+// to baseDir. Child front matter is ignored; the parent theme stays in force.
+ParsedDeck expandIncludes(ParsedDeck deck, const QString &baseDir, QStringList *stack = nullptr);
+// Target inside ![[...]] when that is the slide's only content; otherwise empty.
+QString includeTarget(const QString &source);
+QString resolveIncludePath(const QString &target, const QString &fromDir);
 QString scalar(const QString &header, const QString &key, const QString &fallback = {});
 QString setScalar(QString header, const QString &key, const QString &value);
 
@@ -55,6 +66,7 @@ class Deck : public QAbstractListModel {
     Q_PROPERTY(QColor foreground READ foreground NOTIFY changed)
     Q_PROPERTY(QColor accent READ accent NOTIFY changed)
     Q_PROPERTY(QVariantMap media READ media NOTIFY selectionChanged)
+    Q_PROPERTY(bool slideIncluded READ slideIncluded NOTIFY selectionChanged)
   public:
     explicit Deck(QObject *parent = nullptr, const QString &exportProgram = {});
     ~Deck() override;
@@ -98,6 +110,9 @@ class Deck : public QAbstractListModel {
     QVariantMap media() const;
     QStringList mediaPositions() const;
     QString baseDir() const;
+    // Per-slide media root. Included slides resolve against their origin folder.
+    QString slideBase(int index) const;
+    bool slideIncluded() const;
     QString dialogDirectory() const;
     QString slide(int index) const;
     bool loadPath(const QString &path, bool remember = true);
@@ -219,4 +234,9 @@ class Deck : public QAbstractListModel {
     void watchMedia();
     void notifyChanged();
     void reloadExternal(const QString &disk);
+    // Collapse expanded include groups back to parent slide bodies for rewrite.
+    QStringList writableSources() const;
+    // Grow first/last so a partial include selection covers the whole group.
+    void growIncludeSelection(int *first, int *last) const;
+    int writableIndexForExpanded(int expanded) const;
 };

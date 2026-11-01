@@ -69,6 +69,29 @@ puts "Code is highlighted when you name the language"
 - `<!-- comments -->` are hidden from the slide; use them for speaker notes.
 - A `---` inside a code fence does not split the slide.
 
+## Include another presentation
+
+Put `![[path]]` alone on a slide to embed every slide from another Hype
+presentation (Obsidian-style). Paths are relative to the current presentation
+folder. Hype resolves `Song`, `Song.md`, or `Song/presentation.md`.
+
+````markdown
+![span](bem-vindo.png)
+
+---
+
+![[../Eu Navegarei]]
+
+---
+
+![span](bible.jpg)
+````
+
+The child's theme is ignored; the parent keeps its colors and font. Nested
+includes are allowed. Cycles and missing targets are errors. In the editor,
+included slides are read-only—edit the included presentation instead. Moving
+or deleting any slide from an include moves or deletes the whole `![[...]]`.
+
 ## Images and video
 
 Each slide takes one image or video. Options go inside the brackets:

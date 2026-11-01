@@ -136,11 +136,31 @@ class CliTests(unittest.TestCase):
     def test_themes_and_help(self):
         self.assertEqual(json.loads(self.hype('themes', '--json').stdout)['themes'], ['paper'])
         self.assertIn('hype check', self.hype('help', 'format').stdout)
+        self.assertIn('![[path]]', self.hype('help', 'format').stdout)
         self.assertIn('--slide', self.hype('help', 'render').stdout)
         self.assertIn('help format', self.hype('help').stdout)
         self.assertEqual(self.hype().stdout, self.hype('help').stdout)
         self.assertIn('open [presentation]', self.hype().stdout)
         self.assertIn('help format', self.hype('--help').stdout)
+
+    def test_includes_expand_for_check_slides_and_render(self):
+        song = self.root / 'Song'
+        song.mkdir()
+        (song / 'presentation.md').write_text('---\ntitle: Song\n---\n\n# Verse\n\n---\n\n# Chorus\n')
+        self.write('---\ntitle: Service\n---\n\n# Welcome\n\n---\n\n![[../Song]]\n\n---\n\n# Bye\n')
+        report = json.loads(self.hype('check', self.deck, '--json').stdout)
+        self.assertTrue(report['ok'])
+        self.assertEqual(report['slides'], 4)
+        outline = json.loads(self.hype('slides', self.deck, '--json').stdout)
+        self.assertEqual([s['title'] for s in outline['slides']], ['Welcome', 'Verse', 'Chorus', 'Bye'])
+        self.assertEqual(outline['slides'][1].get('include'), 'presentation.md')
+        rendered = json.loads(self.hype('render', self.deck, '--slide', 2, '-o', 'verse.png', '--width', 640,
+                                        '--json').stdout)
+        self.assertEqual(self.png_size(rendered['image']), (640, 360))
+        self.write('# Hi\n\n---\n\n![[MissingSong]]\n')
+        missing = json.loads(self.hype('check', self.deck, '--json', code=1).stdout)
+        self.assertFalse(missing['ok'])
+        self.assertIn('Missing include', missing['problems'][0]['message'])
 
     def test_skill_prints_and_installs_for_agents(self):
         self.assertTrue(self.hype('skill').stdout.startswith('---\nname: hype\n'))

@@ -79,6 +79,22 @@ Tables use GitHub's pipe syntax. Colons in the line under the header align a col
 
 The single-slide editor hides the blank lines around slide separators, leaving just your content to edit.
 
+## Include another presentation
+
+Put `![[path]]` alone on a slide to embed every slide from another presentation (same idea as Obsidian embeds). Paths are relative to the current folder; `Song`, `Song.md`, and `Song/presentation.md` all work. The parent keeps its theme. Included slides are read-only in the editor—open the included file to change them.
+
+````markdown
+![span](welcome.png)
+
+---
+
+![[../Eu Navegarei]]
+
+---
+
+![span](closing.png)
+````
+
 ## Add images and video
 
 Paste an image or a copied image/video file with **Ctrl+V**. Hype asks for a name, saves the file, and adds it to the selected slide. Pasting onto a slide that already has media replaces that media while keeping the text. You can also drag a file onto the preview or use **+ Image / video** to replace the media. Dropping several files puts each additional file on a new slide.

@@ -119,7 +119,11 @@ bool Deck::restoreSnapshot(const QByteArray &bytes, bool opening) {
         const bool terminal = i == slides.size() - 1 && start == source.size() && start == end &&
                               (separator == "---" || separator == "---\r");
         if (i == 0 ? !separator.isEmpty() : !terminal && separator != "---\n" && separator != "---\r\n") return false;
-        parsed.slides.append({source.mid(start, end - start), start, end});
+        Slide entry;
+        entry.source = source.mid(start, end - start);
+        entry.start = start;
+        entry.end = end;
+        parsed.slides.append(entry);
         previousEnd = end;
     }
     if (parsed.slides.isEmpty() || previousEnd != source.size()) return false;

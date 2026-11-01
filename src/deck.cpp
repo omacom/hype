@@ -44,6 +44,13 @@
 #include <cstring>
 #include <memory>
 
+static Slide makeSlide(const QString &source, int start, int end) {
+    Slide slide;
+    slide.source = source;
+    slide.start = start;
+    slide.end = end;
+    return slide;
+}
 ParsedDeck parseDeck(const QString &source) {
     ParsedDeck result;
     int contentStart = source.startsWith(QChar(0xfeff)) ? 1 : 0;
@@ -71,7 +78,7 @@ ParsedDeck parseDeck(const QString &source) {
         if (!closed) {
             result.error = "Front matter needs a closing ---";
             result.errorOffset = contentStart;
-            result.slides.append({source, 0, int(source.size())});
+            result.slides.append(makeSlide(source, 0, int(source.size())));
             return result;
         }
     }
@@ -92,17 +99,143 @@ ParsedDeck parseDeck(const QString &source) {
                        match.captured(2).trimmed().isEmpty())
                 fenceLength = 0;
         } else if (fenceLength == 0 && line == "---") {
-            result.slides.append({source.mid(start, pos - start), start, pos});
+            result.slides.append(makeSlide(source.mid(start, pos - start), start, pos));
             start = next;
         }
         pos = next;
     }
-    result.slides.append({source.mid(start), start, int(source.size())});
+    result.slides.append(makeSlide(source.mid(start), start, int(source.size())));
     if (fenceLength && result.error.isEmpty()) {
         result.error = "Unclosed code fence";
         result.errorOffset = fenceStart;
     }
     return result;
+}
+QString includeTarget(const QString &source) {
+    QString text = source;
+    text.remove(QRegularExpression("<!--[\\s\\S]*?-->"));
+    text = text.trimmed();
+    if (text.isEmpty())
+        return {};
+    static const QRegularExpression only(R"(^!\[\[(.+)\]\]\s*$)");
+    const auto match = only.match(text);
+    if (!match.hasMatch())
+        return {};
+    // Reject slides that mix the include with other visible lines.
+    QStringList visible;
+    for (const QString &line : text.split('\n'))
+        if (!line.trimmed().isEmpty())
+            visible << line.trimmed();
+    if (visible.size() != 1)
+        return {};
+    return match.captured(1).trimmed();
+}
+QString resolveIncludePath(const QString &target, const QString &fromDir) {
+    if (target.isEmpty() || target.contains('\0'))
+        return {};
+    const QDir dir(fromDir);
+    const QFileInfo asFile(dir, target);
+    if (asFile.isFile())
+        return asFile.canonicalFilePath();
+    const QFileInfo asMarkdown(dir, target.endsWith(".md", Qt::CaseInsensitive) ? target : target + ".md");
+    if (asMarkdown.isFile())
+        return asMarkdown.canonicalFilePath();
+    const QFileInfo asPresentation(dir, QDir(target).filePath("presentation.md"));
+    if (asPresentation.isFile())
+        return asPresentation.canonicalFilePath();
+    return {};
+}
+ParsedDeck expandIncludes(ParsedDeck deck, const QString &baseDir, QStringList *stack) {
+    if (!deck.error.isEmpty())
+        return deck;
+    QStringList localStack;
+    QStringList *pathStack = stack ? stack : &localStack;
+    ParsedDeck out;
+    out.header = deck.header;
+    out.error = deck.error;
+    out.errorOffset = deck.errorOffset;
+    for (const Slide &slide : deck.slides) {
+        // Already expanded from a prior pass, or a normal local slide.
+        if (slide.included || includeTarget(slide.source).isEmpty()) {
+            Slide copy = slide;
+            if (copy.base.isEmpty())
+                copy.base = baseDir;
+            out.slides.append(copy);
+            continue;
+        }
+        const QString target = includeTarget(slide.source);
+        const QString path = resolveIncludePath(target, baseDir);
+        if (path.isEmpty()) {
+            Slide missing = slide;
+            missing.base = baseDir;
+            out.slides.append(missing);
+            if (out.error.isEmpty()) {
+                out.error = "Missing include: " + target;
+                out.errorOffset = slide.start;
+            }
+            continue;
+        }
+        if (pathStack->contains(path)) {
+            if (out.error.isEmpty()) {
+                out.error = "Include cycle: " + target;
+                out.errorOffset = slide.start;
+            }
+            Slide cycle = slide;
+            cycle.base = baseDir;
+            out.slides.append(cycle);
+            continue;
+        }
+        QFile file(path);
+        if (!file.open(QIODevice::ReadOnly)) {
+            Slide missing = slide;
+            missing.base = baseDir;
+            out.slides.append(missing);
+            if (out.error.isEmpty()) {
+                out.error = "Cannot read include: " + target;
+                out.errorOffset = slide.start;
+            }
+            continue;
+        }
+        const QString childSource = QString::fromUtf8(file.readAll());
+        auto child = parseDeck(childSource);
+        if (!child.error.isEmpty()) {
+            if (out.error.isEmpty()) {
+                out.error = "Include " + target + ": " + child.error;
+                out.errorOffset = slide.start;
+            }
+            Slide broken = slide;
+            broken.base = baseDir;
+            out.slides.append(broken);
+            continue;
+        }
+        pathStack->append(path);
+        const QString childDir = QFileInfo(path).absolutePath();
+        child = expandIncludes(child, childDir, pathStack);
+        pathStack->removeLast();
+        if (!child.error.isEmpty() && out.error.isEmpty()) {
+            out.error = child.error;
+            out.errorOffset = slide.start;
+        }
+        if (child.slides.isEmpty()) {
+            Slide empty = slide;
+            empty.base = baseDir;
+            out.slides.append(empty);
+            if (out.error.isEmpty()) {
+                out.error = "Empty include: " + target;
+                out.errorOffset = slide.start;
+            }
+            continue;
+        }
+        for (Slide embedded : child.slides) {
+            embedded.start = slide.start;
+            embedded.end = slide.end;
+            embedded.base = embedded.base.isEmpty() ? childDir : embedded.base;
+            embedded.originPath = embedded.originPath.isEmpty() ? path : embedded.originPath;
+            embedded.included = true;
+            out.slides.append(embedded);
+        }
+    }
+    return out;
 }
 QString scalar(const QString &header, const QString &key, const QString &fallback) {
     QRegularExpression re("^" + QRegularExpression::escape(key) + ":\\s*([^\\r\\n]*)$",
@@ -140,7 +273,7 @@ Deck::Deck(QObject *parent, const QString &exportProgram) : QAbstractListModel(p
     m_exportProgram(exportProgram.isEmpty() ? QCoreApplication::applicationFilePath() : exportProgram) {
     discoverThemes();
     m_source = "---\ntheme: tokyo-night\n---\n\n# Your next idea\n";
-    m_parsed = parseDeck(m_source);
+    m_parsed = expandIncludes(parseDeck(m_source), QDir::currentPath());
     m_saved = m_source;
     // Writers may truncate, or remove and recreate, the file; read it once they settle.
     m_reloadTimer.setSingleShot(true);
@@ -154,6 +287,26 @@ Deck::Deck(QObject *parent, const QString &exportProgram) : QAbstractListModel(p
     connect(&m_mediaWatcher, &QFileSystemWatcher::directoryChanged, &m_mediaTimer, qOverload<>(&QTimer::start));
     connect(&m_mediaTimer, &QTimer::timeout, this, [this] {
         watchMedia();
+        // Included presentations may have changed on disk; rebuild the expanded slides.
+        if (!m_path.isEmpty()) {
+            auto refreshed = expandIncludes(parseDeck(m_source), baseDir());
+            const bool reset = refreshed.slides.size() != count();
+            QVector<int> modified;
+            if (!reset)
+                for (int i = 0; i < count(); ++i)
+                    if (refreshed.slides[i].source != m_parsed.slides[i].source)
+                        modified.append(i);
+            if (reset)
+                beginResetModel();
+            m_parsed = refreshed;
+            m_selected = qBound(0, m_selected, count() - 1);
+            m_anchor = qBound(0, m_anchor, count() - 1);
+            if (reset)
+                endResetModel();
+            else
+                for (int i : modified)
+                    emit dataChanged(index(i), index(i));
+        }
         m_renderIds.clear();
         m_mediaCache.clear();
         m_sizeClock.invalidate();
@@ -251,6 +404,69 @@ QString Deck::slide(int i) const {
 QString Deck::baseDir() const {
     return m_path.isEmpty() ? QDir::currentPath() : QFileInfo(m_path).absolutePath();
 }
+QString Deck::slideBase(int index) const {
+    if (index < 0 || index >= count())
+        return baseDir();
+    const QString &base = m_parsed.slides[index].base;
+    return base.isEmpty() ? baseDir() : base;
+}
+bool Deck::slideIncluded() const {
+    return m_selected >= 0 && m_selected < count() && m_parsed.slides[m_selected].included;
+}
+QStringList Deck::writableSources() const {
+    QStringList list;
+    int lastStart = -1;
+    for (int i = 0; i < count(); ++i) {
+        const Slide &slide = m_parsed.slides[i];
+        if (slide.included) {
+            if (slide.start == lastStart)
+                continue;
+            list << m_source.mid(slide.start, slide.end - slide.start);
+            lastStart = slide.start;
+        } else {
+            list << slide.source;
+            lastStart = -1;
+        }
+    }
+    return list;
+}
+void Deck::growIncludeSelection(int *first, int *last) const {
+    if (!first || !last || count() == 0)
+        return;
+    *first = qBound(0, *first, count() - 1);
+    *last = qBound(0, *last, count() - 1);
+    if (*first > *last)
+        std::swap(*first, *last);
+    while (*first > 0 && m_parsed.slides[*first].included &&
+           m_parsed.slides[*first].start == m_parsed.slides[*first - 1].start)
+        --*first;
+    while (*last + 1 < count() && m_parsed.slides[*last].included &&
+           m_parsed.slides[*last].start == m_parsed.slides[*last + 1].start)
+        ++*last;
+}
+int Deck::writableIndexForExpanded(int expanded) const {
+    int writable = 0;
+    int lastStart = -1;
+    for (int i = 0; i < count(); ++i) {
+        const Slide &slide = m_parsed.slides[i];
+        if (slide.included) {
+            if (slide.start != lastStart) {
+                if (i == expanded)
+                    return writable;
+                lastStart = slide.start;
+                ++writable;
+            } else if (i == expanded) {
+                return writable - 1;
+            }
+        } else {
+            if (i == expanded)
+                return writable;
+            lastStart = -1;
+            ++writable;
+        }
+    }
+    return qMax(0, writable - 1);
+}
 QString Deck::title() const {
     return scalar(m_parsed.header, "title",
                   m_path.isEmpty() ? "Untitled" : QFileInfo(m_path).completeBaseName());
@@ -282,6 +498,8 @@ void Deck::apply(const QString &source, int selected, bool history, int anchor,
     if (structure) {
         parsed.error.clear();
         for (const auto &slide : parsed.slides) {
+            if (slide.included)
+                continue;
             // A slide body cannot contain front matter. Prefix a plain line so
             // a leading --- is interpreted as a slide break instead.
             static thread_local QCache<QString, QString> errors(2 * 1024 * 1024);
@@ -298,6 +516,10 @@ void Deck::apply(const QString &source, int selected, bool history, int anchor,
             }
         }
     }
+    // Includes expand after structure checks so ![[path]] becomes child slides.
+    if (parsed.error.isEmpty())
+        parsed = expandIncludes(parsed, m_path.isEmpty() ? QDir::currentPath()
+                                                         : QFileInfo(m_path).absolutePath());
     const bool reset = parsed.slides.size() != count();
     QVector<int> modified;
     if (!reset)
@@ -343,20 +565,27 @@ void Deck::moveSelection(int direction) {
         dropSelection(selectionLast() + 2);
 }
 void Deck::dropSelection(int slot) {
-    const int first = selectionFirst(), last = selectionLast(), length = selectionCount();
-    if (slot < 0 || slot > count() || (slot >= first && slot <= last + 1))
+    int first = selectionFirst(), last = selectionLast();
+    growIncludeSelection(&first, &last);
+    // Map the drop slot onto the writable (collapsed) slide list.
+    QStringList slides = writableSources();
+    const int writeFirst = writableIndexForExpanded(first);
+    const int writeLast = writableIndexForExpanded(last);
+    const int length = writeLast - writeFirst + 1;
+    int writeSlot = slot >= count() ? slides.size() : writableIndexForExpanded(qMin(slot, count() - 1));
+    if (slot < count() && slot > last)
+        writeSlot = writableIndexForExpanded(slot - 1) + 1;
+    else if (slot <= first)
+        writeSlot = writeFirst;
+    if (writeSlot < 0 || writeSlot > slides.size() || (writeSlot >= writeFirst && writeSlot <= writeLast + 1))
         return;
-    QStringList slides;
-    for (const auto &slide : m_parsed.slides)
-        slides << slide.source;
-    const QStringList moving = slides.mid(first, length);
+    const QStringList moving = slides.mid(writeFirst, length);
     for (int i = 0; i < length; ++i)
-        slides.removeAt(first);
-    const int destination = slot > last ? slot - length : slot;
+        slides.removeAt(writeFirst);
+    const int destination = writeSlot > writeLast ? writeSlot - length : writeSlot;
     for (int i = 0; i < length; ++i)
         slides.insert(destination + i, moving[i]);
-    const int offset = destination - first;
-    replaceSlides(slides, m_selected + offset, m_anchor + offset);
+    replaceSlides(slides, destination, destination + length - 1);
 }
 void Deck::selectAt(int position) {
     for (int i = count() - 1; i >= 0; --i)
@@ -371,6 +600,10 @@ int Deck::sourcePosition() const { return m_parsed.slides.value(m_selected).star
 int Deck::sourceEndPosition() const { return m_parsed.slides.value(m_selected).end; }
 void Deck::editSource(const QString &s) { apply(s, m_selected); }
 void Deck::editSlide(const QString &s) {
+    if (slideIncluded()) {
+        setStatus("Included slides are read-only. Edit the included presentation instead.");
+        return;
+    }
     const auto range = m_parsed.slides.value(m_selected);
     QString body = withoutSlidePadding(s);
     if (!body.isEmpty()) {
@@ -401,8 +634,7 @@ void Deck::editSlide(const QString &s) {
         auto slide = fragment.slides[i];
         const int start = qMax(0, slide.start - int(prefix.size()));
         const int end = slide.end - prefix.size();
-        parsed.slides.insert(m_selected + i,
-                             {body.mid(start, end - start), range.start + start, range.start + end});
+        parsed.slides.insert(m_selected + i, makeSlide(body.mid(start, end - start), range.start + start, range.start + end));
     }
     apply(edited, m_selected, true, -1, &parsed);
 }
@@ -422,9 +654,36 @@ void Deck::replaceSlides(const QStringList &slides, int selected, int anchor) {
         }
         if (i < slides.size() - 1 || body.isEmpty())
             out += '\n';
-        parsed.slides.append({out.mid(start), start, int(out.size())});
+        parsed.slides.append(makeSlide(out.mid(start), start, int(out.size())));
     }
-    apply(out, selected, true, anchor, &parsed);
+    // selected/anchor are indexes into the writable (unexpanded) list.
+    const int writeSelected = qBound(0, selected, qMax(0, slides.size() - 1));
+    const int writeAnchor = qBound(0, anchor < 0 ? selected : anchor, qMax(0, slides.size() - 1));
+    apply(out, 0, true, 0, &parsed);
+    auto expandedIndex = [&](int writeIndex) {
+        int writable = 0, lastStart = -1, found = 0;
+        for (int i = 0; i < count(); ++i) {
+            const Slide &slide = m_parsed.slides[i];
+            if (slide.included) {
+                if (slide.start != lastStart) {
+                    if (writable == writeIndex)
+                        return i;
+                    lastStart = slide.start;
+                    ++writable;
+                }
+            } else {
+                if (writable == writeIndex)
+                    return i;
+                lastStart = -1;
+                ++writable;
+            }
+            found = i;
+        }
+        return found;
+    };
+    m_selected = expandedIndex(writeSelected);
+    m_anchor = expandedIndex(writeAnchor);
+    emit selectionChanged();
 }
 void Deck::replaceHeader(const QString &header) {
     auto parsed = m_parsed;
@@ -439,40 +698,52 @@ void Deck::replaceHeader(const QString &header) {
 void Deck::moveSlide(int from, int to) {
     if (from < 0 || from >= count() || to < 0 || to >= count() || from == to)
         return;
-    QStringList list;
-    for (auto &s : m_parsed.slides)
-        list << s.source;
-    list.move(from, to);
-    replaceSlides(list, to);
+    int first = from, last = from;
+    growIncludeSelection(&first, &last);
+    QStringList list = writableSources();
+    const int writeFrom = writableIndexForExpanded(first);
+    int writeTo = writableIndexForExpanded(to);
+    if (to > last)
+        writeTo = writableIndexForExpanded(to);
+    else if (to < first)
+        writeTo = writableIndexForExpanded(to);
+    if (writeFrom == writeTo)
+        return;
+    list.move(writeFrom, writeTo);
+    replaceSlides(list, writeTo);
 }
 void Deck::addSlide() {
-    QStringList list;
-    for (auto &s : m_parsed.slides)
-        list << s.source;
-    const int next = selectionLast() + 1;
+    QStringList list = writableSources();
+    int last = selectionLast();
+    growIncludeSelection(&last, &last);
+    const int next = writableIndexForExpanded(last) + 1;
     list.insert(next, "\n\n");
     replaceSlides(list, next);
 }
 void Deck::duplicateSlide() {
-    QStringList list;
-    for (auto &s : m_parsed.slides)
-        list << s.source;
-    const int length = selectionCount(), next = selectionLast() + 1;
-    const QStringList copies = list.mid(selectionFirst(), length);
+    int first = selectionFirst(), last = selectionLast();
+    growIncludeSelection(&first, &last);
+    QStringList list = writableSources();
+    const int writeFirst = writableIndexForExpanded(first);
+    const int writeLast = writableIndexForExpanded(last);
+    const int length = writeLast - writeFirst + 1;
+    const int next = writeLast + 1;
+    const QStringList copies = list.mid(writeFirst, length);
     for (int i = 0; i < length; ++i)
         list.insert(next + i, copies[i]);
-    replaceSlides(list, m_selected + length, m_anchor + length);
+    replaceSlides(list, next, next + length - 1);
 }
 void Deck::deleteSlide() {
-    QStringList list;
-    for (auto &s : m_parsed.slides)
-        list << s.source;
-    const int first = selectionFirst();
-    for (int i = 0; i < selectionCount(); ++i)
-        list.removeAt(first);
+    int first = selectionFirst(), last = selectionLast();
+    growIncludeSelection(&first, &last);
+    QStringList list = writableSources();
+    const int writeFirst = writableIndexForExpanded(first);
+    const int writeLast = writableIndexForExpanded(last);
+    for (int i = writeFirst; i <= writeLast; ++i)
+        list.removeAt(writeFirst);
     if (list.isEmpty())
         list << "\n";
-    replaceSlides(list, qMin(first, int(list.size()) - 1));
+    replaceSlides(list, qMin(writeFirst, int(list.size()) - 1));
 }
 void Deck::undo() {
     if (m_undo.isEmpty())
@@ -505,8 +776,8 @@ qint64 Deck::totalBytes() const {
         m_sizeClock.isValid() && m_sizeClock.elapsed() < 1000)
         return m_totalBytes;
     QStringList paths;
-    for (const auto &slide : m_parsed.slides) {
-        const auto media = parseMedia(slide.source, base);
+    for (int i = 0; i < count(); ++i) {
+        const auto media = parseMedia(slide(i), slideBase(i));
         for (const auto &path : {media.path, media.poster})
             if (!path.isEmpty())
                 paths << path;
@@ -595,7 +866,7 @@ void Deck::chooseTheme(const QString &name) {
 }
 QStringList Deck::mediaPositions() const { return ::mediaPositions(); }
 QVariantMap Deck::media() const {
-    const QString source = slideSource(), base = baseDir();
+    const QString source = slideSource(), base = slideBase(m_selected);
     if (!m_mediaCache.isEmpty() && m_mediaSource == source && m_mediaBase == base)
         return m_mediaCache;
     m_mediaSource = source;
@@ -649,15 +920,27 @@ void Deck::watch() {
 void Deck::watchMedia() {
     const QStringList watched = m_mediaWatcher.files() + m_mediaWatcher.directories();
     QStringList paths;
-    if (!m_path.isEmpty())
-        for (const char *folder : {"images", "videos"}) {
-            const QDir dir(QDir(baseDir()).filePath(folder));
-            if (!dir.exists())
-                continue;
-            paths.append(dir.absolutePath());
-            for (const QString &name : dir.entryList(QDir::Files))
-                paths.append(dir.absoluteFilePath(name));
+    if (!m_path.isEmpty()) {
+        QStringList roots{baseDir()};
+        for (int i = 0; i < count(); ++i) {
+            const QString root = slideBase(i);
+            if (!roots.contains(root))
+                roots << root;
+            const QString origin = m_parsed.slides[i].originPath;
+            if (!origin.isEmpty() && QFile::exists(origin))
+                paths.append(origin);
         }
+        for (const QString &root : roots) {
+            for (const char *folder : {"images", "videos"}) {
+                const QDir dir(QDir(root).filePath(folder));
+                if (!dir.exists())
+                    continue;
+                paths.append(dir.absolutePath());
+                for (const QString &name : dir.entryList(QDir::Files))
+                    paths.append(dir.absoluteFilePath(name));
+            }
+        }
+    }
     QStringList stale, added;
     for (const QString &path : watched)
         if (!paths.contains(path))
@@ -729,7 +1012,8 @@ bool Deck::loadPath(const QString &path, bool remember) {
     m_externalChange = false;
     watch();
     notifyChanged();
-    setStatus("Opened " + title());
+    if (m_parsed.error.isEmpty())
+        setStatus("Opened " + title());
     if (remember)
         rememberPresentation(m_path);
     recoverDraft();
@@ -739,12 +1023,20 @@ bool Deck::loadPath(const QString &path, bool remember) {
 }
 bool Deck::validateStructure(const QString &operation) {
     const auto parsed = parseDeck(m_source);
-    bool sameSlides = parsed.slides.size() == count();
+    auto expanded = parsed;
+    if (parsed.error.isEmpty())
+        expanded = expandIncludes(parsed, baseDir());
+    // Compare the expanded view to the live deck. Includes make the raw parse
+    // shorter than count(), so matching against parseDeck alone is wrong.
+    bool sameSlides = expanded.slides.size() == count();
     for (int i = 0; sameSlides && i < count(); ++i)
-        sameSlides = parsed.slides[i].source == m_parsed.slides[i].source;
-    if (!parsed.error.isEmpty() || !m_parsed.error.isEmpty() || !sameSlides) {
-        const QString problem = !m_parsed.error.isEmpty() ? m_parsed.error :
-                                !parsed.error.isEmpty() ? parsed.error : "Unfinished slide boundaries";
+        sameSlides = expanded.slides[i].source == m_parsed.slides[i].source;
+    if (!parsed.error.isEmpty() || !expanded.error.isEmpty() || !m_parsed.error.isEmpty() ||
+        !sameSlides) {
+        const QString problem = !m_parsed.error.isEmpty()   ? m_parsed.error
+                                : !expanded.error.isEmpty() ? expanded.error
+                                : !parsed.error.isEmpty()   ? parsed.error
+                                                            : "Unfinished slide boundaries";
         setStatus("Cannot " + operation + ": " + problem +
                   ". Finish the Markdown first; your changes are still in the editor.");
         return false;
@@ -929,9 +1221,12 @@ bool Deck::saveCopyPath(const QString &path) {
         published << copy.second;
     }
     // Media outside images/ and videos/ is not copied, so refuse a copy that
-    // would lose a reference the original resolves.
+    // would lose a reference the original resolves. Included slides keep their
+    // own folders, so skip them here.
     for (int i = 0; i < count(); ++i) {
-        const QStringList before = slideProblems(slide(i), baseDir());
+        if (m_parsed.slides[i].included)
+            continue;
+        const QStringList before = slideProblems(slide(i), slideBase(i));
         for (const QString &problem : slideProblems(slide(i), destination.absolutePath())) {
             if (!before.contains(problem)) {
                 rollback();
@@ -977,6 +1272,10 @@ void Deck::importDialog() {
 bool Deck::importMedia(const QUrl &url, bool newSlide) {
     if (!url.isLocalFile()) {
         setStatus("Choose a local image or video.");
+        return false;
+    }
+    if (!newSlide && slideIncluded()) {
+        setStatus("Included slides are read-only. Edit the included presentation instead.");
         return false;
     }
     if (m_path.isEmpty()) {
@@ -1034,6 +1333,10 @@ bool Deck::importMedia(const QUrl &url, bool newSlide) {
     return true;
 }
 bool Deck::pasteMedia() {
+    if (slideIncluded()) {
+        setStatus("Included slides are read-only. Edit the included presentation instead.");
+        return false;
+    }
     if (m_compressingImage)
         return true;
     const QMimeData *clipboard = QGuiApplication::clipboard()->mimeData();
@@ -1095,7 +1398,7 @@ bool Deck::pasteMedia() {
         emit pasteRequested(suggested, extension, video);
         return true;
     }
-    const auto media = parseMedia(withReplacedMedia(slideSource(), "paste.png"), baseDir());
+    const auto media = parseMedia(withReplacedMedia(slideSource(), "paste.png"), slideBase(m_selected));
     const auto generation = ++m_pasteGeneration;
     m_compressingImage = true;
     emit compressingImageChanged();
@@ -1207,15 +1510,15 @@ QString Deck::savePastedMedia(const QString &value) {
 }
 QString Deck::renderId(int index) const {
     auto &cached = m_renderIds[index];
-    const QString source = slide(index), base = baseDir();
+    const QString source = slide(index), base = slideBase(index);
     const auto colors = palette();
     if (cached.source == source && cached.base == base && cached.palette == colors &&
         cached.clock.isValid() && cached.clock.elapsed() < 1000)
         return cached.id;
     QByteArray bytes;
     QDataStream stream(&bytes, QIODevice::WriteOnly);
-    stream << slide(index) << baseDir() << palette();
-    auto media = parseMedia(slide(index), baseDir());
+    stream << source << base << palette();
+    auto media = parseMedia(source, base);
     for (const QString &path : {media.path, media.poster}) {
         QFileInfo file(path);
         stream << file.lastModified().toMSecsSinceEpoch() << file.size();
@@ -1234,7 +1537,7 @@ void Deck::matchImageBackground(bool enabled) {
 void Deck::setMediaBackground(const QString &mode) {
     if (!QStringList{"auto", "theme", "blur", "white", "black"}.contains(mode))
         return;
-    auto media = parseMedia(slideSource(), baseDir());
+    auto media = parseMedia(slideSource(), slideBase(m_selected));
     if (media.file.isEmpty())
         return;
     // A background only shows around fitted media, so choosing one stops the media spanning.
@@ -1256,7 +1559,7 @@ void Deck::setMediaMode(const QString &mode) {
 void Deck::setMediaPosition(const QString &position) {
     if (!mediaPositions().contains(position))
         return;
-    const auto media = parseMedia(slideSource(), baseDir());
+    const auto media = parseMedia(slideSource(), slideBase(m_selected));
     if (media.file.isEmpty() || media.video)
         return;
     // Placing replaces the full layout; a new placement starts at the default size.
@@ -1266,7 +1569,7 @@ void Deck::setMediaPosition(const QString &position) {
                                   {"position=" + position, size}));
 }
 void Deck::setMediaSize(double percent) {
-    const auto media = parseMedia(slideSource(), baseDir());
+    const auto media = parseMedia(slideSource(), slideBase(m_selected));
     if (!media.placed() || percent < 1 || percent > 100)
         return;
     editSlide(withMediaDirectives(slideSource(), {"size"}, {QString("size=%1%").arg(percent)}));
@@ -1427,7 +1730,7 @@ bool Deck::exportPdf(const QString &path) {
     if (!validateStructure("export"))
         return false;
     for (int i = 0; i < count(); ++i) {
-        auto errors = slideProblems(slide(i), baseDir());
+        auto errors = slideProblems(slide(i), slideBase(i));
         if (!errors.isEmpty()) {
             setStatus(QString("Slide %1: %2").arg(i + 1).arg(errors.join("; ")));
             return false;
@@ -1457,7 +1760,7 @@ bool Deck::exportPdf(const QString &path) {
                 setStatus("Could not create PDF page");
                 return false;
             }
-            paintSlide(&painter, QRectF(0, 0, writer.width(), writer.height()), slide(i), baseDir(),
+            paintSlide(&painter, QRectF(0, 0, writer.width(), writer.height()), slide(i), slideBase(i),
                        palette());
         }
         painter.end();
@@ -1484,7 +1787,7 @@ bool Deck::renderImages(const QString &directory, int width, bool powerPoint) {
     if (!validateStructure("export"))
         return false;
     for (int i = 0; i < count(); ++i) {
-        auto errors = slideProblems(slide(i), baseDir());
+        auto errors = slideProblems(slide(i), slideBase(i));
         if (!errors.isEmpty()) {
             setStatus(QString("Slide %1: %2").arg(i + 1).arg(errors.join("; ")));
             return false;
@@ -1501,7 +1804,7 @@ bool Deck::renderImages(const QString &directory, int width, bool powerPoint) {
     // so the two peaks never add up.
     bool converts = false;
     for (int i = 0; powerPoint && !converts && i < count(); ++i)
-        converts = !parseMedia(slide(i), baseDir()).path.isEmpty();
+        converts = !parseMedia(slide(i), slideBase(i)).path.isEmpty();
     const bool overlap = !converts || budget::availableBytes() < 0 || budget::availableBytes() > (6LL << 30);
     stills.setMaxThreadCount(budget::workers(200LL << 20, 16, overlap ? 0.4 : 0.6));
     std::atomic_bool stopped = false;
@@ -1512,7 +1815,7 @@ bool Deck::renderImages(const QString &directory, int width, bool powerPoint) {
     struct Still { QString name, warning; bool saved = false; };
     QList<QFuture<Still>> rendered;
     for (int i = 0; i < count(); ++i)
-        rendered << QtConcurrent::run(&stills, [&stopped, source = slide(i), base = baseDir(), colors = palette(),
+        rendered << QtConcurrent::run(&stills, [&stopped, source = slide(i), base = slideBase(i), colors = palette(),
                                                 width, directory, powerPoint, i]() -> Still {
             if (stopped)
                 return {};
@@ -1558,7 +1861,7 @@ bool Deck::renderImages(const QString &directory, int width, bool powerPoint) {
             setStatus("Could not save rendered slide");
             return false;
         }
-        auto media = parseMedia(slide(i), baseDir());
+        auto media = parseMedia(slide(i), slideBase(i));
         QJsonObject entry{{"image", name}, {"warning", warning}};
         if (media.video) {
             entry["video"] = media.path;
@@ -1577,7 +1880,7 @@ bool Deck::renderImages(const QString &directory, int width, bool powerPoint) {
                 entry["video"] = movie;
             }
             entry["poster"] =
-                media.poster.isEmpty() ? ensurePoster(media.path, baseDir()) : media.poster;
+                media.poster.isEmpty() ? ensurePoster(media.path, slideBase(i)) : media.poster;
             entry["span"] = media.span;
             entry["title"] = !media.text.trimmed().isEmpty();
             entry["autoplay"] = media.autoplay;
@@ -1591,7 +1894,7 @@ bool Deck::renderImages(const QString &directory, int width, bool powerPoint) {
                 int repeats = 1;
                 QString error;
                 progress(0, "Converting animation");
-                if (!exportAnimation(slide(i), baseDir(), palette(), directory + "/" + movie, width,
+                if (!exportAnimation(slide(i), slideBase(i), palette(), directory + "/" + movie, width,
                                      &repeats, &error,
                                      [&](double fraction) { progress(fraction, "Converting animation"); })) {
                     setStatus(QString("Slide %1: %2").arg(i + 1).arg(error));
@@ -1611,7 +1914,7 @@ bool Deck::renderImages(const QString &directory, int width, bool powerPoint) {
             QImage overlay(width, width * 9 / 16, QImage::Format_ARGB32_Premultiplied);
             overlay.fill(Qt::transparent);
             QPainter op(&overlay);
-            paintSlide(&op, overlay.rect(), slide(i), baseDir(), palette(), nullptr, true);
+            paintSlide(&op, overlay.rect(), slide(i), slideBase(i), palette(), nullptr, true);
             op.end();
             QString name = QString("overlay-%1.png").arg(i + 1);
             if (!overlay.save(directory + "/" + name)) {

@@ -25,7 +25,7 @@ ApplicationWindow {
     property bool markdown: false
     property bool overview: false
     readonly property string mode: overview ? "overview" : markdown ? "markdown" : "visual"
-    readonly property bool canFormat: !popupOpen && !deck.compressingImage && !presenting && !overview
+    readonly property bool canFormat: !popupOpen && !deck.compressingImage && !presenting && !overview && !deck.slideIncluded
     readonly property int rowStep: overview && !presenting ? overviewGrid.columns : 1
     readonly property int inset: 20
     property string flash: ""
@@ -1578,10 +1578,12 @@ ApplicationWindow {
                         }
                         TextArea {
                             id: slideEditor; objectName: "slideEditor"; persistentSelection: true; textFormat: TextEdit.PlainText; color: win.ui.foreground; selectionColor: win.ui.selection; selectedTextColor: win.ui.selectionText; font.family: "JetBrains Mono"; font.pixelSize: 16
+                            readOnly: deck.slideIncluded
                             onActiveFocusChanged: if (activeFocus) win.focusedEditor = "slide"
-                            wrapMode: TextEdit.Wrap; leftPadding: 24; topPadding: 16; placeholderText: "# Your headline"
+                            wrapMode: TextEdit.Wrap; leftPadding: 24; topPadding: 16
+                            placeholderText: deck.slideIncluded ? "Included slide (read-only)" : "# Your headline"
                             onTextChanged: {
-                                if (!win.syncingEditor && activeFocus) {
+                                if (!win.syncingEditor && activeFocus && !deck.slideIncluded) {
                                     const previousCount = deck.count
                                     win.editingSlide = true
                                     deck.editSlide(text)

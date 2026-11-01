@@ -48,13 +48,16 @@ QImage paint(const Deck &deck, int index, int width, QString *warning) {
     QImage image(width, width * 9 / 16, QImage::Format_ARGB32_Premultiplied);
     image.fill(Qt::transparent);
     QPainter painter(&image);
-    paintSlide(&painter, image.rect(), deck.slide(index), deck.baseDir(), deck.palette(), warning);
+    paintSlide(&painter, image.rect(), deck.slide(index), deck.slideBase(index), deck.palette(),
+               warning);
     return image;
 }
-QList<Problem> slideProblemsAt(const Deck &deck, const ParsedDeck &parsed, int index) {
+QList<Problem> slideProblemsAt(const Deck &deck, const ParsedDeck &expanded, int index) {
     QList<Problem> problems;
-    const int line = firstLine(deck.source(), parsed.slides[index]);
-    for (const auto &message : slideProblems(deck.slide(index), deck.baseDir()))
+    const int line = index < expanded.slides.size()
+                         ? firstLine(deck.source(), expanded.slides[index])
+                         : 1;
+    for (const auto &message : slideProblems(deck.slide(index), deck.slideBase(index)))
         problems << Problem{index + 1, line, true, message};
     if (deck.slide(index).trimmed().isEmpty())
         problems << Problem{index + 1, line, false, "Empty slide"};
@@ -66,6 +69,9 @@ QList<Problem> findProblems(const Deck &deck) {
     // Slide boundaries are unreliable past unfinished front matter or a code fence.
     if (!parsed.error.isEmpty())
         return {Problem{0, lineAt(source, parsed.errorOffset), true, parsed.error}};
+    const auto expanded = expandIncludes(parsed, deck.baseDir());
+    if (!expanded.error.isEmpty())
+        return {Problem{0, lineAt(source, expanded.errorOffset), true, expanded.error}};
     QList<Problem> problems;
     auto headerLine = [&](const QString &key) {
         return lineAt(source, qMax(0, parsed.header.indexOf(QRegularExpression(
@@ -80,12 +86,12 @@ QList<Problem> findProblems(const Deck &deck) {
         indices << i;
     // Only painting reveals text that had to shrink too far, so lay out every slide.
     std::function<QList<Problem>(int)> inspect = [&](int index) {
-        auto found = slideProblemsAt(deck, parsed, index);
+        auto found = slideProblemsAt(deck, expanded, index);
         if (found.isEmpty()) {
             QString warning;
             paint(deck, index, 480, &warning);
             if (!warning.isEmpty())
-                found << Problem{index + 1, firstLine(source, parsed.slides[index]), false, warning};
+                found << Problem{index + 1, firstLine(source, expanded.slides[index]), false, warning};
         }
         return found;
     };
@@ -187,21 +193,28 @@ int slides(const QStringList &arguments) {
     Deck deck;
     if (!command.load(deck))
         return 1;
-    const auto parsed = parseDeck(deck.source());
+    const auto expanded = expandIncludes(parseDeck(deck.source()), deck.baseDir());
     QJsonArray list;
-    for (int i = 0; i < parsed.slides.size(); ++i) {
-        const auto media = parseMedia(parsed.slides[i].source, deck.baseDir());
-        const int first = firstLine(deck.source(), parsed.slides[i]);
-        const int last = qMax(first, lastLine(deck.source(), parsed.slides[i]));
+    for (int i = 0; i < deck.count(); ++i) {
+        const auto media = parseMedia(deck.slide(i), deck.slideBase(i));
+        const Slide &range = i < expanded.slides.size() ? expanded.slides[i] : Slide{};
+        const int first = firstLine(deck.source(), range);
+        const int last = qMax(first, lastLine(deck.source(), range));
         const QString title = slideTitle(media.text);
-        list << QJsonObject{{"slide", i + 1}, {"line", first}, {"endLine", last}, {"title", title},
-                            {"media", media.file.isEmpty() ? QJsonValue() : QJsonValue(media.file)}};
+        const QString origin = expanded.slides.value(i).originPath;
+        QJsonObject entry{{"slide", i + 1}, {"line", first}, {"endLine", last}, {"title", title},
+                          {"media", media.file.isEmpty() ? QJsonValue() : QJsonValue(media.file)}};
+        if (!origin.isEmpty())
+            entry.insert("include", QFileInfo(origin).fileName());
+        list << entry;
         if (!command.parser.isSet("json"))
-            print(stdout, QString("%1  %2  %3%4")
+            print(stdout, QString("%1  %2  %3%4%5")
                               .arg(i + 1, 3)
                               .arg(QString("%1-%2").arg(first).arg(last), -9)
-                              .arg(title.isEmpty() ? "(no text)" : title,
-                                   media.file.isEmpty() ? QString() : "  [" + media.file + "]"));
+                              .arg(title.isEmpty() ? "(no text)" : title)
+                              .arg(media.file.isEmpty() ? QString() : "  [" + media.file + "]")
+                              .arg(origin.isEmpty() ? QString()
+                                                   : "  ← " + QFileInfo(origin).completeBaseName()));
     }
     if (command.parser.isSet("json"))
         print({{"title", deck.title()}, {"theme", deck.themeName()}, {"font", deck.fontName()}, {"slides", list}});
@@ -242,6 +255,10 @@ int render(const QStringList &arguments) {
     if (!parsed.error.isEmpty())
         return fail(QString("%1:%2: %3").arg(command.argument(1)).arg(lineAt(deck.source(), parsed.errorOffset))
                         .arg(parsed.error));
+    const auto expanded = expandIncludes(parsed, deck.baseDir());
+    if (!expanded.error.isEmpty())
+        return fail(QString("%1:%2: %3").arg(command.argument(1)).arg(lineAt(deck.source(), expanded.errorOffset))
+                        .arg(expanded.error));
     if (number < 1 || number > deck.count())
         return fail(QString("Slide %1 does not exist; there are %2 slides.").arg(number).arg(deck.count()));
     const QString name = QString("slide-%1.png").arg(number, 3, 10, QChar('0'));
@@ -251,7 +268,7 @@ int render(const QStringList &arguments) {
         output = QDir(output).filePath(name);
     QDir().mkpath(QFileInfo(output).absolutePath());
     // A slide with problems still renders, with the problems on a banner, so it can be looked at.
-    const auto problems = slideProblemsAt(deck, parsed, number - 1);
+    const auto problems = slideProblemsAt(deck, expanded, number - 1);
     QString warning;
     const QImage image = paint(deck, number - 1, width, &warning);
     if (!image.save(output, "PNG"))
@@ -265,7 +282,7 @@ int render(const QStringList &arguments) {
             print(stderr, toText(command.argument(1), problem));
     }
     if (problems.isEmpty() && !warning.isEmpty()) {
-        const Problem problem{number, firstLine(deck.source(), parsed.slides[number - 1]), false, warning};
+        const Problem problem{number, firstLine(deck.source(), expanded.slides[number - 1]), false, warning};
         list << toJson(problem);
         if (!json)
             print(stderr, toText(command.argument(1), problem));

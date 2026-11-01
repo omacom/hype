@@ -892,6 +892,51 @@ static void write(const QString &path, const QString &content) {
         d.selectAt(parsed.slides[1].start);
         QCOMPARE(d.selected(), 1);
     }
+    void includesExpandAnotherPresentation() {
+        QTemporaryDir tmp;
+        const QString root = tmp.path();
+        QDir().mkpath(root + "/Song/images");
+        write(root + "/Song/presentation.md",
+              "---\ntitle: Song\ntheme: paper\n---\n\n# Verse\n\n---\n\n# Chorus\n\n![](photo.png)\n");
+        // A tiny valid PNG so missing-media checks pass.
+        QFile png(root + "/Song/images/photo.png");
+        QVERIFY(png.open(QIODevice::WriteOnly));
+        png.write(QByteArray::fromHex(
+            "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
+            "0000000a49444154789c63000100000500010d0a2db40000000049454e44ae426082"));
+        png.close();
+        QDir().mkpath(root + "/Service");
+        write(root + "/Service/presentation.md",
+              "---\ntitle: Service\n---\n\n# Welcome\n\n---\n\n![[../Song]]\n\n---\n\n# Bye\n");
+        QCOMPARE(includeTarget("\n![[../Song]]\n"), QString("../Song"));
+        QCOMPARE(includeTarget("# Nope\n\n![[../Song]]\n"), QString());
+        QCOMPARE(resolveIncludePath("Song", root),
+                 QFileInfo(root + "/Song/presentation.md").canonicalFilePath());
+        QCOMPARE(resolveIncludePath("Nope", root), QString());
+        QVERIFY(!resolveIncludePath("../Song", root + "/Service").isEmpty());
+
+        Deck d;
+        QVERIFY(d.loadPath(root + "/Service/presentation.md"));
+        QCOMPARE(d.count(), 4); // welcome + verse + chorus + bye
+        QCOMPARE(d.slide(0).trimmed(), QString("# Welcome"));
+        QCOMPARE(d.slide(1).trimmed(), QString("# Verse"));
+        QVERIFY(d.slide(2).contains("photo.png"));
+        QCOMPARE(d.slideBase(2), QFileInfo(root + "/Song").absoluteFilePath());
+        d.select(1);
+        QVERIFY(d.slideIncluded());
+        d.editSlide("# Edited");
+        QCOMPARE(d.slide(1).trimmed(), QString("# Verse")); // read-only
+        QVERIFY(slideProblems(d.slide(2), d.slideBase(2)).isEmpty());
+
+        // Missing and cyclic includes are errors.
+        write(root + "/Service/presentation.md", "# Hi\n\n---\n\n![[Missing]]\n");
+        QVERIFY(d.loadPath(root + "/Service/presentation.md"));
+        QVERIFY(d.status().contains("Missing include"));
+        write(root + "/A.md", "![[B]]\n");
+        write(root + "/B.md", "![[A]]\n");
+        QVERIFY(d.loadPath(root + "/A.md"));
+        QVERIFY(d.status().contains("Include cycle"));
+    }
     void newDeckTitleFollowsFileName() {
         QTemporaryDir tmp;
         Deck d;

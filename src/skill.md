@@ -10,6 +10,8 @@ description: |
 # Hype
 
 A Hype presentation is one Markdown file with `images/` and `videos/` beside it.
+Put `![[path]]` alone on a slide to embed another presentation (resolves `Name`,
+`Name.md`, or `Name/presentation.md`). Included slides are read-only in the parent.
 You write the file with your ordinary editing tools; the `hype` command starts,
 checks, renders, and exports it. No command needs a display.
 
