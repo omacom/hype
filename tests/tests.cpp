@@ -573,6 +573,32 @@ static void write(const QString &path, const QString &content) {
         QTRY_VERIFY(deck.status().contains("Changed on disk"));
         QCOMPARE(deck.slideText(), "# Mine");
     }
+    void keepMineBacksUpTheirVersion() {
+        QTemporaryDir files;
+        const QString path = files.filePath("talk.md");
+        write(path, "# Shared\n\n---\n\n# Tail\n");
+        Deck deck;
+        QVERIFY(deck.loadPath(path));
+        deck.select(0);
+        deck.editSlide("# Mine");                 // our edit on slide 0
+        // The agent changes the file on disk while we hold unsaved edits.
+        write(path, "# Theirs\n\n---\n\n# Tail\n");
+        QTRY_VERIFY(deck.status().contains("Changed on disk"));
+        QVERIFY(deck.externalChange());
+        // Keep mine: theirs is backed up through the normal mechanism, ours wins the name.
+        deck.overwriteWithBackup();
+        QVERIFY(!deck.externalChange());
+        QVERIFY(!deck.dirty());
+        QFile saved(path);
+        QVERIFY(saved.open(QIODevice::ReadOnly));
+        QVERIFY(QString::fromUtf8(saved.readAll()).contains("# Mine"));   // ours is canonical
+        QDir backups(QFileInfo(path).absolutePath() + "/.hype-backups");
+        const QStringList baks = backups.entryList({"talk.md.*"}, QDir::Files);
+        QVERIFY(!baks.isEmpty());
+        QFile bak(backups.filePath(baks.first()));
+        QVERIFY(bak.open(QIODevice::ReadOnly));
+        QVERIFY(QString::fromUtf8(bak.readAll()).contains("# Theirs"));   // theirs preserved
+    }
     void recoversUntitledAndRefusesUnbackedAutosave() {
         QTemporaryDir files;
         const QString recovery = files.filePath("recovery");

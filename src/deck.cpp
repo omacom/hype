@@ -810,6 +810,19 @@ bool Deck::savePath(const QString &path) {
         checkpoint();
     return true;
 }
+// The conflict banner's "Keep mine" action: preserve the on-disk version and write
+// our buffer under the canonical name. This reuses the very backup savePath already
+// makes when it overwrites a changed file (a copy under .hype-backups/); adopting
+// the disk text as the base is what unblocks that write after a flagged conflict.
+void Deck::overwriteWithBackup() {
+    if (!m_externalChange || m_path.isEmpty())
+        return;
+    QFile file(m_path);
+    if (file.open(QIODevice::ReadOnly))
+        m_saved = QString::fromUtf8(file.readAll());
+    m_externalChange = false;
+    savePath(m_path);
+}
 bool Deck::confirmDiscard() {
     if (!m_recoveryDirectory.isEmpty())
         return flushAutosave();
