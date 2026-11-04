@@ -219,4 +219,5 @@ class Deck : public QAbstractListModel {
     void watchMedia();
     void notifyChanged();
     void reloadExternal(const QString &disk);
+    void mergeExternal(const QString &disk);
 };

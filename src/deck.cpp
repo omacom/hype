@@ -23,6 +23,8 @@
 #include <QJsonObject>
 #include <QLocale>
 #include <QMimeData>
+#include <QProcess>
+#include <QTemporaryDir>
 #include <QPainter>
 #include <QPdfWriter>
 #include <QProcess>
@@ -174,8 +176,7 @@ Deck::Deck(QObject *parent, const QString &exportProgram) : QAbstractListModel(p
             if (!dirty()) {
                 reloadExternal(disk);
             } else {
-                m_externalChange = true;
-                setStatus("Changed on disk. Save a copy or reopen to reload.");
+                mergeExternal(disk);
             }
         }
         watch();
@@ -214,6 +215,35 @@ static int followSlide(const QVector<Slide> &before, const QVector<Slide> &after
     }
     return qMax(0, best);
 }
+// Merge the on-disk version (theirs) with the editor's unsaved buffer (ours)
+// against the last common text (base), using git's 3-way file merge. Returns
+// true and fills `merged` only when there are no overlapping conflicts, which is
+// the common case when the two sides touched different slides.
+static bool mergeThreeWay(const QString &base, const QString &ours,
+                          const QString &theirs, QString &merged) {
+    QTemporaryDir dir;
+    if (!dir.isValid())
+        return false;
+    const auto write = [&](const QString &name, const QString &text) {
+        QFile f(dir.filePath(name));
+        const QByteArray bytes = text.toUtf8();
+        return f.open(QIODevice::WriteOnly) && f.write(bytes) == bytes.size();
+    };
+    if (!write("base", base) || !write("ours", ours) || !write("theirs", theirs))
+        return false;
+    QProcess git;
+    // merge-file folds ours and theirs over base; -p writes the result to stdout
+    // and leaves the inputs untouched. Exit code 0 means a clean merge; a positive
+    // code counts unresolved conflicts, which we treat as "keep the editor's copy".
+    git.start("git", {"merge-file", "-p", dir.filePath("ours"),
+                      dir.filePath("base"), dir.filePath("theirs")});
+    if (!git.waitForStarted(2000) || !git.waitForFinished(5000))
+        return false;
+    if (git.exitStatus() != QProcess::NormalExit || git.exitCode() != 0)
+        return false;
+    merged = QString::fromUtf8(git.readAllStandardOutput());
+    return true;
+}
 // Another program, often an agent, edited the file. Stay on the slide being viewed;
 // undo restores the old text.
 void Deck::reloadExternal(const QString &disk) {
@@ -226,6 +256,34 @@ void Deck::reloadExternal(const QString &disk) {
     if (unchanged)
         notifyChanged();
     setStatus("Reloaded external changes.");
+}
+// The file changed on disk while the editor still held unsaved edits. Rather than
+// forking the document, fold the disk version into the editing buffer with a
+// 3-way merge (base = last common text, ours = buffer, theirs = disk):
+//   * non-overlapping edits (an agent editing other slides) merge silently; the
+//     result replaces the buffer and the on-disk version becomes the new common
+//     base, so the buffer stays dirty-on-top and the normal autosave / Ctrl+S
+//     persists it, just as the clean-reload path leaves a non-dirty buffer in sync;
+//   * a genuine overlap, or a merge whose result is not valid Markdown, leaves the
+//     editor's version untouched (manual wins) and asks for Save As.
+void Deck::mergeExternal(const QString &disk) {
+    QString merged;
+    if (!mergeThreeWay(m_saved, m_source, disk, merged)) {
+        m_externalChange = true;
+        setStatus("Changed on disk with conflicting edits. Use Save As to keep both.");
+        return;
+    }
+    const ParsedDeck mergedParsed = parseDeck(merged);
+    if (!mergedParsed.error.isEmpty()) {
+        m_externalChange = true;
+        setStatus("Changed on disk; the automatic merge didn't parse. Use Save As to keep both.");
+        return;
+    }
+    const int selected = followSlide(m_parsed.slides, mergedParsed.slides, m_selected);
+    m_saved = disk; // the on-disk version is now the common base
+    m_externalChange = false;
+    apply(merged, selected, true, -1, &mergedParsed); // fold into the buffer; undo restores your text
+    setStatus("Merged changes from disk into your draft.");
 }
 int Deck::rowCount(const QModelIndex &parent) const { return parent.isValid() ? 0 : count(); }
 QVariant Deck::data(const QModelIndex &index, int role) const {
