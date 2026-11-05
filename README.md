@@ -244,7 +244,7 @@ The mouse wheel over the sidebar selects the previous or next slide. Home/End ju
 
 ## Run from source
 
-To build Hype yourself, install a C++17 compiler, make, Qt 6.9 or newer, FFmpeg, and GNU source-highlight; see [the package definition](pkgbuild/PKGBUILD) for dependencies. Then:
+To build Hype yourself, install a C++17 compiler, make, Qt 6.9 or newer, FFmpeg, GNU source-highlight, and Git (used at runtime to merge external file edits); see [the package definition](pkgbuild/PKGBUILD) for dependencies. Then:
 
 ```sh
 ./bin/build

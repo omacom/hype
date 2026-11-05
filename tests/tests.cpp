@@ -573,6 +573,78 @@ static void write(const QString &path, const QString &content) {
         QTRY_VERIFY(deck.status().contains("Changed on disk"));
         QCOMPARE(deck.slideText(), "# Mine");
     }
+    void mergeFoldsNonOverlappingEditsIntoBuffer() {
+        QTemporaryDir files;
+        const QString path = files.filePath("talk.md");
+        write(path, "# One\n\n---\n\n# Two\n\n---\n\n# Three\n");
+        Deck deck;
+        QVERIFY(deck.loadPath(path));
+        deck.select(0);
+        deck.editSlide("# One, mine");            // our unsaved edit on slide 0
+        QVERIFY(deck.dirty());
+        // An agent edits a different slide on disk.
+        write(path, "# One\n\n---\n\n# Two\n\n---\n\n# Three, theirs\n");
+        QTRY_VERIFY(deck.status().contains("into your draft"));
+        QCOMPARE(deck.count(), 3);
+        QVERIFY(deck.slide(0).contains("# One, mine"));     // ours kept
+        QVERIFY(deck.slide(2).contains("# Three, theirs")); // theirs folded in
+        QVERIFY(deck.dirty());                              // merged into the buffer, not yet written
+        // The ordinary save path persists the merged draft, with both edits.
+        QVERIFY(deck.savePath(path));
+        QFile saved(path);
+        QVERIFY(saved.open(QIODevice::ReadOnly));
+        const QString onDisk = QString::fromUtf8(saved.readAll());
+        QVERIFY(onDisk.contains("# One, mine"));
+        QVERIFY(onDisk.contains("# Three, theirs"));
+        QVERIFY(!deck.dirty());
+    }
+    void mergeRejectsResultThatDoesNotParse() {
+        QTemporaryDir files;
+        const QString path = files.filePath("talk.md");
+        write(path, "# One\n\n---\n\n# Two\n\n---\n\n# Three\n");
+        Deck deck;
+        QVERIFY(deck.loadPath(path));
+        deck.select(0);
+        deck.editSlide("```svg\n<svg>");          // an unfinished fence: the buffer no longer parses
+        QVERIFY(deck.dirty());
+        // A clean (non-overlapping) merge against another slide still yields invalid Markdown.
+        write(path, "# One\n\n---\n\n# Two\n\n---\n\n# Three, theirs\n");
+        QTRY_VERIFY(deck.status().contains("didn't parse"));
+        QVERIFY(deck.slide(0).contains("<svg>"));            // our in-progress edit is untouched
+        QVERIFY(deck.dirty());
+        QFile untouched(path);
+        QVERIFY(untouched.open(QIODevice::ReadOnly));
+        QVERIFY(QString::fromUtf8(untouched.readAll()).contains("# Three, theirs")); // disk left as written
+    }
+    void mergeRejectsBufferWhoseFenceIsClosedByALaterSlide() {
+        QTemporaryDir files;
+        const QString path = files.filePath("talk.md"), recovery = files.filePath("recovery");
+        // The last slide holds a real code block; its closing fence lurks later in the file.
+        const QByteArray original = "# One\n\n---\n\n# Two\n\n---\n\n```python\nprint()\n```\n";
+        write(path, original);
+        Deck deck;
+        QVERIFY(deck.loadPath(path));
+        deck.enableAutosave(recovery);
+        deck.select(1);
+        deck.editSlide("```");                     // a bare, unfinished opening fence on slide 1
+        QVERIFY(deck.dirty());
+        QCOMPARE(deck.count(), 3);
+        // Whole-text parsing is fooled: the bare fence is "closed" by the code block's
+        // fence two slides down, so the overall text parses even though slide 1 is broken.
+        QVERIFY(parseDeck(deck.source()).error.isEmpty());
+        // An agent edits a different slide on disk: a clean, non-overlapping 3-way merge.
+        write(path, "# One, theirs\n\n---\n\n# Two\n\n---\n\n```python\nprint()\n```\n");
+        QTRY_VERIFY(deck.status().contains("didn't parse")); // the merge is refused, not applied
+        QCOMPARE(deck.count(), 3);                           // slide ranges never collapsed
+        QVERIFY(!deck.slide(0).contains("theirs"));          // the external edit is not folded in
+        QVERIFY(deck.slide(1).contains("```"));              // our in-progress fence is untouched
+        QVERIFY(deck.dirty());
+        // Autosave must not persist the corrupted structure back to the file.
+        QVERIFY(deck.flushAutosave());
+        QFile saved(path);
+        QVERIFY(saved.open(QIODevice::ReadOnly));
+        QCOMPARE(saved.readAll(), QByteArray("# One, theirs\n\n---\n\n# Two\n\n---\n\n```python\nprint()\n```\n"));
+    }
     void recoversUntitledAndRefusesUnbackedAutosave() {
         QTemporaryDir files;
         const QString recovery = files.filePath("recovery");
