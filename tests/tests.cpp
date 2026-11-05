@@ -599,6 +599,57 @@ static void write(const QString &path, const QString &content) {
         QVERIFY(bak.open(QIODevice::ReadOnly));
         QVERIFY(QString::fromUtf8(bak.readAll()).contains("# Theirs"));   // theirs preserved
     }
+    void keepMineKeepsTheConflictWhenSaveFails() {
+        QTemporaryDir files;
+        const QString path = files.filePath("talk.md");
+        write(path, "# Shared\n\n---\n\n# Tail\n");
+        Deck deck;
+        QVERIFY(deck.loadPath(path));
+        deck.select(0);
+        // Leave the editor holding unfinished Markdown so savePath() refuses to write.
+        deck.editSlide("```rust");
+        // The agent changes the file on disk while we hold the broken buffer.
+        write(path, "# Theirs\n\n---\n\n# Tail\n");
+        QTRY_VERIFY(deck.status().contains("Changed on disk"));
+        QVERIFY(deck.externalChange());
+        // Keep mine cannot write unfinished Markdown: nothing is saved, so the conflict must
+        // survive (banner and actions return) instead of vanishing with the base corrupted.
+        deck.overwriteWithBackup();
+        QVERIFY(deck.externalChange());
+        QVERIFY(deck.dirty());
+        QDir backups(QFileInfo(path).absolutePath() + "/.hype-backups");
+        QVERIFY(backups.entryList({"talk.md.*"}, QDir::Files).isEmpty()); // nothing was backed up
+        QFile disk(path);
+        QVERIFY(disk.open(QIODevice::ReadOnly));
+        QVERIFY(QString::fromUtf8(disk.readAll()).contains("# Theirs")); // their file untouched
+        // The base was restored, so finishing the Markdown lets Keep mine succeed.
+        deck.editSlide("```rust\nfn main() {}\n```");
+        deck.overwriteWithBackup();
+        QVERIFY(!deck.externalChange());
+        QVERIFY(!deck.dirty());
+        const QStringList baks = backups.entryList({"talk.md.*"}, QDir::Files);
+        QVERIFY(!baks.isEmpty());
+        QFile bak(backups.filePath(baks.first()));
+        QVERIFY(bak.open(QIODevice::ReadOnly));
+        QVERIFY(QString::fromUtf8(bak.readAll()).contains("# Theirs")); // theirs preserved on success
+    }
+    void newDeckNotifiesClearingTheConflict() {
+        QTemporaryDir files;
+        const QString path = files.filePath("talk.md");
+        write(path, "# Shared\n");
+        Deck deck;
+        QVERIFY(deck.loadPath(path));
+        // Flag a conflict while the buffer still matches what we loaded: the deck is not
+        // dirty, so newDeck() proceeds and the only statusChanged it emits is the flag clear.
+        write(path, "# Theirs\n");
+        QVERIFY(!deck.savePath(path));
+        QVERIFY(deck.externalChange());
+        QVERIFY(!deck.dirty());
+        QSignalSpy status(&deck, &Deck::statusChanged);
+        deck.newDeck();
+        QVERIFY(!deck.externalChange());       // the conflict is gone
+        QCOMPARE(status.count(), 1);            // and the UI was told, so the stale actions vanish
+    }
     void recoversUntitledAndRefusesUnbackedAutosave() {
         QTemporaryDir files;
         const QString recovery = files.filePath("recovery");

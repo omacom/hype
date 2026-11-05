@@ -165,7 +165,7 @@ Deck::Deck(QObject *parent, const QString &exportProgram) : QAbstractListModel(p
         if (m_path.isEmpty())
             return;
         if (!file.open(QIODevice::ReadOnly)) {
-            m_externalChange = true;
+            setExternalChange(true);
             setStatus("Presentation changed or was removed outside Hype.");
             return;
         }
@@ -174,7 +174,7 @@ Deck::Deck(QObject *parent, const QString &exportProgram) : QAbstractListModel(p
             if (!dirty()) {
                 reloadExternal(disk);
             } else {
-                m_externalChange = true;
+                setExternalChange(true);
                 setStatus("Changed on disk. Save a copy or reopen to reload.");
             }
         }
@@ -220,7 +220,7 @@ void Deck::reloadExternal(const QString &disk) {
     const int selected = followSlide(m_parsed.slides, parseDeck(disk).slides, m_selected);
     const bool unchanged = disk == m_source;
     m_saved = disk;
-    m_externalChange = false;
+    setExternalChange(false);
     apply(disk, selected);
     // Matching text leaves the source alone, but the saved state changed.
     if (unchanged)
@@ -679,6 +679,13 @@ void Deck::notifyChanged() {
         emit fontChanged();
     }
 }
+// The conflict flag drives the banner and its actions; every change to it must notify.
+void Deck::setExternalChange(bool value) {
+    if (m_externalChange == value)
+        return;
+    m_externalChange = value;
+    emit statusChanged();
+}
 QString Deck::dialogDirectory() const {
     QSettings settings(QSettings::IniFormat, QSettings::UserScope, "hype", "hype");
     const QString last = settings.value("files/lastDirectory").toString();
@@ -709,7 +716,7 @@ bool Deck::reopenLastPresentation() {
     m_path = QFileInfo(path).absoluteFilePath();
     m_saved.clear();
     apply(QString(), 0, false);
-    m_externalChange = true;
+    setExternalChange(true);
     notifyChanged();
     setStatus("The last presentation is missing. Use Save As to recover it to a new file.");
     return false;
@@ -726,7 +733,7 @@ bool Deck::loadPath(const QString &path, bool remember) {
     m_saved = s;
     m_undo.clear();
     m_redo.clear();
-    m_externalChange = false;
+    setExternalChange(false);
     watch();
     notifyChanged();
     setStatus("Opened " + title());
@@ -771,7 +778,7 @@ bool Deck::savePath(const QString &path) {
             return false;
         }
         if (QFileInfo(path).absoluteFilePath() == m_path && QString::fromUtf8(previous) != m_saved) {
-            m_externalChange = true;
+            setExternalChange(true);
             setStatus("File changed on disk. Save a copy or reopen.");
             return false;
         }
@@ -801,7 +808,7 @@ bool Deck::savePath(const QString &path) {
         retireDraft();
     m_path = QFileInfo(path).absoluteFilePath();
     m_saved = m_source;
-    m_externalChange = false;
+    setExternalChange(false);
     watch();
     notifyChanged();
     setStatus("Saved");
@@ -817,11 +824,18 @@ bool Deck::savePath(const QString &path) {
 void Deck::overwriteWithBackup() {
     if (!m_externalChange || m_path.isEmpty())
         return;
+    // Adopt the disk text as the base so savePath can write our buffer over it (backing
+    // theirs up). If that save fails (unfinished Markdown, backup/file write error), nothing
+    // was written: restore the prior state so the conflict banner and its actions return.
+    const QString previousSaved = m_saved;
     QFile file(m_path);
     if (file.open(QIODevice::ReadOnly))
         m_saved = QString::fromUtf8(file.readAll());
-    m_externalChange = false;
-    savePath(m_path);
+    setExternalChange(false);
+    if (!savePath(m_path)) {
+        m_saved = previousSaved;
+        setExternalChange(true);
+    }
 }
 bool Deck::confirmDiscard() {
     if (!m_recoveryDirectory.isEmpty())
@@ -966,7 +980,7 @@ void Deck::newDeck() {
         return;
     m_path.clear();
     m_saved.clear();
-    m_externalChange = false;
+    setExternalChange(false);
     apply("---\ntheme: tokyo-night\n---\n\n# Your next idea\n", 0);
     m_undo.clear();
     m_redo.clear();

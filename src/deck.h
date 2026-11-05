@@ -221,5 +221,6 @@ class Deck : public QAbstractListModel {
     void watch();
     void watchMedia();
     void notifyChanged();
+    void setExternalChange(bool value);
     void reloadExternal(const QString &disk);
 };
