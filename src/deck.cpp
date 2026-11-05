@@ -237,11 +237,28 @@ static bool mergeThreeWay(const QString &base, const QString &ours,
     // code counts unresolved conflicts, which we treat as "keep the editor's copy".
     git.start("git", {"merge-file", "-p", dir.filePath("ours"),
                       dir.filePath("base"), dir.filePath("theirs")});
-    if (!git.waitForStarted(2000) || !git.waitForFinished(5000))
+    // This runs on the UI thread, so cap the wait: if merge-file is slow or hangs,
+    // kill it and fall back to the conflict / Save As path rather than freezing.
+    if (!git.waitForStarted(2000) || !git.waitForFinished(2000)) {
+        git.kill();
+        git.waitForFinished(500);
         return false;
+    }
     if (git.exitStatus() != QProcess::NormalExit || git.exitCode() != 0)
         return false;
     merged = QString::fromUtf8(git.readAllStandardOutput());
+    return true;
+}
+// Whole-text parsing can be fooled: an unfinished fence in one slide is "closed"
+// by a later slide's fence, so the overall text parses while the slides between
+// them are silently merged. Validate each slide on its own, the way apply() does,
+// before trusting a merge enough to replace the protected slide ranges.
+static bool slidesParseCleanly(const ParsedDeck &parsed) {
+    if (!parsed.error.isEmpty())
+        return false;
+    for (const auto &slide : parsed.slides)
+        if (!parseDeck("Slide\n" + slide.source).error.isEmpty())
+            return false;
     return true;
 }
 // Another program, often an agent, edited the file. Stay on the slide being viewed;
@@ -267,14 +284,25 @@ void Deck::reloadExternal(const QString &disk) {
 //   * a genuine overlap, or a merge whose result is not valid Markdown, leaves the
 //     editor's version untouched (manual wins) and asks for Save As.
 void Deck::mergeExternal(const QString &disk) {
+    // An unresolved conflict (e.g. a recovered draft whose true ancestor is not the
+    // current on-disk text) leaves m_saved unreliable as a merge base, so merging
+    // could silently drop earlier external edits. Keep the conflict instead.
+    if (m_externalChange) {
+        setStatus("Changed on disk with unresolved edits. Use Save As to keep both.");
+        return;
+    }
     QString merged;
     if (!mergeThreeWay(m_saved, m_source, disk, merged)) {
         m_externalChange = true;
         setStatus("Changed on disk with conflicting edits. Use Save As to keep both.");
         return;
     }
+    // Both the current buffer and the merged result must parse per-slide: a whole-text
+    // parse can pass while individual slides are corrupted (an unfinished fence in the
+    // dirty buffer closed by a later slide's fence). Applying that would overwrite the
+    // protected slide ranges and autosave the garbage, so keep the conflict instead.
     const ParsedDeck mergedParsed = parseDeck(merged);
-    if (!mergedParsed.error.isEmpty()) {
+    if (!slidesParseCleanly(m_parsed) || !slidesParseCleanly(mergedParsed)) {
         m_externalChange = true;
         setStatus("Changed on disk; the automatic merge didn't parse. Use Save As to keep both.");
         return;
