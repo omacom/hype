@@ -67,6 +67,12 @@ ApplicationWindow {
     property var presentationReturnScreen: null
     property int presentationReturnVisibility: Window.Windowed
     property rect presentationReturnGeometry: Qt.rect(0, 0, 0, 0)
+    // On Wayland (e.g. Hyprland) hide() destroys the xdg_toplevel; re-showing makes a
+    // new one the compositor re-tiles, and a client cannot place itself. The context
+    // property is absent in unit tests, so guard the lookup before reading it.
+    readonly property bool onWayland: (typeof isWayland !== "undefined") && isWayland
+    // Set when present mode entered via visibility only, so exit mirrors that path.
+    property bool presentationViaVisibility: false
     function togglePresent() {
         presenting = !presenting
         if (presenting) {
@@ -78,12 +84,22 @@ ApplicationWindow {
             presentationReturnVisibility = win.visibility
             presentationReturnGeometry = Qt.rect(win.x, win.y, win.width, win.height)
             const screens = presentationScreens(current, displays)
-            // Set the output before mapping fullscreen, and move within virtual desktops too.
-            win.hide()
-            win.screen = screens.audience
-            win.x = screens.audience.virtualX
-            win.y = screens.audience.virtualY
-            win.showFullScreen()
+            if (onWayland && sameScreen(screens.audience, current)) {
+                // Single output on Wayland: keep the live toplevel and switch only
+                // visibility. No hide() and no geometry writes, so the compositor
+                // restores the prior tiled/floating geometry itself on exit.
+                presentationViaVisibility = true
+                win.visibility = Window.FullScreen
+            } else {
+                // X11 (and Wayland's external-display case): set the output before
+                // mapping fullscreen, and move within virtual desktops too.
+                presentationViaVisibility = false
+                win.hide()
+                win.screen = screens.audience
+                win.x = screens.audience.virtualX
+                win.y = screens.audience.virtualY
+                win.showFullScreen()
+            }
             if (screens.notes) {
                 presenterWindow.screen = screens.notes
                 presenterWindow.x = screens.notes.virtualX
@@ -94,20 +110,28 @@ ApplicationWindow {
         } else {
             presenterWindow.hide()
             player.stop()
-            // Clear fullscreen before restoring the editor's output and geometry.
-            // Remap only after both are set, since showNormal restores Qt's own saved geometry.
-            win.hide()
-            win.showNormal()
-            win.hide()
-            if (presentationReturnScreen) win.screen = presentationReturnScreen
-            if (presentationReturnGeometry.width > 0) {
-                win.x = presentationReturnGeometry.x
-                win.y = presentationReturnGeometry.y
-                win.width = presentationReturnGeometry.width
-                win.height = presentationReturnGeometry.height
+            if (presentationViaVisibility) {
+                // Wayland single-output path: hand the toplevel back by visibility
+                // alone. No hide() and no geometry writes, so Hyprland restores the
+                // window's prior tiled/floating geometry on the same output.
+                presentationViaVisibility = false
+                win.visibility = presentationReturnVisibility || Window.Windowed
+            } else {
+                // Clear fullscreen before restoring the editor's output and geometry.
+                // Remap only after both are set, since showNormal restores Qt's own saved geometry.
+                win.hide()
+                win.showNormal()
+                win.hide()
+                if (presentationReturnScreen) win.screen = presentationReturnScreen
+                if (presentationReturnGeometry.width > 0) {
+                    win.x = presentationReturnGeometry.x
+                    win.y = presentationReturnGeometry.y
+                    win.width = presentationReturnGeometry.width
+                    win.height = presentationReturnGeometry.height
+                }
+                if (presentationReturnVisibility === Window.Maximized) win.showMaximized()
+                else win.showNormal()
             }
-            if (presentationReturnVisibility === Window.Maximized) win.showMaximized()
-            else win.showNormal()
             Qt.callLater(function() {
                 win.requestActivate()
                 stage.forceActiveFocus()

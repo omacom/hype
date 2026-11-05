@@ -737,6 +737,39 @@ static void write(const QString &path, const QString &content) {
         window->setProperty("allowClose", true);
         window->close();
     }
+    void presentOnWaylandSwitchesVisibilityOnly() {
+        if (!qEnvironmentVariableIsSet("HYPE_GUI_TESTS"))
+            QSKIP("Set HYPE_GUI_TESTS=1");
+        Deck deck;
+        deck.editSource("# First\n---\n# Last\n");
+        QQuickStyle::setStyle("Basic");
+        qmlRegisterType<SlideItem>("Hype", 1, 0, "SlideCanvas");
+        qmlRegisterType<AppTheme>("Hype", 1, 0, "AppTheme");
+        QQmlApplicationEngine engine;
+        engine.rootContext()->setContextProperty("deck", &deck);
+        // Pretend we are on a Wayland compositor: on a single output the present
+        // path must switch only visibility, keeping the live toplevel, so the
+        // compositor (not Hype) owns restoring the window's geometry on exit.
+        engine.rootContext()->setContextProperty("isWayland", true);
+        engine.addImageProvider("slides", new Thumbnails(&deck));
+        engine.load(QUrl("qrc:/Main.qml"));
+        QVERIFY(!engine.rootObjects().isEmpty());
+        auto window = qobject_cast<QQuickWindow *>(engine.rootObjects().first());
+        QVERIFY(window);
+        window->showNormal();
+        QTRY_COMPARE(window->visibility(), QWindow::Windowed);
+        QVERIFY(QMetaObject::invokeMethod(window, "togglePresent"));
+        QVERIFY(window->property("presenting").toBool());
+        QVERIFY(window->property("presentationViaVisibility").toBool());
+        QTRY_COMPARE(window->visibility(), QWindow::FullScreen);
+        // Exit mirrors the path: visibility returns without any hide()/geometry writes.
+        QVERIFY(QMetaObject::invokeMethod(window, "togglePresent"));
+        QVERIFY(!window->property("presenting").toBool());
+        QVERIFY(!window->property("presentationViaVisibility").toBool());
+        QTRY_COMPARE(window->visibility(), QWindow::Windowed);
+        window->setProperty("allowClose", true);
+        window->close();
+    }
     void presenterViewUsesSeparateScreens() {
         if (!qEnvironmentVariableIsSet("HYPE_GUI_TESTS"))
             QSKIP("Set HYPE_GUI_TESTS=1");
