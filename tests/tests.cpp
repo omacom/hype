@@ -32,6 +32,7 @@
 #include <QQuickWindow>
 #include <QQuickItemGrabResult>
 #include <QSettings>
+#include <QStandardPaths>
 #include <QScreen>
 #include <QSaveFile>
 #include <QScopeGuard>
@@ -1229,6 +1230,41 @@ static void write(const QString &path, const QString &content) {
                     ++differences;
         // Same font size, position, and colors as the slide without an image.
         QCOMPARE(differences, 0);
+    }
+    void firstFrameVariantUsesVideoFrameNotPoster() {
+        if (QStandardPaths::findExecutable("ffmpeg").isEmpty())
+            QSKIP("ffmpeg is required to extract the video's first frame");
+        QTemporaryDir tmp;
+        QVERIFY(QDir().mkpath(tmp.path() + "/images"));
+        QVERIFY(QDir().mkpath(tmp.path() + "/videos"));
+        // A clip whose first frame is blue; the author's poster is a different color (green).
+        QProcess ffmpeg;
+        ffmpeg.start("ffmpeg", {"-v", "error", "-y", "-f", "lavfi", "-i",
+            "color=c=blue:s=320x180:d=0.4:r=5", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+            tmp.path() + "/videos/clip.mp4"});
+        QVERIFY(ffmpeg.waitForFinished(30000));
+        QCOMPARE(ffmpeg.exitCode(), 0);
+        QImage poster(320, 180, QImage::Format_RGB32);
+        poster.fill(Qt::green);
+        QVERIFY(poster.save(tmp.path() + "/images/poster.png"));
+
+        Deck deck;
+        QVERIFY(deck.savePath(tmp.path() + "/talk.md"));
+        const QString source = "![span muted poster=poster.png](clip.mp4)";
+        auto center = [&](bool firstFrame) {
+            QImage image(1920, 1080, QImage::Format_ARGB32_Premultiplied);
+            image.fill(Qt::transparent);
+            QPainter p(&image);
+            paintSlide(&p, image.rect(), source, deck.baseDir(), deck.palette(),
+                       nullptr, false, false, firstFrame);
+            p.end();
+            return image.pixel(960, 540);
+        };
+        const QRgb poster_still = center(false), live_still = center(true);
+        // The editor/overview/export still (firstFrame=false) keeps the authored poster.
+        QVERIFY2(qGreen(poster_still) > qBlue(poster_still) + 40, QColor(poster_still).name().toLatin1());
+        // The live presentation still (firstFrame=true) is the video's own first frame.
+        QVERIFY2(qBlue(live_still) > qGreen(live_still) + 40, QColor(live_still).name().toLatin1());
     }
     void placedImageKeepsSlideColors() {
         QTemporaryDir tmp;

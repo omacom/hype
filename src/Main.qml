@@ -1495,7 +1495,11 @@ ApplicationWindow {
                     }
                     Image {
                         id: slidePreview; objectName: "slidePreview"; anchors.fill: parent
-                        source: "image://slides/" + (deck.revision, deck.renderId(deck.selected)) + (animation.active ? "/background" : "")
+                        // Presenting an autoplay video, show the video's own first frame rather than
+                        // the authored poster, so playback begins there with no poster → frame-0 jump.
+                        source: "image://slides/" + (deck.revision, deck.renderId(deck.selected))
+                            + (animation.active ? "/background"
+                               : (win.presenting && deck.media.video && deck.media.autoplay ? "/firstframe" : ""))
                         asynchronous: true; retainWhileLoading: true; cache: true; sourceSize: Qt.size(1920, 1080)
                         property int shownSlide: -1
                         // On a new slide, let its thumbnail show while this render loads. Edits to

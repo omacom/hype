@@ -816,7 +816,7 @@ QRectF mediaImageRect(const Media &media, const QSizeF &image) {
 }
 void paintSlide(QPainter *p, const QRectF &target, const QString &source, const QString &base,
                 const QVariantMap &inputPalette, QString *warning, bool overlayOnly,
-                bool backgroundOnly) {
+                bool backgroundOnly, bool firstFrame) {
     p->save();
     p->setRenderHints(QPainter::Antialiasing | QPainter::TextAntialiasing |
                       QPainter::SmoothPixmapTransform);
@@ -849,8 +849,16 @@ void paintSlide(QPainter *p, const QRectF &target, const QString &source, const 
         }
     }
     if (!media.file.isEmpty()) {
+        // Live presentation asks for the video's own first frame so autoplay starts there with no
+        // jump; everywhere else (editor, overview, render, export) keeps the authored poster. Fall
+        // back to the poster if the first frame cannot be extracted (e.g. ffmpeg is unavailable).
+        const QString firstFramePoster =
+            media.video && firstFrame ? ensurePoster(media.path, base) : QString();
         QString path =
-            media.video ? (media.poster.isEmpty() ? ensurePoster(media.path, base) : media.poster)
+            media.video ? (!firstFramePoster.isEmpty()
+                               ? firstFramePoster
+                               : (media.poster.isEmpty() ? ensurePoster(media.path, base)
+                                                         : media.poster))
                         : media.path;
         const QRectF rect = mediaRect(media);
         const QSize pixels = p->deviceTransform().mapRect(rect).size().toSize();
@@ -1075,7 +1083,7 @@ static QImage renderedSlide(const QString &id, QSize *size, const QSize &request
     image.fill(Qt::transparent);
     QPainter p(&image);
     paintSlide(&p, image.rect(), source, base, palette, nullptr, id.endsWith("/overlay"),
-               id.endsWith("/background"));
+               id.endsWith("/background"), id.endsWith("/firstframe"));
     p.end();
     // Room for the slides around the selection at full size, or a whole deck of thumbnails.
     // Full-size frames reach 33 MB at 2x, so keep as many as a twentieth of free memory holds.

@@ -37,7 +37,7 @@ void layoutSlideText(QTextDocument &document, const QString &markdown, const QVa
                      qreal fontSize, qreal width, bool centered, bool code);
 void paintSlide(QPainter *painter, const QRectF &target, const QString &source, const QString &base,
                 const QVariantMap &palette, QString *warning = nullptr, bool overlayOnly = false,
-                bool backgroundOnly = false);
+                bool backgroundOnly = false, bool firstFrame = false);
 class SlideItem : public QQuickPaintedItem {
     Q_OBJECT
     Q_PROPERTY(Deck *deck READ deck WRITE setDeck NOTIFY deckChanged)
