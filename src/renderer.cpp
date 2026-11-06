@@ -850,16 +850,18 @@ void paintSlide(QPainter *p, const QRectF &target, const QString &source, const 
     }
     if (!media.file.isEmpty()) {
         // Live presentation asks for the video's own first frame so autoplay starts there with no
-        // jump; everywhere else (editor, overview, render, export) keeps the authored poster. Fall
-        // back to the poster if the first frame cannot be extracted (e.g. ffmpeg is unavailable).
-        const QString firstFramePoster =
-            media.video && firstFrame ? ensurePoster(media.path, base) : QString();
-        QString path =
-            media.video ? (!firstFramePoster.isEmpty()
-                               ? firstFramePoster
-                               : (media.poster.isEmpty() ? ensurePoster(media.path, base)
-                                                         : media.poster))
-                        : media.path;
+        // jump; everywhere else (editor, overview, render, export) keeps the authored poster. The
+        // first frame is also the automatic poster when none was authored, so extract it at most
+        // once and fall back to the authored poster if extraction fails (e.g. ffmpeg is missing).
+        QString path;
+        if (!media.video)
+            path = media.path;
+        else if (firstFrame || media.poster.isEmpty()) {
+            path = ensurePoster(media.path, base);
+            if (path.isEmpty())
+                path = media.poster;
+        } else
+            path = media.poster;
         const QRectF rect = mediaRect(media);
         const QSize pixels = p->deviceTransform().mapRect(rect).size().toSize();
         // An SVG with nothing over it is drawn as vectors, sharp at any size and in PDF. Its

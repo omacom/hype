@@ -1484,11 +1484,23 @@ ApplicationWindow {
                 property real slideWidth: Math.min(width-margin*2,(height-margin*2)*16/9)
                 Item {
                     id: slideFrame; objectName: "slideFrame"; width: stage.slideWidth; height: width*9/16; anchors.centerIn: parent
+                    // Warm the first-frame still for the current autoplay video so the live view has
+                    // it ready the instant the presentation begins, instead of rendering it (and
+                    // briefly holding the poster) only once presenting starts.
+                    Image {
+                        objectName: "firstFramePrefetch"; visible: false
+                        asynchronous: true; cache: true; sourceSize: Qt.size(1920, 1080)
+                        source: (deck.media.video && deck.media.autoplay)
+                            ? "image://slides/" + (deck.revision, deck.renderId(deck.selected)) + "/firstframe" : ""
+                    }
                     // Keep the fast thumbnail behind the full render. Even if it remains visible
                     // briefly after loading, it cannot cover the sharp image once that is ready.
                     Image {
                         objectName: "slideQuickPreview"; anchors.fill: parent
-                        visible: slidePreview.status === Image.Loading && slidePreview.shownSlide !== deck.selected && status === Image.Ready
+                        // Never stand in with the authored poster thumbnail while a live first-frame
+                        // render loads — that stand-in is itself the flash this change removes.
+                        visible: slidePreview.status === Image.Loading && slidePreview.shownSlide !== deck.selected
+                                 && status === Image.Ready && !slidePreview.liveFirstFrame
                         // The same URL and size as the sidebar thumbnail, so it comes from Qt's pixmap cache.
                         source: "image://slides/" + (deck.revision, deck.renderId(deck.selected))
                         asynchronous: true; cache: true; sourceSize: Qt.size(340, 192)
@@ -1497,14 +1509,15 @@ ApplicationWindow {
                         id: slidePreview; objectName: "slidePreview"; anchors.fill: parent
                         // Presenting an autoplay video, show the video's own first frame rather than
                         // the authored poster, so playback begins there with no poster → frame-0 jump.
+                        readonly property bool liveFirstFrame: win.presenting && deck.media.video && deck.media.autoplay
                         source: "image://slides/" + (deck.revision, deck.renderId(deck.selected))
-                            + (animation.active ? "/background"
-                               : (win.presenting && deck.media.video && deck.media.autoplay ? "/firstframe" : ""))
+                            + (animation.active ? "/background" : (liveFirstFrame ? "/firstframe" : ""))
                         asynchronous: true; retainWhileLoading: true; cache: true; sourceSize: Qt.size(1920, 1080)
                         property int shownSlide: -1
-                        // On a new slide, let its thumbnail show while this render loads. Edits to
-                        // the same slide retain the previous sharp frame until the new one is ready.
-                        visible: status === Image.Ready || shownSlide === deck.selected
+                        // On a new slide, let its thumbnail show while this render loads. Edits to the
+                        // same slide retain the previous sharp frame until the new one is ready — but
+                        // not while switching to the live first frame, so the poster is never held.
+                        visible: status === Image.Ready || (shownSlide === deck.selected && !liveFirstFrame)
                         onStatusChanged: if (status === Image.Ready) shownSlide = deck.selected
                     }
                     Loader {
