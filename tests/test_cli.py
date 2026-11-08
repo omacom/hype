@@ -16,7 +16,8 @@ class CliTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
+        # Resolved, as hype reports paths: on macOS the temporary directory is behind a symlink.
+        self.root = Path(self.temp.name).resolve()
         # No display, on a desktop that asks Qt for Wayland: commands must pick offscreen themselves.
         self.env = {key: value for key, value in os.environ.items() if key not in ('DISPLAY', 'WAYLAND_DISPLAY')}
         self.env.update(QT_QPA_PLATFORM='wayland;xcb', XDG_CONFIG_HOME=str(self.root / 'config'),
