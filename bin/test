@@ -4,7 +4,7 @@ ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 mkdir -p "$ROOT/build/tests"
 cd "$ROOT/build/tests"
 qmake6 "$ROOT/tests/tests.pro"
-make -j"$(nproc)"
+make -j"$(nproc 2>/dev/null || sysctl -n hw.ncpu)"
 # The window-level tests catch the regressions unit tests miss, so they run by default.
 # Set HYPE_GUI_TESTS=0 to skip them, e.g. on a machine without multimedia.
 if [ "${HYPE_GUI_TESTS-1}" = 0 ]; then unset HYPE_GUI_TESTS; else export HYPE_GUI_TESTS=1; fi

@@ -23,3 +23,13 @@ HEADERS += ../src/images.h
 SOURCES += ../src/filedialog.cpp
 SOURCES += ../src/recovery.cpp
 HEADERS += ../src/filedialog.h
+
+# macOS: build a plain executable, and find zlib and libwebp under Homebrew.
+macx {
+    CONFIG -= app_bundle
+    HOMEBREW_PREFIX = $$system(brew --prefix 2>/dev/null)
+    !isEmpty(HOMEBREW_PREFIX) {
+        INCLUDEPATH += $$HOMEBREW_PREFIX/include
+        LIBS += -L$$HOMEBREW_PREFIX/lib
+    }
+}

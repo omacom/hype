@@ -253,6 +253,14 @@ To build Hype yourself, install a C++17 compiler, make, Qt 6.9 or newer, FFmpeg,
 
 `bin/build` uses a Qt toolchain under `build/qt/` when present, then falls back to `qmake6` on your PATH. It checks for Qt 6.9 or newer before compiling. Set `HYPE_QMAKE=/path/to/qmake6` to select a different toolchain.
 
+On macOS, install the dependencies with Homebrew, then run the same commands:
+
+```sh
+brew install qtbase qtdeclarative qtmultimedia qtsvg qtimageformats ffmpeg source-highlight webp
+```
+
+Omarchy themes aren't installed on macOS, so presentations use the default colors unless their front matter sets `color_*` values.
+
 For a launcher entry that rebuilds this checkout when opened, run `./bin/install-dev` and choose **Hype (Development)**.
 
 Run `./bin/test` for the regression suite. After building the tests, the presenter

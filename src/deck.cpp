@@ -36,7 +36,9 @@
 #include <QThreadPool>
 #include <QtConcurrentRun>
 #include <atomic>
-#include <malloc.h>
+#ifdef __GLIBC__
+#include <malloc.h> // malloc_trim
+#endif
 #include <cerrno>
 #include <climits>
 #include <csignal>
@@ -1541,7 +1543,9 @@ bool Deck::renderImages(const QString &directory, int width, bool powerPoint) {
             emit exportAdvanced(portion * done / count(), QString("Exporting slide %1 of %2").arg(qMin<qsizetype>(count(), done + 1)).arg(count()));
         }
         // Return the workers' freed canvases to the system before the encoder starts.
+#ifdef __GLIBC__
         malloc_trim(0);
+#endif
     }
     QJsonArray slides;
     QHash<QString, QString> convertedVideos;

@@ -38,5 +38,5 @@ fi
 if [ -f Makefile ] && [ "$(cat .qmake-used 2>/dev/null || true)" != "$build_qmake" ]; then
     make clean
 fi
-make -j"$(nproc)"
+make -j"$(nproc 2>/dev/null || sysctl -n hw.ncpu)"
 printf '%s\n' "$build_qmake" > .qmake-used
