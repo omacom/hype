@@ -255,7 +255,7 @@ The build uses a Qt toolchain from Qt's installer under `build/qt/` when present
 
 For a launcher entry that rebuilds this checkout when opened, run `./bin/install-dev` and choose **Hype (Development)**.
 
-Run `./bin/test` for the regression suite: the C++ tests (`hype_tests`, which read exported PDFs back with Qt Pdf from `qt6-webengine`) and the command-line tests (`hype_commands`, in Python). Arguments go to `ctest`, so `./bin/test -R hype_commands` runs only those. Set `HYPE_GUI_TESTS=0` to skip the window-level tests on a machine without multimedia. After building the tests, the presenter check can also run with two virtual displays:
+Run `./bin/test` for the regression suite: the C++ tests (`hype_tests`, which read exported PDFs back with Qt Pdf from `qt6-webengine`) and the command-line tests (`hype_commands`, in Python). Arguments go to `ctest`, so `./bin/test -R hype_commands` runs only those. Set `HYPE_GUI_TESTS=0` to skip the C++ window-level tests on a machine without multimedia. After building the tests, the presenter check can also run with two virtual displays:
 
 ```sh
 QT_QPA_PLATFORMTHEME=generic QT_STYLE_OVERRIDE=Fusion \

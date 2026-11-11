@@ -53,6 +53,7 @@ if(TARGET Qt6::Pdf)
   # The window-level tests load the same QML as the app, so they embed it too.
   add_executable(hype_tests tests/tests.cpp src/resources.qrc)
   target_link_libraries(hype_tests PRIVATE hype_core Qt6::Widgets Qt6::Pdf Qt6::Test)
+  set_target_properties(hype_tests PROPERTIES INTERPROCEDURAL_OPTIMIZATION ON)
   add_test(NAME hype_tests COMMAND hype_tests)
   # Hype draws its own controls, so the tests keep Qt's platform theme and style out of it.
   set_tests_properties(hype_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORMTHEME=generic;QT_STYLE_OVERRIDE=Fusion")
