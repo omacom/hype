@@ -1,6 +1,5 @@
-#!/bin/bash
-set -euo pipefail
-
-root="$(cd "$(dirname "$0")/.." && pwd)"
-cd "$root/pkgbuild"
+#!/bin/sh
+set -eu
+ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+cd "$ROOT/pkgbuild"
 makepkg -fsi "$@"

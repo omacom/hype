@@ -47,7 +47,7 @@ set_target_properties(hype PROPERTIES INTERPROCEDURAL_OPTIMIZATION ON)
 enable_testing()
 
 # The tests read exports back with Qt Pdf, which ships in qt6-webengine, so
-# building the app alone doesn't need it.
+# building the app alone doesn't need it; testing without it fails, not skips.
 find_package(Qt6 6.9 COMPONENTS Pdf)
 if(TARGET Qt6::Pdf)
   # The window-level tests load the same QML as the app, so they embed it too.
@@ -55,11 +55,13 @@ if(TARGET Qt6::Pdf)
   target_link_libraries(hype_tests PRIVATE hype_core Qt6::Widgets Qt6::Pdf Qt6::Test)
   set_target_properties(hype_tests PROPERTIES INTERPROCEDURAL_OPTIMIZATION ON)
   add_test(NAME hype_tests COMMAND hype_tests)
-  # Hype draws its own controls, so the tests keep Qt's platform theme and style out of it.
-  set_tests_properties(hype_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORMTHEME=generic;QT_STYLE_OVERRIDE=Fusion")
 else()
   message(WARNING "Qt Pdf was not found, so the tests can't be built; install qt6-webengine.")
+  add_test(NAME hype_tests COMMAND sh -c "echo 'hype_tests needs Qt Pdf, from qt6-webengine' >&2; exit 1")
 endif()
+# Hype draws its own controls, so the tests keep Qt's platform theme and style out of it.
+set_tests_properties(hype_tests PROPERTIES ENVIRONMENT
+  "QT_QPA_PLATFORM=offscreen;QT_QPA_PLATFORMTHEME=generic;QT_STYLE_OVERRIDE=Fusion")
 
 # The commands, exports and shutdown, driven through build/hype as an agent would.
 # test_trials covers the trial import tools, which need their own Python packages.
@@ -68,4 +70,7 @@ if(Python3_FOUND)
   add_test(NAME hype_commands
     COMMAND ${Python3_EXECUTABLE} -m unittest test_cli test_export test_shutdown
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/tests)
+else()
+  add_test(NAME hype_commands COMMAND sh -c "echo 'hype_commands needs Python 3' >&2; exit 1")
 endif()
+set_tests_properties(hype_commands PROPERTIES ENVIRONMENT QT_QPA_PLATFORM=offscreen)
