@@ -206,8 +206,12 @@ static void write(const QString &path, const QString &content) {
     }
     void slidesReadThemeColorFormats() {
         QTemporaryDir omarchy;
+        const bool wasSet = qEnvironmentVariableIsSet("OMARCHY_PATH");
         const QByteArray previous = qgetenv("OMARCHY_PATH");
-        const auto restore = qScopeGuard([&] { qputenv("OMARCHY_PATH", previous); });
+        const auto restore = qScopeGuard([&] {
+            if (wasSet) qputenv("OMARCHY_PATH", previous);
+            else qunsetenv("OMARCHY_PATH");
+        });
         qputenv("OMARCHY_PATH", omarchy.path().toUtf8());
         QVERIFY(QDir().mkpath(omarchy.filePath("themes/hype-formats")));
         write(omarchy.filePath("themes/hype-formats/colors.toml"),
