@@ -59,9 +59,10 @@ else()
 endif()
 
 # The commands, exports and shutdown, driven through build/hype as an agent would.
+# test_trials covers the trial import tools, which need their own Python packages.
 find_package(Python3 COMPONENTS Interpreter)
 if(Python3_FOUND)
   add_test(NAME hype_commands
-    COMMAND ${Python3_EXECUTABLE} -m unittest discover -s tests -p "test_*.py"
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+    COMMAND ${Python3_EXECUTABLE} -m unittest test_cli test_export test_shutdown
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/tests)
 endif()
