@@ -53,6 +53,12 @@ class CliTests(unittest.TestCase):
         self.assertIn('already exists', self.hype('new', self.deck, code=1).stderr)
         self.assertIn('paper', self.hype('new', self.root / 'other.md', '--theme', 'nope', code=1).stderr)
 
+    def test_save_applies_a_theme_and_exits(self):
+        self.write('# One\n')
+        self.hype(self.deck, '--theme', 'paper', '--save')
+        self.assertIn('color_background: "#ffffff"', self.deck.read_text())
+        self.assertIn('to save', self.hype('--theme', 'paper', '--save', code=1).stderr)
+
     def test_check_reports_every_problem_with_slide_and_line(self):
         self.write(DECK + '\n---\n\n![](missing.png)\n\n---\n\n![bogus=1](gone.png)\n\n---\n')
         report = json.loads(self.hype('check', self.deck, '--json', code=1).stdout)
