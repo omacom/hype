@@ -19,8 +19,8 @@ static QColor contrastInk(const QColor &color) {
                              .0722 * linear(color.blueF());
     return luminance > .179 ? QColor("#111111") : QColor("#ffffff");
 }
-QMap<QString, QString> readThemeColors(const QString &path) {
-    QMap<QString, QString> colors;
+QList<QPair<QString, QString>> readThemeColors(const QString &path) {
+    QList<QPair<QString, QString>> colors;
     QFile file(path);
     if (path.isEmpty() || !file.open(QIODevice::ReadOnly))
         return colors;
@@ -30,7 +30,7 @@ QMap<QString, QString> readThemeColors(const QString &path) {
     while (!file.atEnd()) {
         const auto match = entry.match(QString::fromUtf8(file.readLine()));
         if (match.hasMatch())
-            colors[match.captured(1)] = match.captured(3);
+            colors.append({match.captured(1), match.captured(3)});
     }
     return colors;
 }
@@ -50,9 +50,8 @@ AppTheme::AppTheme(const QString &currentDirectory, QObject *parent)
 void AppTheme::reload() {
     const QString theme = m_currentDirectory + "/theme", path = theme + "/colors.toml";
     QMap<QString, QColor> values;
-    const auto written = readThemeColors(path);
-    for (auto it = written.begin(); it != written.end(); ++it)
-        values[it.key()] = QColor(it.value());
+    for (const auto &[key, value] : readThemeColors(path))
+        values[key] = QColor(value);
     const QColor bg = values.value("background", QColor("#1a1b26"));
     const QColor fg = values.value("foreground", QColor("#c0caf5"));
     const QColor accent = values.value("accent", QColor("#7aa2f7"));
