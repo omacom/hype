@@ -53,6 +53,7 @@ class TestFilePortal : public QDBusVirtualObject {
     QVariantMap options;
     uint result = 0;
     bool respondBeforeReply = false;
+    bool silent = false;
     QString introspect(const QString &) const override { return {}; }
     bool handleMessage(const QDBusMessage &message, const QDBusConnection &bus) override {
         if (message.interface() != "org.freedesktop.portal.FileChooser") return false;
@@ -70,7 +71,9 @@ class TestFilePortal : public QDBusVirtualObject {
             signal.setArguments({result, QVariantMap{{"uris", QStringList{selected}}}});
             bus.send(signal);
         };
-        if (respondBeforeReply) {
+        if (silent) {
+            reply();
+        } else if (respondBeforeReply) {
             response();
             QTimer::singleShot(10, this, reply);
         } else {
@@ -169,6 +172,12 @@ static void write(const QString &path, const QString &content) {
         portal.result = 2;
         QVERIFY(FileDialog::choose(false, "/tmp", "Media", {"*.png"}, &error).isEmpty());
         QVERIFY(!error.isEmpty());
+
+        // A portal that exits without answering releases the app with an error.
+        portal.silent = true;
+        QTimer::singleShot(100, [&] { bus.unregisterService("org.freedesktop.portal.Desktop"); });
+        QVERIFY(FileDialog::choose(false, "/tmp", "Media", {"*.png"}, &error).isEmpty());
+        QCOMPARE(error, "The desktop file chooser closed without answering.");
     }
     void speakerNotesIgnoreDirectivesAndCode() {
         Deck deck;
