@@ -257,7 +257,10 @@ int render(const QStringList &arguments) {
     const auto problems = slideProblemsAt(deck, parsed, number - 1);
     QString warning;
     const QImage image = paint(deck, number - 1, width, &warning);
-    if (!image.save(output, "PNG"))
+    // Written beside and renamed over, so an existing file, or a hard link to the
+    // presentation, is replaced rather than overwritten in place.
+    QSaveFile file(output);
+    if (!file.open(QIODevice::WriteOnly) || !image.save(&file, "PNG") || !file.commit())
         return fail("Could not save " + output);
     int errors = 0;
     QJsonArray list;

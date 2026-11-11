@@ -60,6 +60,11 @@ class CliTests(unittest.TestCase):
         for output in (self.deck, link):
             self.assertIn('presentation itself', self.hype('render', self.deck, '--slide', 1, '-o', output, code=1).stderr)
         self.assertEqual(self.deck.read_text(), DECK)
+        alias = self.root / 'alias.md'
+        os.link(self.deck, alias)
+        self.hype('render', self.deck, '--slide', 1, '-o', alias)
+        self.assertEqual(self.deck.read_text(), DECK)
+        self.png_size(alias)
         (self.root / 'slides/slides.json').mkdir(parents=True)
         self.assertIn('slides.json', self.hype('render', self.deck, '-o', self.root / 'slides', code=1).stderr)
 
