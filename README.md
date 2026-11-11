@@ -244,22 +244,21 @@ The mouse wheel over the sidebar selects the previous or next slide. Home/End ju
 
 ## Run from source
 
-To build Hype yourself, install a C++17 compiler, make, Qt 6.9 or newer, FFmpeg, and GNU source-highlight; see [the package definition](pkgbuild/PKGBUILD) for dependencies. Then:
+To build Hype yourself, install a C++17 compiler, CMake, Qt 6.9 or newer, FFmpeg, and GNU source-highlight; see [the package definition](pkgbuild/PKGBUILD) for dependencies. Then:
 
 ```sh
 ./bin/build
 ./build/hype open examples/welcome.md
 ```
 
-`bin/build` uses a Qt toolchain under `build/qt/` when present, then falls back to `qmake6` on your PATH. It checks for Qt 6.9 or newer before compiling. Set `HYPE_QMAKE=/path/to/qmake6` to select a different toolchain.
+The build uses a Qt toolchain from Qt's installer under `build/qt/` when present, newest first, then the system Qt, and checks for Qt 6.9 or newer before compiling. Set `CMAKE_PREFIX_PATH=/path/to/Qt/6.9.0/gcc_64` to select a different toolchain, and delete `build/CMakeCache.txt` when switching, since CMake remembers the Qt it found.
 
 For a launcher entry that rebuilds this checkout when opened, run `./bin/install-dev` and choose **Hype (Development)**.
 
-Run `./bin/test` for the regression suite. After building the tests, the presenter
-check can also run with two virtual displays:
+Run `./bin/test` for the regression suite: the C++ tests (`hype_tests`, which read exported PDFs back with Qt Pdf from `qt6-webengine`) and the command-line tests (`hype_commands`, in Python). Arguments go to `ctest`, so `./bin/test -R hype_commands` runs only those. Set `HYPE_GUI_TESTS=0` to skip the window-level tests on a machine without multimedia. After building the tests, the presenter check can also run with two virtual displays:
 
 ```sh
-HYPE_GUI_TESTS=1 QT_QPA_PLATFORMTHEME=generic QT_STYLE_OVERRIDE=Fusion \
+QT_QPA_PLATFORMTHEME=generic QT_STYLE_OVERRIDE=Fusion \
   QT_QPA_PLATFORM="offscreen:configfile=$PWD/tests/fixtures/presenter-screens.json" \
-  ./build/tests/hype-tests presenterViewUsesSeparateScreens
+  ./build/hype_tests presenterViewUsesSeparateScreens
 ```

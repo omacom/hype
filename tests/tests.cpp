@@ -646,7 +646,7 @@ static void write(const QString &path, const QString &content) {
         QVERIFY(latest.recoveryVersions().size() >= 3); // Previous untitled work is still recoverable.
     }
     void historyPopupProtectsSlides() {
-        if (!qEnvironmentVariableIsSet("HYPE_GUI_TESTS")) QSKIP("Set HYPE_GUI_TESTS=1");
+        if (qEnvironmentVariable("HYPE_GUI_TESTS") == "0") QSKIP("HYPE_GUI_TESTS=0 skips the window-level tests");
         QTemporaryDir files;
         Deck deck; deck.editSource("# First\n---\n# Last\n");
         deck.enableAutosave(files.filePath("recovery"));
@@ -677,8 +677,8 @@ static void write(const QString &path, const QString &content) {
         window->close();
     }
     void presenterScreensAndCloseWhilePresenting() {
-        if (!qEnvironmentVariableIsSet("HYPE_GUI_TESTS"))
-            QSKIP("Set HYPE_GUI_TESTS=1");
+        if (qEnvironmentVariable("HYPE_GUI_TESTS") == "0")
+            QSKIP("HYPE_GUI_TESTS=0 skips the window-level tests");
         Deck deck;
         deck.editSource("# First\n---\n# Last\n");
         QQuickStyle::setStyle("Basic");
@@ -738,8 +738,8 @@ static void write(const QString &path, const QString &content) {
         window->close();
     }
     void presenterViewUsesSeparateScreens() {
-        if (!qEnvironmentVariableIsSet("HYPE_GUI_TESTS"))
-            QSKIP("Set HYPE_GUI_TESTS=1");
+        if (qEnvironmentVariable("HYPE_GUI_TESTS") == "0")
+            QSKIP("HYPE_GUI_TESTS=0 skips the window-level tests");
         const auto screens = QGuiApplication::screens();
         if (screens.size() != 2)
             QSKIP("Run with offscreen:configfile=tests/fixtures/presenter-screens.json");
@@ -827,8 +827,8 @@ static void write(const QString &path, const QString &content) {
         window->close();
     }
     void placeMenuPlacesImage() {
-        if (!qEnvironmentVariableIsSet("HYPE_GUI_TESTS"))
-            QSKIP("Set HYPE_GUI_TESTS=1");
+        if (qEnvironmentVariable("HYPE_GUI_TESTS") == "0")
+            QSKIP("HYPE_GUI_TESTS=0 skips the window-level tests");
         Deck deck;
         deck.editSource("# Headline\n\n![](logo.png)\n");
         QQuickStyle::setStyle("Basic");
@@ -1618,8 +1618,8 @@ static void write(const QString &path, const QString &content) {
         QVERIFY(!unavailable.exporting() && unavailable.exportFailed());
     }
     void pasteCompressionProgress() {
-        if (!qEnvironmentVariableIsSet("HYPE_GUI_TESTS"))
-            QSKIP("Set HYPE_GUI_TESTS=1 with local multimedia access");
+        if (qEnvironmentVariable("HYPE_GUI_TESTS") == "0")
+            QSKIP("HYPE_GUI_TESTS=0 skips the window-level tests");
         QTemporaryDir files;
         Deck deck;
         QVERIFY(deck.savePath(files.path() + "/talk.md"));
@@ -1698,8 +1698,8 @@ static void write(const QString &path, const QString &content) {
         QVERIFY(deck.status().contains("slide changed"));
     }
     void videoHoldsLastFrameAndReplays() {
-        if (!qEnvironmentVariableIsSet("HYPE_GUI_TESTS"))
-            QSKIP("Set HYPE_GUI_TESTS=1 with local multimedia access");
+        if (qEnvironmentVariable("HYPE_GUI_TESTS") == "0")
+            QSKIP("HYPE_GUI_TESTS=0 skips the window-level tests");
         if (qEnvironmentVariable("QT_QUICK_BACKEND") == "software")
             QSKIP("Video pixel capture requires QT_QUICK_BACKEND=rhi");
         QTemporaryDir files;
@@ -1769,8 +1769,8 @@ static void write(const QString &path, const QString &content) {
         QVERIFY(!player->videoSink()->videoFrame().isValid());
     }
     void animatedImages() {
-        if (!qEnvironmentVariableIsSet("HYPE_GUI_TESTS"))
-            QSKIP("Set HYPE_GUI_TESTS=1 with local multimedia access");
+        if (qEnvironmentVariable("HYPE_GUI_TESTS") == "0")
+            QSKIP("HYPE_GUI_TESTS=0 skips the window-level tests");
         QTemporaryDir files;
         QVERIFY(QDir().mkpath(files.path() + "/images"));
         QVERIFY(QFile::copy(QFINDTESTDATA("fixtures/animated.webp"),
@@ -1889,8 +1889,8 @@ static void write(const QString &path, const QString &content) {
         QCOMPARE(empty.property("end").toInt(), 11);
     }
     void typingCodeInVisualEditorKeepsTheDeck() {
-        if (!qEnvironmentVariableIsSet("HYPE_GUI_TESTS"))
-            QSKIP("Set HYPE_GUI_TESTS=1 with local graphics access");
+        if (qEnvironmentVariable("HYPE_GUI_TESTS") == "0")
+            QSKIP("HYPE_GUI_TESTS=0 skips the window-level tests");
         QTemporaryDir files;
         const QString path = files.path() + "/presentation.md";
         const QString tail = "---\n# Following\n---\n# Last\n";
@@ -1985,8 +1985,8 @@ static void write(const QString &path, const QString &content) {
         QCOMPARE(deck.count(), 5);
     }
     void overviewMode() {
-        if (!qEnvironmentVariableIsSet("HYPE_GUI_TESTS"))
-            QSKIP("Set HYPE_GUI_TESTS=1 with local graphics access");
+        if (qEnvironmentVariable("HYPE_GUI_TESTS") == "0")
+            QSKIP("HYPE_GUI_TESTS=0 skips the window-level tests");
         QQuickStyle::setStyle("Basic");
         qmlRegisterType<SlideItem>("Hype", 1, 0, "SlideCanvas");
         qmlRegisterType<AppTheme>("Hype", 1, 0, "AppTheme");
@@ -2180,8 +2180,8 @@ static void write(const QString &path, const QString &content) {
         QTRY_VERIFY(slideEditor->hasActiveFocus());
     }
     void visualOperations() {
-        if (!qEnvironmentVariableIsSet("HYPE_GUI_TESTS"))
-            QSKIP("Set HYPE_GUI_TESTS=1 with local multimedia access");
+        if (qEnvironmentVariable("HYPE_GUI_TESTS") == "0")
+            QSKIP("HYPE_GUI_TESTS=0 skips the window-level tests");
         QQuickStyle::setStyle("Basic");
         qmlRegisterType<SlideItem>("Hype", 1, 0, "SlideCanvas");
         qmlRegisterType<AppTheme>("Hype", 1, 0, "AppTheme");
@@ -3338,8 +3338,8 @@ static void write(const QString &path, const QString &content) {
         QCOMPARE(d.count(), 2);
     }
     void navigationKeepsDocumentControlsStable() {
-        if (!qEnvironmentVariableIsSet("HYPE_GUI_TESTS"))
-            QSKIP("Set HYPE_GUI_TESTS=1 with local multimedia access");
+        if (qEnvironmentVariable("HYPE_GUI_TESTS") == "0")
+            QSKIP("HYPE_GUI_TESTS=0 skips the window-level tests");
         QQuickStyle::setStyle("Basic");
         qmlRegisterType<SlideItem>("Hype", 1, 0, "SlideCanvas");
         qmlRegisterType<AppTheme>("Hype", 1, 0, "AppTheme");
@@ -3741,8 +3741,8 @@ static void write(const QString &path, const QString &content) {
         QCOMPARE(provider.requestImage(id, nullptr, QSize(340, 192)).cacheKey(), first.cacheKey());
     }
     void rapidImageNavigation() {
-        if (!qEnvironmentVariableIsSet("HYPE_GUI_TESTS"))
-            QSKIP("Set HYPE_GUI_TESTS=1 with local multimedia access");
+        if (qEnvironmentVariable("HYPE_GUI_TESTS") == "0")
+            QSKIP("HYPE_GUI_TESTS=0 skips the window-level tests");
         QTemporaryDir tmp;
         QVERIFY(QDir().mkpath(tmp.path() + "/images"));
         QString source;
