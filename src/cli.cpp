@@ -249,6 +249,9 @@ int render(const QStringList &arguments) {
         output = name;
     else if (QFileInfo(output).isDir())
         output = QDir(output).filePath(name);
+    const QString target = QFileInfo(output).canonicalFilePath();
+    if (!target.isEmpty() && target == QFileInfo(deck.path()).canonicalFilePath())
+        return fail("Choose an output other than the presentation itself.");
     QDir().mkpath(QFileInfo(output).absolutePath());
     // A slide with problems still renders, with the problems on a banner, so it can be looked at.
     const auto problems = slideProblemsAt(deck, parsed, number - 1);
