@@ -10,6 +10,7 @@
 #include <QClipboard>
 #include <QDBusArgument>
 #include <QDBusConnection>
+#include <QDBusConnectionInterface>
 #include <QDBusMessage>
 #include <QDBusObjectPath>
 #include <QDBusVirtualObject>
@@ -176,6 +177,19 @@ static void write(const QString &path, const QString &content) {
         // A portal that exits without answering releases the app with an error.
         portal.silent = true;
         QTimer::singleShot(100, [&] { bus.unregisterService("org.freedesktop.portal.Desktop"); });
+        QVERIFY(FileDialog::choose(false, "/tmp", "Media", {"*.png"}, &error).isEmpty());
+        QCOMPARE(error, "The desktop file chooser closed without answering.");
+
+        // So does one replaced by another process, which takes the name over directly.
+        QVERIFY(bus.interface()->registerService("org.freedesktop.portal.Desktop",
+            QDBusConnectionInterface::DontQueueService, QDBusConnectionInterface::AllowReplacement).value()
+            == QDBusConnectionInterface::ServiceRegistered);
+        auto replacement = QDBusConnection::connectToBus(QDBusConnection::SessionBus, "test-file-portal-replacement");
+        const auto disconnect = qScopeGuard([] { QDBusConnection::disconnectFromBus("test-file-portal-replacement"); });
+        QTimer::singleShot(100, [&] {
+            replacement.interface()->registerService("org.freedesktop.portal.Desktop",
+                QDBusConnectionInterface::ReplaceExistingService, QDBusConnectionInterface::AllowReplacement);
+        });
         QVERIFY(FileDialog::choose(false, "/tmp", "Media", {"*.png"}, &error).isEmpty());
         QCOMPARE(error, "The desktop file chooser closed without answering.");
     }
