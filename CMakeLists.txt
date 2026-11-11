@@ -15,10 +15,12 @@ add_compile_options(-fno-exceptions)
 add_compile_definitions(QT_NO_EXCEPTIONS)
 
 # A Qt from Qt's installer unpacked under build/qt/ wins over an older system
-# Qt, newest first; CMAKE_PREFIX_PATH picks any other.
-file(GLOB bundled_qt LIST_DIRECTORIES true ${CMAKE_SOURCE_DIR}/build/qt/*/gcc_64)
-list(SORT bundled_qt COMPARE NATURAL ORDER DESCENDING)
-list(PREPEND CMAKE_PREFIX_PATH ${bundled_qt})
+# Qt, newest first, unless CMAKE_PREFIX_PATH picks another.
+if(NOT CMAKE_PREFIX_PATH AND NOT DEFINED ENV{CMAKE_PREFIX_PATH})
+  file(GLOB bundled_qt LIST_DIRECTORIES true ${CMAKE_SOURCE_DIR}/build/qt/*/gcc_64)
+  list(SORT bundled_qt COMPARE NATURAL ORDER DESCENDING)
+  set(CMAKE_PREFIX_PATH ${bundled_qt})
+endif()
 
 find_package(Qt6 6.9 REQUIRED COMPONENTS
   Core Gui Qml Quick QuickControls2 Multimedia Concurrent DBus Svg Widgets Test)
