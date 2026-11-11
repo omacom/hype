@@ -204,6 +204,24 @@ static void write(const QString &path, const QString &content) {
                      qPrintable(value));
         }
     }
+    void slidesReadThemeColorFormats() {
+        QTemporaryDir omarchy;
+        const QByteArray previous = qgetenv("OMARCHY_PATH");
+        const auto restore = qScopeGuard([&] { qputenv("OMARCHY_PATH", previous); });
+        qputenv("OMARCHY_PATH", omarchy.path().toUtf8());
+        QVERIFY(QDir().mkpath(omarchy.filePath("themes/hype-formats")));
+        write(omarchy.filePath("themes/hype-formats/colors.toml"),
+              "background = #101020\nforeground = '#eeeeee' # note\naccent = \"#7788ff\"\n");
+        Deck named;
+        named.editSource("---\ntheme: hype-formats\n---\n\n# One\n");
+        QCOMPARE(named.background(), QColor("#101020"));
+        QCOMPARE(named.foreground(), QColor("#eeeeee"));
+        Deck chosen;
+        chosen.chooseTheme("hype-formats");
+        QVERIFY(chosen.source().contains("color_background: \"#101020\""));
+        QVERIFY(chosen.source().contains("color_foreground: \"#eeeeee\""));
+        QCOMPARE(chosen.accent(), QColor("#7788ff"));
+    }
     void followsDesktopTheme() {
         QTemporaryDir files;
         const QString current = files.path() + "/current";

@@ -19,6 +19,21 @@ static QColor contrastInk(const QColor &color) {
                              .0722 * linear(color.blueF());
     return luminance > .179 ? QColor("#111111") : QColor("#ffffff");
 }
+QMap<QString, QString> readThemeColors(const QString &path) {
+    QMap<QString, QString> colors;
+    QFile file(path);
+    if (path.isEmpty() || !file.open(QIODevice::ReadOnly))
+        return colors;
+    // Quoted or bare hex with an optional note. Quotes must pair; comments need no gap.
+    static const QRegularExpression entry(
+        R"re(^\s*([a-z_]+)\s*=\s*(["']?)(#[0-9a-fA-F]{6})\2\s*(?:#.*)?\s*$)re");
+    while (!file.atEnd()) {
+        const auto match = entry.match(QString::fromUtf8(file.readLine()));
+        if (match.hasMatch())
+            colors[match.captured(1)] = match.captured(3);
+    }
+    return colors;
+}
 AppTheme::AppTheme(QObject *parent)
     : AppTheme(qEnvironmentVariable("XDG_STATE_HOME", QDir::homePath() + "/.local/state") +
                    "/omarchy/current",
@@ -35,17 +50,9 @@ AppTheme::AppTheme(const QString &currentDirectory, QObject *parent)
 void AppTheme::reload() {
     const QString theme = m_currentDirectory + "/theme", path = theme + "/colors.toml";
     QMap<QString, QColor> values;
-    QFile file(path);
-    if (file.open(QIODevice::ReadOnly)) {
-        // Quoted or bare hex with an optional note. Quotes must pair; comments need no gap.
-        const QRegularExpression entry(
-            R"re(^\s*([a-z_]+)\s*=\s*(["']?)(#[0-9a-fA-F]{6})\2\s*(?:#.*)?\s*$)re");
-        while (!file.atEnd()) {
-            const auto match = entry.match(QString::fromUtf8(file.readLine()));
-            if (match.hasMatch())
-                values[match.captured(1)] = QColor(match.captured(3));
-        }
-    }
+    const auto written = readThemeColors(path);
+    for (auto it = written.begin(); it != written.end(); ++it)
+        values[it.key()] = QColor(it.value());
     const QColor bg = values.value("background", QColor("#1a1b26"));
     const QColor fg = values.value("foreground", QColor("#c0caf5"));
     const QColor accent = values.value("accent", QColor("#7aa2f7"));

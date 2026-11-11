@@ -1,8 +1,13 @@
 #pragma once
 #include <QFileSystemWatcher>
+#include <QMap>
 #include <QObject>
 #include <QTimer>
 #include <QVariantMap>
+
+// The hex colors in an Omarchy colors.toml by key, as written, quoted or bare,
+// with or without a trailing note.
+QMap<QString, QString> readThemeColors(const QString &path);
 
 class AppTheme : public QObject {
     Q_OBJECT
