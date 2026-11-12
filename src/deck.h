@@ -181,6 +181,8 @@ class Deck : public QAbstractListModel {
     mutable QVariantMap m_paletteCache;
     QString m_source, m_saved, m_path, m_status;
     ParsedDeck m_parsed;
+    // Whether m_parsed.error came from checking known slide boundaries rather than parsing the whole document.
+    bool m_slideChecked = false;
     int m_selected = 0, m_anchor = 0, m_revision = 0;
     QVector<State> m_undo, m_redo;
     QMap<QString, QString> m_themes;

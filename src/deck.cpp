@@ -286,13 +286,10 @@ void Deck::retranslate() {
     retranslateSlides();
     m_mediaCache.clear();
     m_renderIds.clear();
-    const QString old = m_parsed.error;
-    if (!old.isEmpty()) {
-        const QString document = parseDeck(m_source).error;
-        m_parsed.error = document.isEmpty() ? slidesError(m_parsed) : document;
-        if (m_status == old)
-            setStatus(m_parsed.error);
-    }
+    // The same check that found the error, since a slide may begin with --- that only its boundaries explain. The
+    // status line is a flash of a few seconds, so it is left to run out rather than shown again.
+    if (!m_parsed.error.isEmpty())
+        m_parsed.error = m_slideChecked ? slidesError(m_parsed) : parseDeck(m_source).error;
     ++m_revision;
     notifyChanged();
 }
@@ -334,6 +331,7 @@ void Deck::apply(const QString &source, int selected, bool history, int anchor,
         m_renderIds.clear();
     m_source = source;
     m_parsed = parsed;
+    m_slideChecked = structure;
     m_selected = qBound(0, selected, count() - 1);
     m_anchor = qBound(0, anchor < 0 ? selected : anchor, count() - 1);
     ++m_revision;

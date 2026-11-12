@@ -4819,16 +4819,27 @@ static void write(const QString &path, const QString &content) {
         QObject::connect(&translator, &Translator::changed, &deck, &Deck::retranslate);
         const QString slide = "![position=middle](images/x.png)";
         QCOMPARE(parseMedia(slide, dir.path()).error, QString("Unknown position"));
-        deck.editSource("# One\n\n```\nunclosed\n");
-        QCOMPARE(deck.title(), QString("Untitled"));
+        // Edited within known boundaries, so the slide's leading --- is a rule, not front matter.
+        deck.editSource("# One\n");
+        deck.editSlide("---\n```\nunclosed");
         QCOMPARE(deck.status(), QString("Unclosed code fence"));
+        QCOMPARE(deck.title(), QString("Untitled"));
+        const QString renderId = deck.renderId(0);
         QSignalSpy changes(&deck, &Deck::changed);
 
         writeFile(dir.filePath("language"), "da\n");
         QTRY_COMPARE(deck.title(), QString("Uden titel"));
         QVERIFY(changes.count() > 0);
-        QCOMPARE(deck.status(), QString("Uafsluttet kodeblok"));
         QCOMPARE(parseMedia(slide, dir.path()).error, QString("Ukendt placering"));
+        // A thumbnail's problem banner is drawn again, in Danish.
+        QVERIFY(deck.renderId(0) != renderId);
+        // The deck's own error, which an attempt to save names, is the same problem in the new language.
+        QVERIFY(!deck.savePath(dir.filePath("talk.md")));
+        QVERIFY2(deck.status().contains("Uafsluttet kodeblok"), qPrintable(deck.status()));
+        // Undo checks known boundaries again, through the same cache.
+        deck.undo();
+        deck.redo();
+        QCOMPARE(deck.status(), QString("Uafsluttet kodeblok"));
     }
     void windowFollowsTheLanguage() {
         if (qEnvironmentVariable("HYPE_GUI_TESTS") == "0") QSKIP("HYPE_GUI_TESTS=0 skips the window-level tests");
