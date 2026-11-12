@@ -31,6 +31,9 @@ QString withMediaDirectives(const QString &source, const QStringList &remove,
                             const QStringList &add);
 QString speakerNotes(const QString &source);
 Media parseMedia(const QString &source, const QString &base);
+// Parse errors are cached in the language they were made in; a language switch moves to a new generation.
+int translationGeneration();
+void retranslateSlides();
 QString ensurePoster(const QString &video, const QString &base);
 QStringList slideProblems(const QString &source, const QString &base);
 void layoutSlideText(QTextDocument &document, const QString &markdown, const QVariantMap &palette,

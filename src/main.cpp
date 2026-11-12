@@ -2,6 +2,7 @@
 #include "cli.h"
 #include "deck.h"
 #include "renderer.h"
+#include "translator.h"
 #include <QGuiApplication>
 #include <QCommandLineParser>
 #include <QDBusConnection>
@@ -18,6 +19,11 @@
 #include <QScopeGuard>
 #include <QTimer>
 #include <cstdio>
+#include <optional>
+// Qt's own words in the window, the text fields' right-click menu, which reach the Translator because it ignores the
+// context. Qt translates them itself only for the languages it ships a catalog for; Undo, Redo and Delete are Hype's too.
+[[maybe_unused]] static const char *const qtStrings[] = {QT_TR_NOOP("Cut"), QT_TR_NOOP("Copy"), QT_TR_NOOP("Paste"),
+                                                         QT_TR_NOOP("Select All")};
 // The desktop's interface font, e.g. "Adwaita Sans 11", which the gtk3 platform
 // theme used to supply. Without a settings portal Qt's default font stays.
 static void adoptDesktopFont() {
@@ -78,8 +84,16 @@ int main(int argc, char **argv) {
     if (arguments.value(1) == "open")
         arguments.removeAt(1);
     args.process(arguments);
-    Deck deck;
     const bool exportWorker = args.isSet(snapshotOption);
+    const bool exporting = args.isSet("pdf") || args.isSet("pptx") || args.isSet("render") || args.isSet("save");
+    // The window, and the export worker whose progress it shows, follow the Omarchy language; commands and
+    // command-line exports stay in English for the scripts and agents that read them.
+    std::optional<Translator> translator;
+    if (!exporting || exportWorker) {
+        translator.emplace();
+        app.installTranslator(&*translator);
+    }
+    Deck deck;
     auto report = [](const QJsonObject &event) {
         const auto line = QJsonDocument(event).toJson(QJsonDocument::Compact);
         fprintf(stdout, "%s\n", line.constData());
@@ -96,7 +110,6 @@ int main(int argc, char **argv) {
         });
     }
     auto positional = args.positionalArguments();
-    const bool exporting = args.isSet("pdf") || args.isSet("pptx") || args.isSet("render") || args.isSet("save");
     if (exporting && positional.isEmpty() && !exportWorker) {
         fprintf(stderr, "Name a Markdown presentation to %s.\n", args.isSet("save") ? "save" : "export");
         return 1;
@@ -139,6 +152,8 @@ int main(int argc, char **argv) {
     qmlRegisterType<SlideItem>("Hype", 1, 0, "SlideCanvas");
     qmlRegisterType<AppTheme>("Hype", 1, 0, "AppTheme");
     QQmlApplicationEngine engine;
+    QObject::connect(&*translator, &Translator::changed, &deck, &Deck::retranslate);
+    QObject::connect(&*translator, &Translator::changed, &engine, &QQmlEngine::retranslate);
     QObject::connect(&engine, &QQmlEngine::warnings, [](const QList<QQmlError> &errors) {
         for (const auto &error : errors)
             fprintf(stderr, "%s\n", qPrintable(error.toString()));
