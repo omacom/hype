@@ -5,7 +5,7 @@ pkgdesc='Simple Markdown presentations with a visual slide editor'
 arch=('x86_64' 'aarch64')
 license=('MIT')
 depends=('qt6-base>=6.9' 'qt6-declarative>=6.9' 'qt6-multimedia>=6.9' 'qt6-imageformats' 'qt6-svg' 'ffmpeg' 'source-highlight' 'zlib' 'libwebp' 'xdg-desktop-portal')
-makedepends=('gcc' 'make')
+makedepends=('cmake' 'gcc' 'make' 'pkgconf')
 source=()
 sha256sums=()
 build() {
