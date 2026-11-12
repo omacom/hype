@@ -41,6 +41,7 @@ class Deck : public QAbstractListModel {
     Q_PROPERTY(QString title READ title NOTIFY changed)
     Q_PROPERTY(QString sizeLabel READ sizeLabel NOTIFY changed)
     Q_PROPERTY(QString status READ status NOTIFY statusChanged)
+    Q_PROPERTY(bool externalChange READ externalChange NOTIFY statusChanged)
     Q_PROPERTY(bool compressingImage READ compressingImage NOTIFY compressingImageChanged)
     Q_PROPERTY(bool exporting READ exporting NOTIFY exportChanged)
     Q_PROPERTY(double exportProgress READ exportProgress NOTIFY exportChanged)
@@ -81,6 +82,7 @@ class Deck : public QAbstractListModel {
     int count() const { return m_parsed.slides.size(); }
     int revision() const { return m_revision; }
     bool dirty() const { return m_source != m_saved; }
+    bool externalChange() const { return m_externalChange; }
     QString path() const { return m_path; }
     QString title() const;
     qint64 totalBytes() const;
@@ -131,6 +133,7 @@ class Deck : public QAbstractListModel {
     Q_INVOKABLE void openDialog();
     Q_INVOKABLE void save();
     Q_INVOKABLE void saveAs();
+    Q_INVOKABLE void overwriteWithBackup();
     Q_INVOKABLE void newDeck();
     Q_INVOKABLE void importDialog();
     Q_INVOKABLE bool importMedia(const QUrl &url, bool newSlide = false);
@@ -218,5 +221,6 @@ class Deck : public QAbstractListModel {
     void watch();
     void watchMedia();
     void notifyChanged();
+    void setExternalChange(bool value);
     void reloadExternal(const QString &disk);
 };

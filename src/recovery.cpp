@@ -132,7 +132,7 @@ bool Deck::restoreSnapshot(const QByteArray &bytes, bool opening) {
     m_recovering = true;
     apply(source, snapshot["selected"].toInt(), !opening, snapshot["anchor"].toInt(), &parsed);
     m_recovering = false;
-    if (conflict) m_externalChange = true;
+    if (conflict) setExternalChange(true);
     m_checkpointSource = source;
     m_checkpointPath = m_path;
     if (opening && dirty())

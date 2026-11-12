@@ -969,10 +969,29 @@ ApplicationWindow {
                 width: Math.min(implicitWidth, summary.room); elide: Text.ElideRight
                 text: deck.exporting ? deck.exportStatus
                     : win.flash ? win.flash
+                    : deck.externalChange ? "Changed on disk — edited elsewhere"
                     : deck.selectionCount > 1 ? deck.selectionCount + " slides selected" : "Slide " + (deck.selected+1) + " of " + deck.count
-                font.pixelSize: 12; color: win.flash && win.flashFailed && !deck.exporting ? win.ui.error : win.ui.muted
+                font.pixelSize: 12; color: deck.externalChange || (win.flash && win.flashFailed && !deck.exporting) ? win.ui.error : win.ui.muted
                 ToolTip.visible: statusHover.hovered && truncated; ToolTip.text: text
                 HoverHandler { id: statusHover }
+            }
+            Row {
+                visible: deck.externalChange
+                anchors.horizontalCenter: parent.horizontalCenter
+                spacing: 6
+                Button {
+                    id: keepMineButton; text: "Keep mine"; implicitHeight: 24; padding: 7
+                    hoverEnabled: true; onClicked: deck.overwriteWithBackup()
+                    ToolTip.visible: hovered; ToolTip.delay: 400; ToolTip.text: "Save your version; back up the file changed on disk"
+                    background: Rectangle { color: keepMineButton.hovered ? win.ui.accentHover : win.ui.accent; radius: win.softRadius }
+                    contentItem: Label { text: keepMineButton.text; font.pixelSize: 11; color: win.ui.accentText; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                }
+                Button {
+                    id: keepBothButton; text: "Save As…"; implicitHeight: 24; padding: 7
+                    hoverEnabled: true; onClicked: deck.saveAs()
+                    background: Rectangle { color: keepBothButton.hovered ? win.ui.hover : win.ui.button; radius: win.softRadius }
+                    contentItem: Label { text: keepBothButton.text; font.pixelSize: 11; color: win.ui.foreground; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                }
             }
         }
         Rectangle {
