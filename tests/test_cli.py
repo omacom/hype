@@ -53,6 +53,16 @@ class CliTests(unittest.TestCase):
         self.assertIn('already exists', self.hype('new', self.deck, code=1).stderr)
         self.assertIn('paper', self.hype('new', self.root / 'other.md', '--theme', 'nope', code=1).stderr)
 
+    def test_save_applies_a_theme_and_exits(self):
+        self.write('# One\n')
+        self.hype(self.deck, '--theme', 'paper', '--save')
+        self.assertIn('color_background: "#ffffff"', self.deck.read_text())
+        self.assertIn('to save', self.hype('--theme', 'paper', '--save', code=1).stderr)
+        unfinished = '# One\n\n```ruby\nputs 1\n'
+        self.write(unfinished)
+        self.assertTrue(self.hype(self.deck, '--theme', 'paper', '--save', code=1).stderr.strip())
+        self.assertEqual(self.deck.read_text(), unfinished)
+
     def test_render_never_overwrites_the_presentation_and_reports_its_manifest(self):
         self.write(DECK)
         link = self.root / 'link.md'

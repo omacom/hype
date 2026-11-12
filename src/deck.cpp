@@ -1,4 +1,5 @@
 #include "deck.h"
+#include "apptheme.h"
 #include "budget.h"
 #include "animationexport.h"
 #include "filedialog.h"
@@ -553,16 +554,8 @@ QVariantMap Deck::palette() const {
         {"background", "#1a1b26"}, {"foreground", "#c0caf5"}, {"accent", "#7aa2f7"},
         {"green", "#9ece6a"},      {"red", "#f7768e"},        {"yellow", "#e0af68"},
         {"magenta", "#bb9af7"},    {"cyan", "#7dcfff"},       {"dark_foreground", "#787c99"}};
-    QFile f(m_themes.value(themeName()));
-    if (f.open(QIODevice::ReadOnly)) {
-        QRegularExpression re("^([a-z_]+)\\s*=\\s*\"(#[0-9a-fA-F]{6})\"",
-                              QRegularExpression::MultilineOption);
-        auto matches = re.globalMatch(QString::fromUtf8(f.readAll()));
-        while (matches.hasNext()) {
-            auto m = matches.next();
-            colors[m.captured(1)] = m.captured(2);
-        }
-    }
+    for (const auto &[key, value] : readThemeColors(m_themes.value(themeName())))
+        colors[key] = value;
     for (const auto &key : colors.keys()) {
         QString v = scalar(m_parsed.header, "color_" + key);
         if (QColor(v).isValid())
@@ -581,16 +574,8 @@ void Deck::chooseTheme(const QString &name) {
     // Remove old palette before reading the newly selected installed theme.
     header.remove(
         QRegularExpression("^color_[a-z_]+:[^\\n]*\\n", QRegularExpression::MultilineOption));
-    QFile file(m_themes.value(name));
-    if (file.open(QIODevice::ReadOnly)) {
-        QRegularExpression re("^([a-z_]+)\\s*=\\s*\"(#[0-9a-fA-F]{6})\"",
-                              QRegularExpression::MultilineOption);
-        auto matches = re.globalMatch(QString::fromUtf8(file.readAll()));
-        while (matches.hasNext()) {
-            auto m = matches.next();
-            header = setScalar(header, "color_" + m.captured(1), m.captured(2));
-        }
-    }
+    for (const auto &[key, value] : readThemeColors(m_themes.value(name)))
+        header = setScalar(header, "color_" + key, value);
     replaceHeader(header);
 }
 QStringList Deck::mediaPositions() const { return ::mediaPositions(); }

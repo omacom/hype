@@ -45,7 +45,7 @@ int main(int argc, char **argv) {
     bool windowless = command;
     for (int i = 1; i < argc; ++i) {
         const QByteArray argument(argv[i]);
-        for (const char *option : {"--pdf", "--pptx", "--render", "--help", "--version"})
+        for (const char *option : {"--pdf", "--pptx", "--render", "--save", "--help", "--version"})
             windowless = windowless || argument.startsWith(option);
         windowless = windowless || argument == "-h" || argument == "-v";
     }
@@ -66,7 +66,7 @@ int main(int argc, char **argv) {
     args.addOption({"pptx", "Export rendered PowerPoint and exit", "file"});
     args.addOption({"render", "Render slide PNGs and manifest and exit", "directory"});
     args.addOption({"theme", "Apply installed theme", "name"});
-    args.addOption({"save", "Save changes (for theme snapshots)"});
+    args.addOption({"save", "Save changes, such as --theme, and exit"});
     args.addOption({"slide", "Select a slide (1-based)", "number"});
     args.addOption({"markdown", "Start in full-document Markdown mode"});
     args.addOption({"overview", "Start in slide overview mode"});
@@ -96,9 +96,9 @@ int main(int argc, char **argv) {
         });
     }
     auto positional = args.positionalArguments();
-    const bool exporting = args.isSet("pdf") || args.isSet("pptx") || args.isSet("render");
+    const bool exporting = args.isSet("pdf") || args.isSet("pptx") || args.isSet("render") || args.isSet("save");
     if (exporting && positional.isEmpty() && !exportWorker) {
-        fprintf(stderr, "Name a Markdown presentation to export.\n");
+        fprintf(stderr, "Name a Markdown presentation to %s.\n", args.isSet("save") ? "save" : "export");
         return 1;
     }
     if (!positional.isEmpty() && !deck.loadPath(positional[0], !exporting)) {
@@ -109,11 +109,14 @@ int main(int argc, char **argv) {
         deck.reopenLastPresentation();
     if (args.isSet("theme"))
         deck.chooseTheme(args.value("theme"));
-    if (args.isSet("save"))
-        deck.save();
+    bool success = true, headless = false;
+    // Like an export, a save from the command line writes the file and exits.
+    if (args.isSet("save")) {
+        headless = true;
+        success = deck.savePath(deck.path());
+    }
     if (args.isSet("slide"))
         deck.select(args.value("slide").toInt() - 1);
-    bool success = true, headless = false;
     for (const QString &option : {QString("pdf"), QString("pptx"), QString("render")})
         if (args.isSet(option)) {
             headless = true;
