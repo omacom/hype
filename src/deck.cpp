@@ -161,11 +161,27 @@ static QString slidesError(const ParsedDeck &parsed) {
     return {};
 }
 // A new presentation, whose headline the window selects so typing replaces it.
-static QString starterSource() { return "---\ntheme: tokyo-night\n---\n\n# " + tr("Your next idea") + "\n"; }
+// Writes the theme's colors into the header too, so the deck looks the same where the theme isn't installed.
+static QString themedHeader(QString header, const QString &name, const QString &colorsPath) {
+    header = setScalar(header, "theme", name);
+    header.remove(QRegularExpression("^color_[a-z_]+:[^\\n]*\\n", QRegularExpression::MultilineOption));
+    for (const auto &[key, value] : readThemeColors(colorsPath))
+        header = setScalar(header, "color_" + key, value);
+    return header;
+}
+// A new presentation starts in the desktop's current Omarchy theme.
+static QString starterSource(const QMap<QString, QString> &themes) {
+    QFile current(qEnvironmentVariable("XDG_STATE_HOME", QDir::homePath() + "/.local/state") +
+                  "/omarchy/current/theme.name");
+    QString name = current.open(QIODevice::ReadOnly) ? QString::fromUtf8(current.readAll()).trimmed() : QString();
+    if (!themes.contains(name))
+        name = "tokyo-night";
+    return themedHeader(QString(), name, themes.value(name)) + "\n# " + tr("Your next idea") + "\n";
+}
 Deck::Deck(QObject *parent, const QString &exportProgram) : QAbstractListModel(parent),
     m_exportProgram(exportProgram.isEmpty() ? QCoreApplication::applicationFilePath() : exportProgram) {
     discoverThemes();
-    m_source = starterSource();
+    m_source = starterSource(m_themes);
     m_parsed = parseDeck(m_source);
     m_saved = m_source;
     // Writers may truncate, or remove and recreate, the file; read it once they settle.
@@ -511,6 +527,7 @@ void Deck::redo() {
     apply(state.source, state.selected, false, state.anchor, &state.parsed);
 }
 void Deck::discoverThemes() {
+    m_themes.clear();
     QString root = qEnvironmentVariable("OMARCHY_PATH", QDir::homePath() + "/.local/share/omarchy");
     QStringList roots{root + "/themes", QDir::homePath() + "/omarchy/themes",
                       QDir::homePath() + "/.config/omarchy/themes"};
@@ -591,13 +608,7 @@ QColor Deck::background() const { return QColor(palette()["background"].toString
 QColor Deck::foreground() const { return QColor(palette()["foreground"].toString()); }
 QColor Deck::accent() const { return QColor(palette()["accent"].toString()); }
 void Deck::chooseTheme(const QString &name) {
-    QString header = setScalar(m_parsed.header, "theme", name);
-    // Remove old palette before reading the newly selected installed theme.
-    header.remove(
-        QRegularExpression("^color_[a-z_]+:[^\\n]*\\n", QRegularExpression::MultilineOption));
-    for (const auto &[key, value] : readThemeColors(m_themes.value(name)))
-        header = setScalar(header, "color_" + key, value);
-    replaceHeader(header);
+    replaceHeader(themedHeader(m_parsed.header, name, m_themes.value(name)));
 }
 QStringList Deck::mediaPositions() const { return ::mediaPositions(); }
 QVariantMap Deck::media() const {
@@ -959,10 +970,13 @@ bool Deck::saveCopyPath(const QString &path) {
 void Deck::newDeck() {
     if (!confirmDiscard())
         return;
+    // The current theme may have been installed since Hype opened.
+    discoverThemes();
+    emit themesChanged();
     m_path.clear();
     m_saved.clear();
     m_externalChange = false;
-    apply(starterSource(), 0);
+    apply(starterSource(m_themes), 0);
     m_undo.clear();
     m_redo.clear();
     watch();

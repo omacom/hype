@@ -16,7 +16,7 @@ Then open **Hype** from the app launcher, or run `hype` in a terminal.
 
 ## Make a presentation
 
-Open Hype from your app launcher. It reopens your last presentation; use **Ctrl+N** to start a new one, or **Ctrl+O** to choose a Markdown file.
+Open Hype from your app launcher. It reopens your last presentation; use **Ctrl+N** to start a new one in your current Omarchy theme, or **Ctrl+O** to choose a Markdown file.
 
 In **Visual** mode, select a slide in the sidebar and write its Markdown below the preview. Changes appear as you type. Drag the divider to give the preview or editor more room. Two buttons in the top bar switch modes. The grid button, or **Ctrl+M**, turns the **Overview** on and off, returning to the mode you came from. The button beside it shows a slide in **Visual** mode and `#` in **Markdown** mode; click it, or press **Ctrl+.**, to switch between them. Markdown mode edits the whole presentation, with the same formatting bar on top.
 

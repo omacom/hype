@@ -309,7 +309,7 @@ int exportDeck(const QStringList &arguments) {
 int create(const QStringList &arguments) {
     Command command("new", "Start a presentation, with images/ and videos/ beside it.");
     command.parser.addOption({"title", "Presentation title (default: the file name)", "title"});
-    command.parser.addOption({"theme", "Installed theme; see hype themes (default: tokyo-night)", "name"});
+    command.parser.addOption({"theme", "Installed theme; see hype themes (default: the current Omarchy theme)", "name"});
     command.parser.addOption({"font", "Installed font family (default: JetBrains Mono)", "family"});
     command.json();
     command.parser.process(arguments);
