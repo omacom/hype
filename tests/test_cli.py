@@ -53,6 +53,9 @@ class CliTests(unittest.TestCase):
         self.assertIn('already exists', self.hype('new', self.deck, code=1).stderr)
         self.assertIn('paper', self.hype('new', self.root / 'other.md', '--theme', 'nope', code=1).stderr)
 
+    def test_version_comes_from_the_build(self):
+        self.assertRegex(self.hype('--version').stdout, r'^hype [0-9a-z][^\s]*\n$')
+
     def test_save_applies_a_theme_and_exits(self):
         self.write('# One\n')
         self.hype(self.deck, '--theme', 'paper', '--save')
