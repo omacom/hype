@@ -679,6 +679,7 @@ ApplicationWindow {
     Shortcut { enabled: !win.popupOpen && !deck.compressingImage; sequences: [StandardKey.Open]; onActivated: deck.openDialog() }
     Shortcut { enabled: !win.popupOpen && !deck.compressingImage; sequences: [StandardKey.Save]; onActivated: deck.save() }
     Shortcut { enabled: !win.popupOpen && !deck.compressingImage; sequences: [StandardKey.SaveAs]; onActivated: deck.saveAs() }
+    Shortcut { enabled: !win.popupOpen && !deck.compressingImage; sequences: [StandardKey.Quit]; context: Qt.ApplicationShortcut; onActivated: win.close() }
     Shortcut { sequence: "Ctrl+E"; enabled: !win.popupOpen && !deck.compressingImage && !win.presenting && !deck.exporting; onActivated: deck.exportDialog("pdf") }
     Shortcut { sequence: "Ctrl+Shift+E"; enabled: !win.popupOpen && !deck.compressingImage && !win.presenting && !deck.exporting; onActivated: deck.exportDialog("pptx") }
     Shortcut { sequences: ["?", "Shift+?"]; enabled: !win.popupOpen && !deck.compressingImage && !win.presenting && !slideEditor.activeFocus && !sourceEditor.activeFocus; onActivated: shortcutsOverlay.open() }
@@ -1120,7 +1121,7 @@ ApplicationWindow {
         background: Rectangle { color: Qt.alpha(win.ui.panel, 0.92); border.color: win.ui.windowBorder; border.width: 2; radius: win.rounding }
         readonly property var groups: [
             { title: "Presentation", keys: [
-                ["Ctrl+N", "New presentation"], ["Ctrl+O", "Open"], ["Ctrl+S", "Save"], ["Ctrl+Shift+S", "Save as"],
+                ["Ctrl+N", "New presentation"], ["Ctrl+O", "Open"], ["Ctrl+S", "Save"], ["Ctrl+Shift+S", "Save as"], ["Ctrl+Q", "Quit"],
                 ["Ctrl+E", "Export as PDF"], ["Ctrl+Shift+E", "Export as PowerPoint"], ["Ctrl+Space / F5", "Present"], ["Shift+F5", "Present from first slide"], ["Esc", "Stop presenting"],
                 ["Space", "Play or pause video while presenting"] ] },
             { title: "View", keys: [

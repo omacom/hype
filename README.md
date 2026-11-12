@@ -205,6 +205,7 @@ Slide navigation and selection shortcuts apply when the sidebar or preview has f
 | --- | --- |
 | Ctrl+N / Ctrl+O | New presentation / open file |
 | Ctrl+S / Ctrl+Shift+S | Save / save as |
+| Ctrl+Q | Quit |
 | Ctrl+E / Ctrl+Shift+E | Export as PDF / PowerPoint |
 | Ctrl+M | Overview on / off |
 | Ctrl+. | Markdown source on / off |
