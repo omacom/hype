@@ -63,6 +63,21 @@ class CliTests(unittest.TestCase):
         self.assertTrue(self.hype(self.deck, '--theme', 'paper', '--save', code=1).stderr.strip())
         self.assertEqual(self.deck.read_text(), unfinished)
 
+    def test_render_never_overwrites_the_presentation_and_reports_its_manifest(self):
+        self.write(DECK)
+        link = self.root / 'link.md'
+        link.symlink_to(self.deck)
+        for output in (self.deck, link):
+            self.assertIn('presentation itself', self.hype('render', self.deck, '--slide', 1, '-o', output, code=1).stderr)
+        self.assertEqual(self.deck.read_text(), DECK)
+        alias = self.root / 'alias.md'
+        os.link(self.deck, alias)
+        self.hype('render', self.deck, '--slide', 1, '-o', alias)
+        self.assertEqual(self.deck.read_text(), DECK)
+        self.png_size(alias)
+        (self.root / 'slides/slides.json').mkdir(parents=True)
+        self.assertIn('slides.json', self.hype('render', self.deck, '-o', self.root / 'slides', code=1).stderr)
+
     def test_check_reports_every_problem_with_slide_and_line(self):
         self.write(DECK + '\n---\n\n![](missing.png)\n\n---\n\n![bogus=1](gone.png)\n\n---\n')
         report = json.loads(self.hype('check', self.deck, '--json', code=1).stdout)

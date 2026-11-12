@@ -1607,10 +1607,12 @@ bool Deck::renderImages(const QString &directory, int width, bool powerPoint) {
         }
         slides.append(entry);
     }
-    QFile manifest(directory + "/slides.json");
-    if (!manifest.open(QIODevice::WriteOnly))
+    QSaveFile manifest(directory + "/slides.json");
+    const QByteArray json = QJsonDocument(QJsonObject{{"title", title()}, {"slides", slides}}).toJson();
+    if (!manifest.open(QIODevice::WriteOnly) || manifest.write(json) != json.size() || !manifest.commit()) {
+        setStatus("Could not save slides.json: " + manifest.errorString());
         return false;
-    manifest.write(QJsonDocument(QJsonObject{{"title", title()}, {"slides", slides}}).toJson());
+    }
     return true;
 }
 bool Deck::exportPptx(const QString &path) {

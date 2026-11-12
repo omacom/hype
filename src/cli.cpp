@@ -249,12 +249,18 @@ int render(const QStringList &arguments) {
         output = name;
     else if (QFileInfo(output).isDir())
         output = QDir(output).filePath(name);
+    const QString target = QFileInfo(output).canonicalFilePath();
+    if (!target.isEmpty() && target == QFileInfo(deck.path()).canonicalFilePath())
+        return fail("Choose an output other than the presentation itself.");
     QDir().mkpath(QFileInfo(output).absolutePath());
     // A slide with problems still renders, with the problems on a banner, so it can be looked at.
     const auto problems = slideProblemsAt(deck, parsed, number - 1);
     QString warning;
     const QImage image = paint(deck, number - 1, width, &warning);
-    if (!image.save(output, "PNG"))
+    // Written beside and renamed over, so an existing file, or a hard link to the
+    // presentation, is replaced rather than overwritten in place.
+    QSaveFile file(output);
+    if (!file.open(QIODevice::WriteOnly) || !image.save(&file, "PNG") || !file.commit())
         return fail("Could not save " + output);
     int errors = 0;
     QJsonArray list;
