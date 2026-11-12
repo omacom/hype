@@ -7,6 +7,7 @@
 #include <QDBusObjectPath>
 #include <QDBusPendingCallWatcher>
 #include <QDBusPendingReply>
+#include <QDBusServiceWatcher>
 #include <QDir>
 #include <QFileInfo>
 #include <QScopeGuard>
@@ -64,6 +65,17 @@ QString FileDialog::choose(bool save, const QString &location, const QString &la
         if (!dialog.m_done)
             bus.asyncCall(QDBusMessage::createMethodCall(service, dialog.m_request, requestInterface, "Close"));
         dialog.disconnectRequest();
+    });
+    // A portal that exits or is replaced before answering never sends its response,
+    // and the event filter below would otherwise leave the windows locked for good.
+    // Only a first owner appearing, as when the call activates the portal, is harmless.
+    QDBusServiceWatcher portal(service, bus, QDBusServiceWatcher::WatchForOwnerChange);
+    connect(&portal, &QDBusServiceWatcher::serviceOwnerChanged, &dialog,
+            [&](const QString &, const QString &oldOwner, const QString &) {
+        if (dialog.m_done || oldOwner.isEmpty()) return;
+        dialog.m_error = "The desktop file chooser closed without answering.";
+        dialog.m_done = true;
+        dialog.m_loop.quit();
     });
     auto call = QDBusMessage::createMethodCall(service, "/org/freedesktop/portal/desktop",
                                               "org.freedesktop.portal.FileChooser", save ? "SaveFile" : "OpenFile");
