@@ -20,6 +20,10 @@
 #include <QTimer>
 #include <cstdio>
 #include <optional>
+// Qt's own words in the window, the text fields' right-click menu, which reach the Translator because it ignores the
+// context. Qt translates them itself only for the languages it ships a catalog for; Undo, Redo and Delete are Hype's too.
+[[maybe_unused]] static const char *const qtStrings[] = {QT_TR_NOOP("Cut"), QT_TR_NOOP("Copy"), QT_TR_NOOP("Paste"),
+                                                         QT_TR_NOOP("Select All")};
 // The desktop's interface font, e.g. "Adwaita Sans 11", which the gtk3 platform
 // theme used to supply. Without a settings portal Qt's default font stays.
 static void adoptDesktopFont() {

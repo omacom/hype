@@ -4846,7 +4846,9 @@ static void write(const QString &path, const QString &content) {
         LanguageGuard guard;
         QTemporaryDir dir;
         writeFile(dir.filePath("language"), "da\n");
-        writeFile(dir.filePath("da.json"), R"({"Bold": "Fed", "Top left": "Øverst til venstre", "%Ln slides selected": {"one": "%Ln dias valgt", "other": "%Ln dias valgt"}})");
+        writeFile(dir.filePath("da.json"), R"({"Bold": "Fed", "Top left": "Øverst til venstre", "Cancel": "Annuller", "Discard": "Kassér",
+                                              "%Ln slides selected": {"one": "%Ln dias valgt", "other": "%Ln dias valgt"}})");
+        writeFile(dir.filePath("vi.json"), R"({"Bold": "Đậm", "Discard": "Hủy bỏ", "Cancel": "Hủy"})");
         Translator translator(dir.filePath("language"), dir.path());
         QCoreApplication::installTranslator(&translator);
         const auto uninstall = qScopeGuard([&] { QCoreApplication::removeTranslator(&translator); });
@@ -4875,6 +4877,29 @@ static void write(const QString &path, const QString &content) {
         QCOMPARE(place.toString(), QString("Øverst til venstre"));
         // A string Danish doesn't have yet shows in English.
         QCOMPARE(window->findChild<QObject *>("italicButton")->property("label").toString(), QString("Italic"));
+        // The close dialog's buttons follow a live switch too, including to a language Qt has no catalog for.
+        auto closeDialog = window->findChild<QObject *>("closeDialog");
+        QVERIFY(closeDialog);
+        auto buttons = [&] {
+            QStringList texts;
+            auto footer = closeDialog->property("footer").value<QQuickItem *>();
+            for (auto *button : footer ? footer->findChildren<QQuickItem *>() : QList<QQuickItem *>())
+                if (button->inherits("QQuickAbstractButton") && button->isVisible())
+                    texts << button->property("text").toString();
+            texts.sort();
+            return texts;
+        };
+        QVERIFY(QMetaObject::invokeMethod(closeDialog, "open"));
+        QTRY_COMPARE(buttons().size(), 2);
+        QCOMPARE(buttons(), QStringList({"Annuller", "Kassér"}));
+        writeFile(dir.filePath("language"), "vi\n");
+        QTRY_COMPARE(buttons(), QStringList({"Hủy", "Hủy bỏ"}));
+        // Discard still lets the window close.
+        QVERIFY(!window->property("allowClose").toBool());
+        for (auto *button : closeDialog->property("footer").value<QQuickItem *>()->findChildren<QQuickItem *>())
+            if (button->inherits("QQuickAbstractButton") && button->property("text").toString() == "Hủy bỏ")
+                QVERIFY(QMetaObject::invokeMethod(button, "click"));
+        QTRY_VERIFY(window->property("allowClose").toBool());
 
         // Picking another language under Setup > Language changes the open window.
         writeFile(dir.filePath("language"), "en\n");

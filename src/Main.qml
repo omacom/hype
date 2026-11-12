@@ -545,8 +545,12 @@ ApplicationWindow {
         }
     }
     Dialog {
-        id: closeDialog; title: qsTr("Unsaved changes"); modal: true; anchors.centerIn: parent
-        standardButtons: Dialog.Discard | Dialog.Cancel
+        id: closeDialog; objectName: "closeDialog"; title: qsTr("Unsaved changes"); modal: true; anchors.centerIn: parent
+        // Its own buttons rather than Qt's standard ones, whose text Qt sets once and never retranslates.
+        footer: DialogButtonBox {
+            Button { text: qsTr("Discard"); DialogButtonBox.buttonRole: DialogButtonBox.DestructiveRole }
+            Button { text: qsTr("Cancel"); DialogButtonBox.buttonRole: DialogButtonBox.RejectRole }
+        }
         Label { text: qsTr("Changes could not be backed up. Discard them and quit?") }
         onDiscarded: { win.allowClose = true; win.close() }
     }
