@@ -351,6 +351,8 @@ static void write(const QString &path, const QString &content) {
     void initTestCase() {
         QVERIFY(settingsDirectory.isValid());
         QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, settingsDirectory.path());
+        // New decks take the desktop's theme, so keep this machine's theme out of the tests.
+        qputenv("XDG_STATE_HOME", settingsDirectory.path().toUtf8());
     }
     void portalFileDialogs() {
         if (!qEnvironmentVariableIsSet("HYPE_PORTAL_TESTS"))
@@ -475,6 +477,18 @@ static void write(const QString &path, const QString &content) {
         QVERIFY(chosen.source().contains("color_background: \"#101020\""));
         QVERIFY(chosen.source().contains("color_foreground: \"#eeeeee\""));
         QCOMPARE(chosen.accent(), QColor("#7788ff"));
+        // A new presentation starts in the desktop's current theme.
+        const QByteArray previousState = qgetenv("XDG_STATE_HOME");
+        const auto restoreState = qScopeGuard([&] {
+            if (previousState.isNull()) qunsetenv("XDG_STATE_HOME");
+            else qputenv("XDG_STATE_HOME", previousState);
+        });
+        qputenv("XDG_STATE_HOME", omarchy.path().toUtf8());
+        QVERIFY(QDir().mkpath(omarchy.filePath("omarchy/current")));
+        write(omarchy.filePath("omarchy/current/theme.name"), "hype-formats\n");
+        Deck fresh;
+        QCOMPARE(fresh.themeName(), QString("hype-formats"));
+        QVERIFY(fresh.source().contains("color_background: \"#101020\""));
     }
     void followsDesktopTheme() {
         QTemporaryDir files;
