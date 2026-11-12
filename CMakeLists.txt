@@ -40,8 +40,23 @@ target_link_libraries(hype_core PUBLIC
 target_compile_options(hype_core PUBLIC -Wall -Wextra)
 set_target_properties(hype_core PROPERTIES INTERPROCEDURAL_OPTIMIZATION ON)
 
+# The version comes from the release, never from the code: a tag's tarball unpacks as hype-<version>, and a checkout asks git.
+get_filename_component(source_dir_name "${CMAKE_CURRENT_SOURCE_DIR}" NAME)
+if(source_dir_name MATCHES "^hype-([0-9][0-9.]*)$")
+  set(HYPE_VERSION "${CMAKE_MATCH_1}")
+else()
+  execute_process(COMMAND git describe --tags --always --dirty
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+    OUTPUT_VARIABLE HYPE_VERSION OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+  string(REGEX REPLACE "^v" "" HYPE_VERSION "${HYPE_VERSION}")
+  if(NOT HYPE_VERSION)
+    set(HYPE_VERSION dev)
+  endif()
+endif()
+
 add_executable(hype src/main.cpp src/resources.qrc)
 target_link_libraries(hype PRIVATE hype_core)
+target_compile_definitions(hype PRIVATE HYPE_VERSION="${HYPE_VERSION}")
 set_target_properties(hype PROPERTIES INTERPROCEDURAL_OPTIMIZATION ON)
 
 enable_testing()

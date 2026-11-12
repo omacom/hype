@@ -53,7 +53,7 @@ int main(int argc, char **argv) {
         qputenv("QT_QPA_PLATFORM", "offscreen");
     QGuiApplication app(argc, argv);
     app.setApplicationName("hype");
-    app.setApplicationVersion("0.6.0");
+    app.setApplicationVersion(HYPE_VERSION);
     app.setDesktopFileName(qEnvironmentVariable("HYPE_DESKTOP_FILE", "hype"));
     if (command)
         return runCli(app.arguments());
