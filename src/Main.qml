@@ -57,6 +57,10 @@ ApplicationWindow {
     property var compressionReturnFocus: null
     property bool allowClose: false
     property int lastSelected: -1
+    // Qt Multimedia probes the GPU's video decoders when first used, which takes seconds on some
+    // machines, so the player loads with the first video slide rather than with every window.
+    property bool videoUsed: false
+    readonly property var player: videoLoader.item ? videoLoader.item.player : null
     // Front matter and boundary blank lines have no position in the slide editor.
     property int sourceOnlyCursor: -1
     property int dragIndex: -1
@@ -93,7 +97,7 @@ ApplicationWindow {
             } else stage.forceActiveFocus()
         } else {
             presenterWindow.hide()
-            player.stop()
+            if (player) player.stop()
             // Clear fullscreen before restoring the editor's output and geometry.
             // Remap only after both are set, since showNormal restores Qt's own saved geometry.
             win.hide()
@@ -163,6 +167,7 @@ ApplicationWindow {
         if (!presenting) togglePresent()
     }
     function toggleVideo() {
+        if (!player) return
         if (player.playbackState === MediaPlayer.PlayingState) player.pause()
         else {
             if (player.mediaStatus === MediaPlayer.EndOfMedia) player.position = 0
@@ -391,7 +396,16 @@ ApplicationWindow {
         }
         syncingEditor = false
     }
-    Component.onCompleted: { syncSourceEditor(); syncEditors(); lastSelected = deck.selected; Qt.callLater(thumbnails.revealSelection); if (deck.path !== "") focusForDeck(true) }
+    function syncVideo(changedSlide) {
+        const nextVideo = deck.media.video ? deck.media.url.toString() : ""
+        if (nextVideo) videoUsed = true
+        if (!player || (!changedSlide && player.source.toString() === nextVideo)) return
+        player.stop()
+        videoLoader.item.clearOutput()
+        player.source = nextVideo
+        if (presenting && deck.media.video && deck.media.autoplay) player.play()
+    }
+    Component.onCompleted: { syncSourceEditor(); syncEditors(); syncVideo(true); lastSelected = deck.selected; Qt.callLater(thumbnails.revealSelection); if (deck.path !== "") focusForDeck(true) }
     Connections {
         target: deck
         function onCompressingImageChanged() {
@@ -411,15 +425,8 @@ ApplicationWindow {
         function onSelectionChanged() {
             win.syncEditors()
             if (win.dragIndex < 0 && win.lastSelected !== deck.selected) Qt.callLater(thumbnails.revealSelection)
-            const nextVideo = deck.media.video ? deck.media.url.toString() : ""
-            const changedVideo = win.lastSelected !== deck.selected || player.source.toString() !== nextVideo
+            win.syncVideo(win.lastSelected !== deck.selected)
             win.lastSelected = deck.selected
-            if (changedVideo) {
-                player.stop()
-                video.clearOutput()
-                player.source = nextVideo
-                if (win.presenting && deck.media.video && deck.media.autoplay) player.play()
-            }
         }
         function onModelAboutToBeReset() {
             thumbnails.cancelFlick()
@@ -429,7 +436,7 @@ ApplicationWindow {
         function onModelReset() { Qt.callLater(thumbnails.revealSelection) }
         function onOpened(existing) { win.sourceOnlyCursor = -1; Qt.callLater(function() { win.focusForDeck(existing) }) }
     }
-    onPresentingChanged: { if (presenting && deck.media.video && deck.media.autoplay) player.play() }
+    onPresentingChanged: { if (player && presenting && deck.media.video && deck.media.autoplay) player.play() }
     onClosing: function(close) {
         if (!allowClose && !deck.flushAutosave() && deck.dirty) {
             close.accepted = false
@@ -440,7 +447,7 @@ ApplicationWindow {
         if (presenting) {
             presenting = false
             presenterWindow.hide()
-            player.stop()
+            if (player) player.stop()
         }
     }
     ApplicationWindow {
@@ -1546,18 +1553,24 @@ ApplicationWindow {
                             onStatusChanged: if (status === Image.Ready) paused = !autoplay
                         }
                     }
-                    VideoOutput {
-                        id: video; objectName: "videoOutput"
-                        visible: deck.media.video && (player.playbackState !== MediaPlayer.StoppedState || player.mediaStatus === MediaPlayer.EndOfMedia)
-                        endOfStreamPolicy: VideoOutput.KeepLastFrame
+                    Loader {
+                        id: videoLoader
+                        active: win.videoUsed
                         x: deck.media.rect.x * slideFrame.width / 1920
                         y: deck.media.rect.y * slideFrame.height / 1080
                         width: deck.media.rect.width * slideFrame.width / 1920
                         height: deck.media.rect.height * slideFrame.height / 1080
-                        fillMode: deck.media.span ? VideoOutput.PreserveAspectCrop : VideoOutput.PreserveAspectFit
+                        sourceComponent: VideoOutput {
+                            id: video; objectName: "videoOutput"
+                            property alias player: player
+                            visible: deck.media.video && (player.playbackState !== MediaPlayer.StoppedState || player.mediaStatus === MediaPlayer.EndOfMedia)
+                            endOfStreamPolicy: VideoOutput.KeepLastFrame
+                            fillMode: deck.media.span ? VideoOutput.PreserveAspectCrop : VideoOutput.PreserveAspectFit
+                            MediaPlayer { id: player; objectName: "player"; videoOutput: video; audioOutput: AudioOutput { muted: deck.media.muted } loops: deck.media.loop ? MediaPlayer.Infinite : 1; onErrorOccurred: function(error,message) { deck.setStatus(message) } }
+                        }
                     }
-                    Image { anchors.fill: parent; source: visible ? "image://slides/" + (deck.revision, deck.renderId(deck.selected)) + "/overlay" : ""; asynchronous: true; retainWhileLoading: true; sourceSize: Qt.size(1920,1080); visible: animation.active || (video.visible && deck.media.span) }
-                    Button { visible: deck.media.video && !win.presenting; anchors.centerIn: parent; text: player.playbackState === MediaPlayer.PlayingState ? qsTr("Pause") : "▶ " + qsTr("Play"); onClicked: win.toggleVideo() }
+                    Image { anchors.fill: parent; source: visible ? "image://slides/" + (deck.revision, deck.renderId(deck.selected)) + "/overlay" : ""; asynchronous: true; retainWhileLoading: true; sourceSize: Qt.size(1920,1080); visible: animation.active || (videoLoader.item && videoLoader.item.visible && deck.media.span) }
+                    Button { visible: deck.media.video && !win.presenting; anchors.centerIn: parent; text: player && player.playbackState === MediaPlayer.PlayingState ? qsTr("Pause") : "▶ " + qsTr("Play"); onClicked: win.toggleVideo() }
                     MouseArea {
                         anchors.fill: parent
                         enabled: win.presenting
@@ -1646,5 +1659,4 @@ ApplicationWindow {
             }
         }
     }
-    MediaPlayer { id: player; objectName: "player"; videoOutput: video; audioOutput: AudioOutput { muted: deck.media.muted } loops: deck.media.loop ? MediaPlayer.Infinite : 1; onErrorOccurred: function(error,message) { deck.setStatus(message) } }
 }
