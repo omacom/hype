@@ -144,6 +144,11 @@ int main(int argc, char **argv) {
             fprintf(stderr, "%s\n", qPrintable(error.toString()));
     });
     engine.rootContext()->setContextProperty("deck", &deck);
+    // Wayland compositors (e.g. Hyprland) own window geometry and placement, so
+    // presentation mode must hand the toplevel back by visibility alone rather than
+    // hide/show and explicit geometry writes. Let QML take the platform-guarded path.
+    engine.rootContext()->setContextProperty("isWayland",
+                                             QGuiApplication::platformName().startsWith("wayland"));
     QPointer<Thumbnails> thumbnails = new Thumbnails(&deck);
     engine.addImageProvider("slides", thumbnails);
     auto drainRenders = [thumbnails] {

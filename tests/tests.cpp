@@ -782,6 +782,60 @@ static void write(const QString &path, const QString &content) {
         window->setProperty("allowClose", true);
         window->close();
     }
+    void presentOnWaylandSwitchesVisibilityOnly() {
+        if (!qEnvironmentVariableIsSet("HYPE_GUI_TESTS"))
+            QSKIP("Set HYPE_GUI_TESTS=1");
+        // This pins down the Wayland single-output path, where presentationScreens()
+        // keeps the audience on the current display. Under the two-screen presenter
+        // fixture the built-in panel would instead hand the show to an external
+        // output, taking the hide()/remap branch, so force a deterministic topology.
+        if (QGuiApplication::screens().size() != 1)
+            QSKIP("This check needs a single output; run without the presenter-screens fixture");
+        Deck deck;
+        deck.editSource("# First\n---\n# Last\n");
+        QQuickStyle::setStyle("Basic");
+        qmlRegisterType<SlideItem>("Hype", 1, 0, "SlideCanvas");
+        qmlRegisterType<AppTheme>("Hype", 1, 0, "AppTheme");
+        QQmlApplicationEngine engine;
+        engine.rootContext()->setContextProperty("deck", &deck);
+        // Pretend we are on a Wayland compositor: on a single output the present
+        // path must switch only visibility, keeping the live toplevel, so the
+        // compositor (not Hype) owns restoring the window's geometry on exit.
+        engine.rootContext()->setContextProperty("isWayland", true);
+        engine.addImageProvider("slides", new Thumbnails(&deck));
+        engine.load(QUrl("qrc:/Main.qml"));
+        QVERIFY(!engine.rootObjects().isEmpty());
+        auto window = qobject_cast<QQuickWindow *>(engine.rootObjects().first());
+        QVERIFY(window);
+        window->showNormal();
+        QTRY_COMPARE(window->visibility(), QWindow::Windowed);
+        // The toplevel must stay mapped through both transitions: only
+        // FullScreen<->Windowed may change, never Hidden. A re-added hide() on
+        // either leg would destroy the xdg_toplevel and trip this watcher, even
+        // though the final visibility would still settle correctly.
+        bool everHidden = false;
+        auto watchMapped = [&] {
+            if (!window->isVisible() || window->visibility() == QWindow::Hidden)
+                everHidden = true;
+        };
+        QObject::connect(window, &QWindow::visibleChanged, window, watchMapped);
+        QObject::connect(window, &QWindow::visibilityChanged, window, watchMapped);
+        QVERIFY(QMetaObject::invokeMethod(window, "togglePresent"));
+        QVERIFY(window->property("presenting").toBool());
+        QVERIFY(window->property("presentationViaVisibility").toBool());
+        QTRY_COMPARE(window->visibility(), QWindow::FullScreen);
+        QVERIFY2(!everHidden, "editor window was hidden while entering present mode");
+        // Exit mirrors the path: visibility returns without any hide()/geometry writes.
+        QVERIFY(QMetaObject::invokeMethod(window, "togglePresent"));
+        QVERIFY(!window->property("presenting").toBool());
+        QVERIFY(!window->property("presentationViaVisibility").toBool());
+        QTRY_COMPARE(window->visibility(), QWindow::Windowed);
+        QVERIFY2(!everHidden, "editor window was hidden during present-mode transitions");
+        QObject::disconnect(window, &QWindow::visibleChanged, window, nullptr);
+        QObject::disconnect(window, &QWindow::visibilityChanged, window, nullptr);
+        window->setProperty("allowClose", true);
+        window->close();
+    }
     void presenterViewUsesSeparateScreens() {
         if (qEnvironmentVariable("HYPE_GUI_TESTS") == "0")
             QSKIP("HYPE_GUI_TESTS=0 skips the window-level tests");
