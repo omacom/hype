@@ -48,7 +48,7 @@ class Deck : public QAbstractListModel {
     Q_PROPERTY(bool exportFailed READ exportFailed NOTIFY exportChanged)
     Q_PROPERTY(QStringList fontNames READ fontNames CONSTANT)
     Q_PROPERTY(QString fontName READ fontName NOTIFY fontChanged)
-    Q_PROPERTY(QStringList themeNames READ themeNames CONSTANT)
+    Q_PROPERTY(QStringList themeNames READ themeNames NOTIFY themesChanged)
     Q_PROPERTY(QStringList mediaPositions READ mediaPositions CONSTANT)
     Q_PROPERTY(QString themeName READ themeName NOTIFY changed)
     Q_PROPERTY(QColor background READ background NOTIFY changed)
@@ -148,6 +148,7 @@ class Deck : public QAbstractListModel {
     Q_INVOKABLE void setMediaSize(double percent);
     Q_INVOKABLE void setStatus(const QString &status);
   signals:
+    void themesChanged();
     void changed(); // Document content, path, saved state, or media files; always followed by selectionChanged.
     void selectionChanged(); // Selection range or the selected slide's content/media.
     void fontChanged();

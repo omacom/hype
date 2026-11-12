@@ -972,6 +972,7 @@ void Deck::newDeck() {
         return;
     // The current theme may have been installed since Hype opened.
     discoverThemes();
+    emit themesChanged();
     m_path.clear();
     m_saved.clear();
     m_externalChange = false;
