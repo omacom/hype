@@ -489,6 +489,13 @@ static void write(const QString &path, const QString &content) {
         Deck fresh;
         QCOMPARE(fresh.themeName(), QString("hype-formats"));
         QVERIFY(fresh.source().contains("color_background: \"#101020\""));
+        // A theme installed while Hype is open is found for the next new deck.
+        QVERIFY(QDir().mkpath(omarchy.filePath("themes/hype-later")));
+        write(omarchy.filePath("themes/hype-later/colors.toml"), "background = #203040\n");
+        write(omarchy.filePath("omarchy/current/theme.name"), "hype-later\n");
+        fresh.newDeck();
+        QCOMPARE(fresh.themeName(), QString("hype-later"));
+        QCOMPARE(fresh.background(), QColor("#203040"));
     }
     void followsDesktopTheme() {
         QTemporaryDir files;

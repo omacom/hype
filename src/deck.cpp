@@ -527,6 +527,7 @@ void Deck::redo() {
     apply(state.source, state.selected, false, state.anchor, &state.parsed);
 }
 void Deck::discoverThemes() {
+    m_themes.clear();
     QString root = qEnvironmentVariable("OMARCHY_PATH", QDir::homePath() + "/.local/share/omarchy");
     QStringList roots{root + "/themes", QDir::homePath() + "/omarchy/themes",
                       QDir::homePath() + "/.config/omarchy/themes"};
@@ -969,6 +970,8 @@ bool Deck::saveCopyPath(const QString &path) {
 void Deck::newDeck() {
     if (!confirmDiscard())
         return;
+    // The current theme may have been installed since Hype opened.
+    discoverThemes();
     m_path.clear();
     m_saved.clear();
     m_externalChange = false;
