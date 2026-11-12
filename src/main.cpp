@@ -148,6 +148,7 @@ int main(int argc, char **argv) {
     qmlRegisterType<SlideItem>("Hype", 1, 0, "SlideCanvas");
     qmlRegisterType<AppTheme>("Hype", 1, 0, "AppTheme");
     QQmlApplicationEngine engine;
+    QObject::connect(&*translator, &Translator::changed, &deck, &Deck::retranslate);
     QObject::connect(&*translator, &Translator::changed, &engine, &QQmlEngine::retranslate);
     QObject::connect(&engine, &QQmlEngine::warnings, [](const QList<QQmlError> &errors) {
         for (const auto &error : errors)

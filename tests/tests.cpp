@@ -4806,6 +4806,30 @@ static void write(const QString &path, const QString &content) {
             QVERIFY2(pictures[0] == pictures[1], qPrintable("drawn differently right to left: " + source));
         }
     }
+    void cachedTextFollowsTheLanguage() {
+        // Parse errors are cached and the untitled name is made in C++, so neither is redone by QML's retranslation.
+        LanguageGuard guard;
+        QTemporaryDir dir;
+        writeFile(dir.filePath("language"), "en\n");
+        writeFile(dir.filePath("da.json"), R"({"Unknown position": "Ukendt placering", "Untitled": "Uden titel", "Unclosed code fence": "Uafsluttet kodeblok"})");
+        Translator translator(dir.filePath("language"), dir.path());
+        QCoreApplication::installTranslator(&translator);
+        const auto uninstall = qScopeGuard([&] { QCoreApplication::removeTranslator(&translator); });
+        Deck deck;
+        QObject::connect(&translator, &Translator::changed, &deck, &Deck::retranslate);
+        const QString slide = "![position=middle](images/x.png)";
+        QCOMPARE(parseMedia(slide, dir.path()).error, QString("Unknown position"));
+        deck.editSource("# One\n\n```\nunclosed\n");
+        QCOMPARE(deck.title(), QString("Untitled"));
+        QCOMPARE(deck.status(), QString("Unclosed code fence"));
+        QSignalSpy changes(&deck, &Deck::changed);
+
+        writeFile(dir.filePath("language"), "da\n");
+        QTRY_COMPARE(deck.title(), QString("Uden titel"));
+        QVERIFY(changes.count() > 0);
+        QCOMPARE(deck.status(), QString("Uafsluttet kodeblok"));
+        QCOMPARE(parseMedia(slide, dir.path()).error, QString("Ukendt placering"));
+    }
     void windowFollowsTheLanguage() {
         if (qEnvironmentVariable("HYPE_GUI_TESTS") == "0") QSKIP("HYPE_GUI_TESTS=0 skips the window-level tests");
         LanguageGuard guard;

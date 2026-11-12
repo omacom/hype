@@ -387,7 +387,7 @@ bool readSlide(const QJsonObject &entry, const QDir &base, PowerPointSlide &slid
         QFileInfo(slide.video).suffix().toLower() != "mp4" || video["codec_name"] != "h264" ||
         (!audio.isEmpty() && audio["codec_name"] != "aac") || video["width"].toInt() <= 0 ||
         video["height"].toInt() <= 0) {
-        error = "PowerPoint video requires H.264/AAC MP4: " + QFileInfo(slide.video).fileName();
+        error = tr("PowerPoint video requires H.264/AAC MP4: %1").arg(QFileInfo(slide.video).fileName());
         return false;
     }
     const double ratio = double(video["width"].toInt()) / video["height"].toInt();

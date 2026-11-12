@@ -1,11 +1,14 @@
 {
+  "%1 already exists. Choose another name.": "%1 already exists. Choose another name.",
   "%1 — Presenter View": "%1 — Presenter View",
   "%Ln slides selected": {
     "one": "%Ln slide selected",
     "other": "%Ln slides selected"
   },
+  "A placed image cannot use fit, span, background, or overlay": "A placed image cannot use fit, span, background, or overlay",
   "Add a slide": "Add a slide",
   "Add image / video": "Add image / video",
+  "Added %1": "Added %1",
   "An svg block holds one <svg> element": "An svg block holds one <svg> element",
   "Animation conversion failed: %1": "Animation conversion failed: %1",
   "Black": "Black",
@@ -165,6 +168,8 @@
   "Play": "Play",
   "Play or pause video while presenting": "Play or pause video while presenting",
   "PowerPoint export exceeds the 4 GiB ZIP limit.": "PowerPoint export exceeds the 4 GiB ZIP limit.",
+  "PowerPoint export failed: %1": "PowerPoint export failed: %1",
+  "PowerPoint video requires H.264/AAC MP4: %1": "PowerPoint video requires H.264/AAC MP4: %1",
   "Preparing %1 export…": "Preparing %1 export…",
   "Present": "Present",
   "Present from first slide": "Present from first slide",
@@ -240,5 +245,6 @@
   "Visual · Switch to Markdown": "Visual · Switch to Markdown",
   "White": "White",
   "Your headline": "Your headline",
+  "Your next idea": "Your next idea",
   "←/→ change slide   ·   Space plays media   ·   Esc ends the show": "←/→ change slide   ·   Space plays media   ·   Esc ends the show"
 }

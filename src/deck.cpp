@@ -140,10 +140,32 @@ QString setScalar(QString header, const QString &key, const QString &value) {
     }
     return header;
 }
+// The first slide's problem, for a structure whose boundaries are already known.
+static QString slidesError(const ParsedDeck &parsed) {
+    for (const auto &slide : parsed.slides) {
+        // A slide body cannot contain front matter. Prefix a plain line so
+        // a leading --- is interpreted as a slide break instead.
+        static thread_local QCache<QString, QString> errors(2 * 1024 * 1024);
+        // Errors are in the window's language, so a language switch starts the cache over.
+        const QString key = QString::number(translationGeneration()) + QChar(0) + slide.source;
+        auto error = errors.object(key);
+        if (!error) {
+            error = new QString(parseDeck("Slide\n" + slide.source).error);
+            errors.insert(key, error, qMax(1, int(key.size() * 2)));
+            error = errors.object(key);
+        }
+        const QString problem = error ? *error : parseDeck("Slide\n" + slide.source).error;
+        if (!problem.isEmpty())
+            return problem;
+    }
+    return {};
+}
+// A new presentation, whose headline the window selects so typing replaces it.
+static QString starterSource() { return "---\ntheme: tokyo-night\n---\n\n# " + tr("Your next idea") + "\n"; }
 Deck::Deck(QObject *parent, const QString &exportProgram) : QAbstractListModel(parent),
     m_exportProgram(exportProgram.isEmpty() ? QCoreApplication::applicationFilePath() : exportProgram) {
     discoverThemes();
-    m_source = "---\ntheme: tokyo-night\n---\n\n# Your next idea\n";
+    m_source = starterSource();
     m_parsed = parseDeck(m_source);
     m_saved = m_source;
     // Writers may truncate, or remove and recreate, the file; read it once they settle.
@@ -259,6 +281,21 @@ QString Deck::title() const {
     return scalar(m_parsed.header, "title",
                   m_path.isEmpty() ? tr("Untitled") : QFileInfo(m_path).completeBaseName());
 }
+void Deck::retranslate() {
+    // Parse errors, problem banners and the untitled name were made in the old language.
+    retranslateSlides();
+    m_mediaCache.clear();
+    m_renderIds.clear();
+    const QString old = m_parsed.error;
+    if (!old.isEmpty()) {
+        const QString document = parseDeck(m_source).error;
+        m_parsed.error = document.isEmpty() ? slidesError(m_parsed) : document;
+        if (m_status == old)
+            setStatus(m_parsed.error);
+    }
+    ++m_revision;
+    notifyChanged();
+}
 void Deck::setStatus(const QString &s) {
     m_status = s;
     if (!m_exporting && !m_exportStatus.isEmpty()) {
@@ -283,25 +320,8 @@ void Deck::apply(const QString &source, int selected, bool history, int anchor,
         m_redo.clear();
     }
     auto parsed = structure ? *structure : parseDeck(source);
-    if (structure) {
-        parsed.error.clear();
-        for (const auto &slide : parsed.slides) {
-            // A slide body cannot contain front matter. Prefix a plain line so
-            // a leading --- is interpreted as a slide break instead.
-            static thread_local QCache<QString, QString> errors(2 * 1024 * 1024);
-            auto error = errors.object(slide.source);
-            if (!error) {
-                error = new QString(parseDeck("Slide\n" + slide.source).error);
-                errors.insert(slide.source, error, qMax(1, int(slide.source.size() * 2)));
-                error = errors.object(slide.source);
-            }
-            const QString problem = error ? *error : parseDeck("Slide\n" + slide.source).error;
-            if (!problem.isEmpty()) {
-                parsed.error = problem;
-                break;
-            }
-        }
-    }
+    if (structure)
+        parsed.error = slidesError(parsed);
     const bool reset = parsed.slides.size() != count();
     QVector<int> modified;
     if (!reset)
@@ -944,7 +964,7 @@ void Deck::newDeck() {
     m_path.clear();
     m_saved.clear();
     m_externalChange = false;
-    apply("---\ntheme: tokyo-night\n---\n\n# Your next idea\n", 0);
+    apply(starterSource(), 0);
     m_undo.clear();
     m_redo.clear();
     watch();
@@ -1020,7 +1040,7 @@ bool Deck::importMedia(const QUrl &url, bool newSlide) {
     if (newSlide)
         addSlide();
     editSlide(withReplacedMedia(slideSource(), name));
-    setStatus("Added " + name);
+    setStatus(tr("Added %1").arg(name));
     return true;
 }
 bool Deck::pasteMedia() {
@@ -1172,7 +1192,7 @@ QString Deck::savePastedMedia(const QString &value) {
     const QString directory = QDir(baseDir()).filePath(m_paste.video ? "videos" : "images");
     const QString destination = QDir(directory).filePath(name);
     if (QFile::exists(destination))
-        return name + " already exists. Choose another name.";
+        return tr("%1 already exists. Choose another name.").arg(name);
     if (!QDir().mkpath(directory))
         return tr("Could not create %1").arg(directory);
     bool saved = false;
@@ -1192,7 +1212,7 @@ QString Deck::savePastedMedia(const QString &value) {
         return tr("Could not save %1").arg(name);
     cancelPaste();
     editSlide(withReplacedMedia(slideSource(), name));
-    setStatus("Added " + name);
+    setStatus(tr("Added %1").arg(name));
     return {};
 }
 QString Deck::renderId(int index) const {
@@ -1204,7 +1224,8 @@ QString Deck::renderId(int index) const {
         return cached.id;
     QByteArray bytes;
     QDataStream stream(&bytes, QIODevice::WriteOnly);
-    stream << slide(index) << baseDir() << palette();
+    // A slide with problems shows them on a banner, in the window's language.
+    stream << slide(index) << baseDir() << palette() << translationGeneration();
     auto media = parseMedia(slide(index), baseDir());
     for (const QString &path : {media.path, media.poster}) {
         QFileInfo file(path);
@@ -1634,7 +1655,7 @@ bool Deck::exportPptx(const QString &path) {
     emit exportAdvanced(0.8, tr("Packaging PowerPoint…"));
     if (!writePptx(temp.path() + "/slides.json", path, &error,
         [this](double fraction) { emit exportAdvanced(0.8 + 0.2 * fraction, tr("Packaging PowerPoint…")); })) {
-        setStatus("PowerPoint export failed: " + error);
+        setStatus(tr("PowerPoint export failed: %1").arg(error));
         return false;
     }
     setStatus(tr("Exported %1").arg(path));

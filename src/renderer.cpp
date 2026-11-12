@@ -2,6 +2,7 @@
 #include "budget.h"
 #include "images.h"
 #include "syntax.h"
+#include <atomic>
 #include <QCoreApplication>
 #include <QAbstractTextDocumentLayout>
 #include <QCache>
@@ -288,7 +289,7 @@ static Media readMedia(const QString &source, const QString &base) {
         if (result.video)
             result.error = tr("Only images can be placed");
         else if (fit || span || !result.background.isEmpty() || !explicitOverlay.isEmpty())
-            result.error = "A placed image cannot use fit, span, background, or overlay";
+            result.error = tr("A placed image cannot use fit, span, background, or overlay");
         if (result.size == 0)
             result.size = defaultPlacedSize;
         for (const auto &[position, alignment] : placements())
@@ -407,10 +408,14 @@ static QString svgProblem(const QString &svg) {
         return tr("Give the SVG a viewBox, or a width and height");
     return {};
 }
+static std::atomic<int> generation{0};
+int translationGeneration() { return generation.load(); }
+void retranslateSlides() { ++generation; }
 Media parseMedia(const QString &source, const QString &base) {
-    // Parsing is pure: file existence and modification checks remain at call sites.
+    // Parsing is pure: file existence and modification checks remain at call sites. Its
+    // errors are in the window's language, so a language switch starts the cache over.
     static thread_local QCache<QString, Media> cache(8 * 1024 * 1024);
-    const QString key = base + QChar(0) + source;
+    const QString key = QString::number(translationGeneration()) + QChar(0) + base + QChar(0) + source;
     if (const auto result = cache.object(key))
         return *result;
     auto result = readMedia(source, base);
