@@ -2,6 +2,7 @@
 #include "budget.h"
 #include "images.h"
 #include "syntax.h"
+#include <QCoreApplication>
 #include <QAbstractTextDocumentLayout>
 #include <QCache>
 #include <QCryptographicHash>
@@ -25,6 +26,9 @@
 #include <QTextTable>
 #include <QTimer>
 #include <QWaitCondition>
+
+// Hype's free functions translate like its classes do; the Translator ignores the context.
+static QString tr(const char *text) { return QCoreApplication::translate("Hype", text); }
 #include <QXmlStreamReader>
 
 static QRegularExpression mediaRe(R"(!\[([^\]]*)\]\((?:<([^>]+)>|([^\s)]+))\))");
@@ -231,7 +235,7 @@ static Media readMedia(const QString &source, const QString &base) {
         while (it.hasNext()) {
             auto token = it.next();
             if (!flags.mid(consumed, token.capturedStart() - consumed).trimmed().isEmpty())
-                result.error = "Invalid media directive";
+                result.error = tr("Invalid media directive");
             consumed = token.capturedEnd();
             QString key = token.captured(1), value = token.captured(2);
             if (value.startsWith('"'))
@@ -254,14 +258,14 @@ static Media readMedia(const QString &source, const QString &base) {
                 // Errors name the directive, never the author's value, which may hold markup.
                 result.position = value;
                 if (!mediaPositions().contains(value))
-                    result.error = "Unknown position";
+                    result.error = tr("Unknown position");
             } else if (key == "size") {
                 // Plain decimals only: toDouble() would also accept "nan" and "1e1".
                 static const QRegularExpression percentage(R"(^(\d{1,3}(?:\.\d+)?)%$)");
                 const auto number = percentage.match(value);
                 result.size = number.hasMatch() ? number.captured(1).toDouble() : 0;
                 if (result.size < 1 || result.size > 100) {
-                    result.error = "Size must be a percentage from 1% to 100%";
+                    result.error = tr("Size must be a percentage from 1% to 100%");
                     result.size = 0;
                 }
                 if (result.position.isEmpty())
@@ -269,20 +273,20 @@ static Media readMedia(const QString &source, const QString &base) {
             } else if (key == "background") {
                 result.background = value;
                 if (value != "auto" && value != "theme" && value != "blur" && !QColor(value).isValid())
-                    result.error = "Invalid background color";
+                    result.error = tr("Invalid background color");
             } else if (key == "poster")
                 result.poster = assetPath(base, value, false);
             else if (key != "alt")
-                result.error = "Unknown media directive: " + key;
+                result.error = tr("Unknown media directive: %1").arg(key);
         }
         if (!flags.mid(consumed).trimmed().isEmpty())
-            result.error = "Invalid media directive";
+            result.error = tr("Invalid media directive");
     }
     if (fit && span)
-        result.error = "Choose either span or fit";
+        result.error = tr("Choose either span or fit");
     if (result.placed()) {
         if (result.video)
-            result.error = "Only images can be placed";
+            result.error = tr("Only images can be placed");
         else if (fit || span || !result.background.isEmpty() || !explicitOverlay.isEmpty())
             result.error = "A placed image cannot use fit, span, background, or overlay";
         if (result.size == 0)
@@ -303,7 +307,7 @@ static Media readMedia(const QString &source, const QString &base) {
         bool ok;
         double opacity = explicitOverlay.toDouble(&ok);
         if (!ok || opacity < 0 || opacity > 1)
-            result.error = "Overlay must be between 0 and 1";
+            result.error = tr("Overlay must be between 0 and 1");
         else
             result.overlay = opacity;
     }
@@ -382,7 +386,7 @@ static QString svgProblem(const QString &svg) {
         if (xml.readNext() == QXmlStreamReader::StartElement && first) {
             first = false;
             if (xml.name() != QLatin1String("svg"))
-                return "An svg block holds one <svg> element";
+                return tr("An svg block holds one <svg> element");
         }
     }
     if (xml.hasError())
@@ -394,14 +398,13 @@ static QString svgProblem(const QString &svg) {
     for (auto it = variable.globalMatch(svg); it.hasNext();) {
         const QString name = it.next().captured(1);
         if (!colors.contains(QString(name).replace('-', '_')))
-            return "Unknown theme color --" + name + "; use --" +
-                   colors.mid(0, 9).join(", --").replace('_', '-');
+            return tr("Unknown theme color --%1; use --%2").arg(name, colors.mid(0, 9).join(", --").replace('_', '-'));
     }
     QSvgRenderer renderer(themedSvg(svg, {{"foreground", "#000000"}}));
     if (!renderer.isValid())
-        return "Qt can't draw this SVG";
+        return tr("Qt can't draw this SVG");
     if (renderer.viewBoxF().isEmpty())
-        return "Give the SVG a viewBox, or a width and height";
+        return tr("Give the SVG a viewBox, or a width and height");
     return {};
 }
 Media parseMedia(const QString &source, const QString &base) {
@@ -486,12 +489,12 @@ QStringList slideProblems(const QString &source, const QString &base) {
             errors << problem;
     }
     if (!media.file.isEmpty() && !QFileInfo::exists(media.path))
-        errors << "Missing media: " + media.file;
+        errors << tr("Missing media: %1").arg(media.file);
     if (!media.file.isEmpty() && !media.video && QFileInfo::exists(media.path) &&
         !QImageReader(media.path).canRead())
-        errors << "Cannot decode image: " + media.file;
+        errors << tr("Cannot decode image: %1").arg(media.file);
     if (!media.poster.isEmpty() && !QFileInfo::exists(media.poster))
-        errors << "Missing poster";
+        errors << tr("Missing poster");
     auto matches = mediaRe.globalMatch(outsideCode(withoutComments(source)));
     int count = 0;
     while (matches.hasNext()) {
@@ -499,7 +502,7 @@ QStringList slideProblems(const QString &source, const QString &base) {
         ++count;
     }
     if (count + media.svgBlocks > 1)
-        errors << "Use one media item per slide (combine artwork before importing)";
+        errors << tr("Use one media item per slide (combine artwork before importing)");
     return errors;
 }
 static QImage loadedImage(const QString &path, QSize canvas, bool span) {
@@ -927,7 +930,7 @@ void paintSlide(QPainter *p, const QRectF &target, const QString &source, const 
             p->restore();
         } else if (!overlayOnly && !backgroundOnly) {
             p->setPen(QColor(palette["accent"].toString()));
-            const QString message = "Missing media\n" + media.file;
+            const QString message = tr("Missing media") + "\n" + media.file;
             QFont diagnostic("sans");
             // Shrink the notice to fit small placed boxes, and never draw past them.
             for (int size = 32; size >= 8; size -= 2) {
@@ -1002,7 +1005,7 @@ void paintSlide(QPainter *p, const QRectF &target, const QString &source, const 
         }
         highlightCode(doc, palette);
         if (low < 24 && warning)
-            *warning = "Text fits below 24px on a 1080p slide";
+            *warning = tr("Text fits below 24px on a 1080p slide");
         p->save();
         p->translate(area.x(), area.y() + qMax(0.0, (area.height() - doc.size().height()) / 2));
         QAbstractTextDocumentLayout::PaintContext context;

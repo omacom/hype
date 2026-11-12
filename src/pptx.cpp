@@ -1,6 +1,7 @@
 #include "pptx.h"
 #include "budget.h"
 #include "renderer.h"
+#include <QCoreApplication>
 #include <QBuffer>
 #include <QDataStream>
 #include <QDir>
@@ -16,6 +17,9 @@
 #include <QXmlStreamWriter>
 #include <cmath>
 #include <functional>
+
+// Hype's free functions translate like its classes do; the Translator ignores the context.
+static QString tr(const char *text) { return QCoreApplication::translate("Hype", text); }
 #include <zlib.h>
 
 namespace {
@@ -55,7 +59,7 @@ class Zip {
         if (entries.size() >= 65534 || quint64(output.pos()) >= zipLimit || input.size() < 0 ||
             quint64(input.size()) >= zipLimit ||
             quint64(output.pos()) + quint64(input.size()) + 65536 >= zipLimit)
-            return fail("PowerPoint export exceeds the 4 GiB ZIP limit.");
+            return fail(tr("PowerPoint export exceeds the 4 GiB ZIP limit."));
         Entry entry{name.toUtf8(), quint32(output.pos()), 0, quint32(crc32(0, nullptr, 0))};
         stream << quint32(0x04034b50) << quint16(20) << quint16(0x800) << quint16(0) << quint16(0)
                << quint16(33) << quint32(0) << quint32(0) << quint32(0)
@@ -71,7 +75,7 @@ class Zip {
                 break;
             if (quint64(entry.size) + quint64(count) >= zipLimit ||
                 quint64(output.pos()) + quint64(count) + 16 >= zipLimit)
-                return fail("PowerPoint export exceeds the 4 GiB ZIP limit.");
+                return fail(tr("PowerPoint export exceeds the 4 GiB ZIP limit."));
             if (output.write(buffer.constData(), count) != count)
                 return fail(output.errorString());
             entry.crc = quint32(
@@ -90,7 +94,7 @@ class Zip {
     bool file(const QString &name, const QString &path) {
         QFile file(path);
         if (!file.open(QIODevice::ReadOnly))
-            return fail("Cannot read " + path + ": " + file.errorString());
+            return fail(tr("Cannot read %1: %2").arg(path, file.errorString()));
         return add(name, file);
     }
     bool data(const QString &name, const QByteArray &bytes) {
@@ -112,7 +116,7 @@ class Zip {
                 return fail(output.errorString());
         }
         if (quint64(output.pos()) + 22 >= zipLimit)
-            return fail("PowerPoint export exceeds the 4 GiB ZIP limit.");
+            return fail(tr("PowerPoint export exceeds the 4 GiB ZIP limit."));
         const auto directorySize = output.pos() - offset;
         stream << quint32(0x06054b50) << quint16(0) << quint16(0) << quint16(entries.size())
                << quint16(entries.size()) << quint32(directorySize) << quint32(offset)
@@ -334,7 +338,7 @@ bool readSlide(const QJsonObject &entry, const QDir &base, PowerPointSlide &slid
         // Check contents rather than relying on a filename extension.
         QImageReader reader(path);
         if (!reader.canRead() || reader.size().isEmpty()) {
-            error = "Cannot read image: " + path;
+            error = tr("Cannot read image: %1").arg(path);
             return false;
         }
         return true;
@@ -356,18 +360,17 @@ bool readSlide(const QJsonObject &entry, const QDir &base, PowerPointSlide &slid
     QProcess probe;
     probe.start("ffprobe", {"-v", "error", "-show_streams", "-of", "json", slide.video});
     if (!probe.waitForStarted()) {
-        error = "Cannot start ffprobe: " + probe.errorString();
+        error = tr("Cannot start ffprobe: %1").arg(probe.errorString());
         return false;
     }
     if (!probe.waitForFinished(30000)) {
         probe.kill();
         probe.waitForFinished();
-        error = "Timed out inspecting video: " + slide.video;
+        error = tr("Timed out inspecting video: %1").arg(slide.video);
         return false;
     }
     if (probe.exitStatus() != QProcess::NormalExit || probe.exitCode() != 0) {
-        error = "Cannot inspect video " + slide.video + ": " +
-                QString::fromUtf8(probe.readAllStandardError()).trimmed();
+        error = tr("Cannot inspect video %1: %2").arg(slide.video, QString::fromUtf8(probe.readAllStandardError()).trimmed());
         return false;
     }
     QJsonParseError jsonError;
@@ -390,9 +393,7 @@ bool readSlide(const QJsonObject &entry, const QDir &base, PowerPointSlide &slid
     const double ratio = double(video["width"].toInt()) / video["height"].toInt();
     if (entry["span"].toBool()) {
         if (std::abs(ratio - 16.0 / 9.0) > .01) {
-            error =
-                "Spanning video must be 16:9 for PowerPoint: " + QFileInfo(slide.video).fileName() +
-                ". Use fit.";
+            error = tr("Spanning video must be 16:9 for PowerPoint: %1. Use fit.").arg(QFileInfo(slide.video).fileName());
             return false;
         }
     } else {
@@ -427,7 +428,7 @@ QString preparePowerPointVideo(const QString &source, const QString &output, QSt
     if (!probe.waitForFinished(30000) || probe.exitCode() != 0) {
         probe.kill();
         probe.waitForFinished();
-        *error = "Cannot inspect video: " + QFileInfo(source).fileName();
+        *error = tr("Cannot inspect video: %1").arg(QFileInfo(source).fileName());
         return {};
     }
     const auto info = QJsonDocument::fromJson(probe.readAllStandardOutput()).object();
@@ -438,7 +439,7 @@ QString preparePowerPointVideo(const QString &source, const QString &output, QSt
         if (stream["codec_type"] == "audio" && audio.isEmpty()) audio = stream;
     }
     if (video.isEmpty()) {
-        *error = "No video stream in " + QFileInfo(source).fileName();
+        *error = tr("No video stream in %1").arg(QFileInfo(source).fileName());
         return {};
     }
     if (QFileInfo(source).suffix().toLower() == "mp4" && video["codec_name"] == "h264" &&
@@ -451,7 +452,7 @@ QString preparePowerPointVideo(const QString &source, const QString &output, QSt
         "-threads", QString::number(encoderThreads()), "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2", "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", "-progress", "pipe:1", output});
     if (!encoder.waitForStarted()) {
-        *error = "Cannot start video conversion: " + encoder.errorString();
+        *error = tr("Cannot start video conversion: %1").arg(encoder.errorString());
         return {};
     }
     QByteArray pending, errors;
@@ -468,7 +469,7 @@ QString preparePowerPointVideo(const QString &source, const QString &output, QSt
         }
     } while (encoder.state() != QProcess::NotRunning);
     if (encoder.exitStatus() != QProcess::NormalExit || encoder.exitCode() != 0) {
-        *error = "Cannot convert " + QFileInfo(source).fileName() + ": " + QString::fromUtf8(errors).trimmed();
+        *error = tr("Cannot convert %1: %2").arg(QFileInfo(source).fileName(), QString::fromUtf8(errors).trimmed());
         return {};
     }
     return output;
@@ -485,27 +486,27 @@ bool writePptx(const QString &manifestPath, const QString &destination, QString 
     };
     QFile manifest(manifestPath);
     if (!manifest.open(QIODevice::ReadOnly))
-        return fail("Cannot read slide manifest: " + manifest.errorString());
+        return fail(tr("Cannot read slide manifest: %1").arg(manifest.errorString()));
     QJsonParseError parseError;
     const auto document = QJsonDocument::fromJson(manifest.readAll(), &parseError);
     if (parseError.error != QJsonParseError::NoError || !document.isObject() ||
         !document.object()["slides"].isArray())
-        return fail("Invalid slide manifest: " + parseError.errorString());
+        return fail(tr("Invalid slide manifest: %1").arg(parseError.errorString()));
     QList<PowerPointSlide> slides;
     const auto deck = document.object();
     for (const auto &value : deck["slides"].toArray()) {
         PowerPointSlide slide;
         QString problem;
         if (!value.isObject())
-            return fail("Invalid slide in manifest.");
+            return fail(tr("Invalid slide in manifest."));
         if (!readSlide(value.toObject(), QFileInfo(manifestPath).absoluteDir(), slide, problem))
             return fail(problem);
         slides.append(slide);
     }
     if (slides.isEmpty())
-        return fail("There are no slides to export.");
+        return fail(tr("There are no slides to export."));
     if (!QDir().mkpath(QFileInfo(destination).absolutePath()))
-        return fail("Cannot create the export directory.");
+        return fail(tr("Cannot create the export directory."));
     Zip zip(destination);
     if (!zip.error.isEmpty())
         return fail(zip.error);
@@ -601,7 +602,7 @@ bool writePptx(const QString &manifestPath, const QString &destination, QString 
             QBuffer encoded;
             encoded.open(QIODevice::WriteOnly);
             if (!reader.read().save(&encoded, "PNG"))
-                zip.fail("Cannot encode image for PowerPoint: " + path);
+                zip.fail(tr("Cannot encode image for PowerPoint: %1").arg(path));
             else
                 zip.data("ppt/" + target, encoded.data());
         }

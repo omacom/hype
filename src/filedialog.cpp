@@ -51,13 +51,13 @@ QString FileDialog::choose(bool save, const QString &location, const QString &la
     QByteArray folder = (save ? QFileInfo(location).absolutePath() : QDir(location).absolutePath()).toUtf8();
     folder.append('\0');
     QVariantMap options{{"handle_token", token}, {"modal", true}, {"multiple", false},
-                        {"accept_label", save ? "Save" : "Open"}, {"current_folder", folder},
+                        {"accept_label", save ? tr("Save") : tr("Open")}, {"current_folder", folder},
                         {"filters", QVariant::fromValue(Filters{filter})},
                         {"current_filter", QVariant::fromValue(filter)}};
     if (save) options.insert("current_name", QFileInfo(location).fileName());
     // Subscribe before sending: a fast response may arrive before the method reply.
     if (!bus.isConnected() || !dialog.listen("/org/freedesktop/portal/desktop/request/" + sender + "/" + token)) {
-        *error = "Could not connect to the desktop file chooser.";
+        *error = tr("Could not connect to the desktop file chooser.");
         return {};
     }
     const auto cleanup = qScopeGuard([&] {
@@ -73,25 +73,25 @@ QString FileDialog::choose(bool save, const QString &location, const QString &la
     connect(&portal, &QDBusServiceWatcher::serviceOwnerChanged, &dialog,
             [&](const QString &, const QString &oldOwner, const QString &) {
         if (dialog.m_done || oldOwner.isEmpty()) return;
-        dialog.m_error = "The desktop file chooser closed without answering.";
+        dialog.m_error = tr("The desktop file chooser closed without answering.");
         dialog.m_done = true;
         dialog.m_loop.quit();
     });
     auto call = QDBusMessage::createMethodCall(service, "/org/freedesktop/portal/desktop",
                                               "org.freedesktop.portal.FileChooser", save ? "SaveFile" : "OpenFile");
-    call.setArguments({QString(), save ? QString("Save File") : QString("Open File"), options});
+    call.setArguments({QString(), save ? tr("Save File") : tr("Open File"), options});
     QDBusPendingCallWatcher watcher(bus.asyncCall(call));
     connect(&watcher, &QDBusPendingCallWatcher::finished, &dialog, [&] {
         if (dialog.m_done) return;
         QDBusPendingReply<QDBusObjectPath> reply = watcher;
         if (reply.isError()) {
-            dialog.m_error = "Could not open the desktop file chooser: " + reply.error().message();
+            dialog.m_error = tr("Could not open the desktop file chooser: %1").arg(reply.error().message());
             dialog.m_done = true;
             dialog.m_loop.quit();
         } else if (reply.value().path() != dialog.m_request) {
             dialog.disconnectRequest();
             if (!dialog.listen(reply.value().path())) {
-                dialog.m_error = "Could not receive the desktop file chooser response.";
+                dialog.m_error = tr("Could not receive the desktop file chooser response.");
                 dialog.m_loop.quit();
             }
         }
@@ -121,9 +121,9 @@ void FileDialog::response(uint result, const QVariantMap &values) {
         const auto uris = values.value("uris").toStringList();
         const QUrl url(uris.value(0));
         if (url.isLocalFile()) m_file = url.toLocalFile();
-        else m_error = "Choose a local file.";
+        else m_error = tr("Choose a local file.");
     } else if (result != 1) {
-        m_error = "The desktop file chooser failed.";
+        m_error = tr("The desktop file chooser failed.");
     }
     m_loop.quit();
 }

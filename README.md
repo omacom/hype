@@ -155,7 +155,7 @@ Each slide supports one image or video. Copy the whole presentation folder when 
 
 ## Choose your look
 
-The palette and font icons in the toolbar choose an installed Omarchy theme and a presentation font. Hover to see the current choices. Theme colors apply to text, code, and slide backgrounds; your images keep their original colors. Code stays monospaced. Hype’s interface follows your current desktop theme independently and updates when you change it.
+The palette and font icons in the toolbar choose an installed Omarchy theme and a presentation font. Hover to see the current choices. Theme colors apply to text, code, and slide backgrounds; your images keep their original colors. Code stays monospaced. Hype’s interface follows your current desktop theme independently and updates when you change it. It speaks the language picked under Omarchy's **Setup > Language** too, switching as soon as you pick another; your slides stay as you wrote them.
 
 The header shows the presentation's name with your position in it, such as “Slide 4 of 45”; saving and exporting report their progress on that line. The file icon beside it holds New, Open, Save, Export, and Version history, and is highlighted when you have unsaved changes.
 
@@ -256,7 +256,7 @@ The build uses a Qt toolchain from Qt's installer under `build/qt/` when present
 
 For a launcher entry that rebuilds this checkout when opened, run `./bin/install-dev` and choose **Hype (Development)**.
 
-Run `./bin/test` for the regression suite: the C++ tests (`hype_tests`, which read exported PDFs back with Qt Pdf from `qt6-webengine`) and the command-line tests (`hype_commands`, in Python). Arguments go to `ctest`, so `./bin/test -R hype_commands` runs only those. Set `HYPE_GUI_TESTS=0` to skip the C++ window-level tests on a machine without multimedia. After building the tests, the presenter check can also run with two virtual displays:
+Run `./bin/test` for the regression suite: the C++ tests (`hype_tests`, which read exported PDFs back with Qt Pdf from `qt6-webengine`) and the command-line tests (`hype_commands`, in Python). Arguments go to `ctest`, so `./bin/test -R hype_commands` runs only those. Set `HYPE_GUI_TESTS=0` to skip the C++ window-level tests on a machine without multimedia. Every string the window shows is translated; [docs/i18n.md](docs/i18n.md) covers adding one and how the translations are kept in sync. After building the tests, the presenter check can also run with two virtual displays:
 
 ```sh
 QT_QPA_PLATFORMTHEME=generic QT_STYLE_OVERRIDE=Fusion \

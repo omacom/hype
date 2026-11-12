@@ -1,6 +1,7 @@
 #include "animationexport.h"
 #include "pptx.h"
 #include "renderer.h"
+#include <QCoreApplication>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -9,6 +10,9 @@
 #include <QProcess>
 #include <QScopeGuard>
 #include <memory>
+
+// Hype's free functions translate like its classes do; the Translator ignores the context.
+static QString tr(const char *text) { return QCoreApplication::translate("Hype", text); }
 #include <webp/demux.h>
 
 bool exportAnimation(const QString &source, const QString &base, const QVariantMap &palette,
@@ -35,7 +39,7 @@ bool exportAnimation(const QString &source, const QString &base, const QVariantM
                             size_t(webpBytes.size())};
         webp.reset(WebPAnimDecoderNew(&data, nullptr));
         if (!webp || !WebPAnimDecoderGetInfo(webp.get(), &info)) {
-            *error = "Cannot decode WebP animation";
+            *error = tr("Cannot decode WebP animation");
             return false;
         }
         frames = int(info.frame_count);
@@ -90,7 +94,7 @@ bool exportAnimation(const QString &source, const QString &base, const QVariantM
                              "+faststart",
                              QFileInfo(output).absoluteFilePath()});
     if (!encoder.waitForStarted()) {
-        *error = "Cannot start ffmpeg for animation conversion: " + encoder.errorString();
+        *error = tr("Cannot start ffmpeg for animation conversion: %1").arg(encoder.errorString());
         return false;
     }
     const auto cleanup = qScopeGuard([&] {
@@ -127,7 +131,7 @@ bool exportAnimation(const QString &source, const QString &base, const QVariantM
             uint8_t *pixels = nullptr;
             int timestamp = 0;
             if (!WebPAnimDecoderGetNext(webp.get(), &pixels, &timestamp)) {
-                *error = "Cannot decode WebP frame " + QString::number(i + 1);
+                *error = tr("Cannot decode WebP frame %1").arg(i + 1);
                 return false;
             }
             frame = QImage(pixels, int(info.canvas_width), int(info.canvas_height),
@@ -139,8 +143,7 @@ bool exportAnimation(const QString &source, const QString &base, const QVariantM
             delay = qMax(1, reader.nextImageDelay());
         }
         if (frame.isNull()) {
-            *error = "Cannot decode animation frame " + QString::number(i + 1) + ": " +
-                     reader.errorString();
+            *error = tr("Cannot decode animation frame %1: %2").arg(QString::number(i + 1), reader.errorString());
             return false;
         }
         QImage slide = background.copy();
@@ -163,8 +166,7 @@ bool exportAnimation(const QString &source, const QString &base, const QVariantM
         const QImage pixels = slide.convertToFormat(QImage::Format_RGBA8888);
         while (writtenFrames < targetFrames) {
             if (!writeFrame(pixels)) {
-                *error = "Animation conversion failed: " +
-                         QString::fromUtf8(diagnostics + encoder.readAllStandardError()).trimmed();
+                *error = tr("Animation conversion failed: %1").arg(QString::fromUtf8(diagnostics + encoder.readAllStandardError()).trimmed());
                 return false;
             }
             ++writtenFrames;
@@ -176,7 +178,7 @@ bool exportAnimation(const QString &source, const QString &base, const QVariantM
         diagnostics = (diagnostics + encoder.readAllStandardError()).right(8192);
     } while (encoder.state() != QProcess::NotRunning);
     if (encoder.exitStatus() != QProcess::NormalExit || encoder.exitCode() != 0) {
-        *error = "Animation conversion failed: " + QString::fromUtf8(diagnostics).trimmed();
+        *error = tr("Animation conversion failed: %1").arg(QString::fromUtf8(diagnostics).trimmed());
         return false;
     }
     if (progress)
