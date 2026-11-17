@@ -8,6 +8,7 @@
 #include <QDBusConnection>
 #include <QDBusMessage>
 #include <QDBusVariant>
+#include <QFileInfo>
 #include <QFont>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -60,7 +61,10 @@ int main(int argc, char **argv) {
     QGuiApplication app(argc, argv);
     app.setApplicationName("hype");
     app.setApplicationVersion(HYPE_VERSION);
-    app.setDesktopFileName(qEnvironmentVariable("HYPE_DESKTOP_FILE", "hype"));
+    // The desktop entry follows the binary's name, so an installed fork named
+    // hype-html gets its own identity beside the original without a wrapper.
+    app.setDesktopFileName(qEnvironmentVariable("HYPE_DESKTOP_FILE",
+                                                QFileInfo(app.applicationFilePath()).completeBaseName()));
     if (command)
         return runCli(app.arguments());
     QCommandLineParser args;

@@ -1,0 +1,43 @@
+# Package this fork as hype-html, beside an installed hype: the same app with
+# the HTML deck export, under its own name, icon, and desktop entry. The
+# source is the local checkout, so re-run makepkg after pulling or committing.
+pkgname=hype-html
+pkgver=0.7.1
+pkgrel=1
+pkgdesc='Simple Markdown presentations with a visual slide editor and self-contained HTML deck export'
+arch=('x86_64')
+url='https://github.com/razodin137/hype'
+license=('MIT')
+options=('!debug')
+depends=(
+  'ffmpeg'
+  'hicolor-icon-theme'
+  'qt6-base>=6.9'
+  'qt6-declarative>=6.9'
+  'qt6-multimedia>=6.9'
+  'qt6-imageformats'
+  'qt6-svg'
+  'source-highlight'
+  'zlib'
+  'libwebp'
+  'xdg-desktop-portal'
+  'qt6-wayland'
+)
+makedepends=('cmake' 'gcc' 'make' 'pkgconf' 'git')
+source=("$pkgname::git+file:///home/mrjohn/Work/hype#branch=export-html-deck")
+sha256sums=('SKIP')
+
+build() {
+  cd "$srcdir/$pkgname"
+  ./bin/build
+}
+
+package() {
+  cd "$srcdir/$pkgname"
+
+  install -Dm755 build/hype "$pkgdir/usr/bin/hype-html"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 pkgbuild/hype.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/hype-html.svg"
+  install -Dm644 pkgbuild/hype-html.desktop "$pkgdir/usr/share/applications/hype-html.desktop"
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+}
