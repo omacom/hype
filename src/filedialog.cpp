@@ -51,9 +51,13 @@ QString FileDialog::choose(bool save, const QString &location, const QString &la
     QByteArray folder = (save ? QFileInfo(location).absolutePath() : QDir(location).absolutePath()).toUtf8();
     folder.append('\0');
     QVariantMap options{{"handle_token", token}, {"modal", true}, {"multiple", false},
-                        {"accept_label", save ? tr("Save") : tr("Open")}, {"current_folder", folder},
-                        {"filters", QVariant::fromValue(Filters{filter})},
-                        {"current_filter", QVariant::fromValue(filter)}};
+                        {"accept_label", save ? tr("Save") : tr("Open")}, {"current_folder", folder}};
+    // A filter without rules (e.g. a folder export, which has no extension) is
+    // rejected outright by the portal, so send no filters at all in that case.
+    if (!filter.rules.isEmpty()) {
+        options.insert("filters", QVariant::fromValue(Filters{filter}));
+        options.insert("current_filter", QVariant::fromValue(filter));
+    }
     if (save) options.insert("current_name", QFileInfo(location).fileName());
     // Subscribe before sending: a fast response may arrive before the method reply.
     if (!bus.isConnected() || !dialog.listen("/org/freedesktop/portal/desktop/request/" + sender + "/" + token)) {
