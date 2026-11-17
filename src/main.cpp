@@ -75,6 +75,7 @@ int main(int argc, char **argv) {
     args.addOption({"pdf", "Export PDF and exit", "file"});
     args.addOption({"pptx", "Export rendered PowerPoint and exit", "file"});
     args.addOption({"html", "Export a self-contained navigable HTML deck and exit", "file"});
+    args.addOption({"html-folder", "Export an editable HTML deck folder and exit", "directory"});
     args.addOption({"render", "Render slide PNGs and manifest and exit", "directory"});
     args.addOption({"theme", "Apply installed theme", "name"});
     args.addOption({"save", "Save changes, such as --theme, and exit"});
@@ -91,7 +92,8 @@ int main(int argc, char **argv) {
     args.process(arguments);
     const bool exportWorker = args.isSet(snapshotOption);
     const bool exporting =
-        args.isSet("pdf") || args.isSet("pptx") || args.isSet("html") || args.isSet("render") || args.isSet("save");
+        args.isSet("pdf") || args.isSet("pptx") || args.isSet("html") || args.isSet("html-folder") ||
+        args.isSet("render") || args.isSet("save");
     // The window, and the export worker whose progress it shows, follow the Omarchy language; commands and
     // command-line exports stay in English for the scripts and agents that read them.
     std::optional<Translator> translator;
@@ -106,7 +108,9 @@ int main(int argc, char **argv) {
         fflush(stdout);
     };
     if (exportWorker) {
-        if (!args.isSet("pdf") && !args.isSet("pptx") && !args.isSet("html")) return 1;
+        if (!args.isSet("pdf") && !args.isSet("pptx") && !args.isSet("html") &&
+            !args.isSet("html-folder"))
+            return 1;
         if (!deck.loadExportSnapshot(args.value(snapshotOption))) {
             report({{"error", deck.status()}});
             return 1;
@@ -136,13 +140,15 @@ int main(int argc, char **argv) {
     }
     if (args.isSet("slide"))
         deck.select(args.value("slide").toInt() - 1);
-    for (const QString &option : {QString("pdf"), QString("pptx"), QString("html"), QString("render")})
+    for (const QString &option :
+         {QString("pdf"), QString("pptx"), QString("html"), QString("html-folder"), QString("render")})
         if (args.isSet(option)) {
             headless = true;
-            success = success && (option == "pdf"    ? deck.exportPdf(args.value(option))
-                                  : option == "pptx" ? deck.exportPptx(args.value(option))
-                                  : option == "html" ? deck.exportHtml(args.value(option))
-                                                     : deck.renderImages(args.value(option)));
+            success = success && (option == "pdf"        ? deck.exportPdf(args.value(option))
+                                  : option == "pptx"     ? deck.exportPptx(args.value(option))
+                                  : option == "html"     ? deck.exportHtml(args.value(option))
+                                  : option == "html-folder" ? deck.exportHtmlFolder(args.value(option))
+                                                            : deck.renderImages(args.value(option)));
         }
     if (headless) {
         if (exportWorker) {

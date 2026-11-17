@@ -3372,6 +3372,50 @@ static void write(const QString &path, const QString &content) {
         QVERIFY(file.seek(0));
         QCOMPARE(QString::fromUtf8(file.readAll()), page);
     }
+    void exportHtmlFolderProducesAnEditableDeck() {
+        QTemporaryDir tmp;
+        write(tmp.path() + "/talk.md", "---\ntitle: \"A <big> idea\"\n---\n\n# One\n\n---\n\n# Two\n\n- a\n");
+        Deck d;
+        QVERIFY(d.loadPath(tmp.path() + "/talk.md"));
+        const QString folder = tmp.path() + "/deck-html";
+        QVERIFY(d.exportHtmlFolder(folder));
+        // The editable shape: the page, the stylesheet, and the script as files beside the slides.
+        QVERIFY(QFile::exists(folder + "/index.html"));
+        QVERIFY(QFile::exists(folder + "/deck.css"));
+        QVERIFY(QFile::exists(folder + "/deck.js"));
+        QCOMPARE(QDir(folder + "/slides").entryList(QDir::Files).size(), 2);
+        QFile first(folder + "/slides/slide-001.webp");
+        QVERIFY(first.open(QIODevice::ReadOnly));
+        QCOMPARE(first.read(4), QByteArray("RIFF")); // WebP, like the single-file deck inlines.
+        QFile file(folder + "/index.html");
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        const QString page = QString::fromUtf8(file.readAll());
+        QVERIFY(page.contains("<title>A &lt;big&gt; idea</title>"));
+        QVERIFY(page.contains("<link rel=\"stylesheet\" href=\"deck.css\">"));
+        QVERIFY(page.contains("<script src=\"deck.js\"></script>"));
+        QVERIFY(page.contains("src=\"slides/slide-001.webp\""));
+        QVERIFY(page.contains("src=\"slides/slide-002.webp\""));
+        QVERIFY(page.contains("alt=\"Slide 1: One\""));
+        QVERIFY(page.contains("alt=\"Slide 2: Two\""));
+        QVERIFY(!page.contains("{{"));
+        QVERIFY(!page.contains("data:"));
+        // The stylesheet and the script are the real deck files, editable without Hype.
+        QFile css(folder + "/deck.css");
+        QVERIFY(css.open(QIODevice::ReadOnly));
+        QVERIFY(QString::fromUtf8(css.readAll()).contains("object-fit: contain"));
+        QFile js(folder + "/deck.js");
+        QVERIFY(js.open(QIODevice::ReadOnly));
+        QVERIFY(QString::fromUtf8(js.readAll()).contains("addEventListener"));
+        // A folder that already has files is refused, and left alone.
+        QVERIFY(!d.exportHtmlFolder(folder));
+        QVERIFY(file.seek(0));
+        QCOMPARE(QString::fromUtf8(file.readAll()), page);
+        // A failed export writes no deck: nothing that opens is left behind.
+        d.editSlide("```rust\nfn main() {}");
+        const QString fresh = tmp.path() + "/fresh-html";
+        QVERIFY(!d.exportHtmlFolder(fresh));
+        QVERIFY(!QFile::exists(fresh + "/index.html"));
+    }
     void saveCopyRollsBackOnFailure() {
         QTemporaryDir tmp;
         const QString original = tmp.filePath("original"), destination = tmp.filePath("copy");

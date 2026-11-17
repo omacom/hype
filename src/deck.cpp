@@ -1321,11 +1321,14 @@ void Deck::exportDialog(const QString &format) {
     if (m_exporting)
         return;
     QString error;
+    // A folder export names a directory, not a file with an extension.
+    const bool folder = format == "html-folder";
+    const QString name = QString(title()).replace(QRegularExpression(R"([/\\\x00-\x1f])"), "-");
     const QString p = FileDialog::choose(
         true,
-        baseDir() + "/" + QString(title()).replace(QRegularExpression(R"([/\\\x00-\x1f])"), "-") +
-            "." + format,
-        format.toUpper(), {"*." + format}, &error);
+        folder ? baseDir() + "/" + name + "-html" : baseDir() + "/" + name + "." + format,
+        folder ? tr("HTML folder") : format.toUpper(),
+        folder ? QStringList{} : QStringList{"*." + format}, &error);
     if (!error.isEmpty()) setStatus(error);
     if (p.isEmpty())
         return;
@@ -1371,8 +1374,16 @@ bool Deck::loadExportSnapshot(const QString &path) {
     return validateStructure("export");
 }
 void Deck::startExport(const QString &format, const QString &path) {
-    if (m_exporting || path.isEmpty() || !QStringList{"pdf", "pptx", "html"}.contains(format))
+    if (m_exporting || path.isEmpty() || !QStringList{"pdf", "pptx", "html", "html-folder"}.contains(format))
         return;
+    if (format == "html-folder" && QFileInfo::exists(path) && !QDir(path).isEmpty()) {
+        // A folder export moves a whole directory into place, so the destination must be free.
+        m_exportFailed = true;
+        m_exportStatus = tr("Choose a new or empty folder: %1 has files in it.").arg(path);
+        emit exportChanged();
+        emit exportFinished(false);
+        return;
+    }
     if (!validateStructure("export")) {
         m_exportFailed = true;
         m_exportStatus = m_status;
@@ -1400,7 +1411,8 @@ void Deck::startExport(const QString &format, const QString &path) {
     m_exportCancelled = false;
     m_exportFailed = false;
     m_exportProgress = 0;
-    m_exportStatus = tr("Preparing %1 export…").arg(format.toUpper());
+    m_exportStatus = tr("Preparing %1 export…")
+                         .arg(format == "html-folder" ? QStringLiteral("HTML FOLDER") : format.toUpper());
     emit exportChanged();
     auto *process = new QProcess(this);
     m_exportProcess = process;
@@ -1711,6 +1723,48 @@ static bool webp(const QImage &image, QByteArray *encoded, QString *error) {
     WebPFree(output);
     return true;
 }
+// Reads one of the bundled deck files, such as the page, the stylesheet, or the script.
+static bool readResource(const QString &path, QString *content, QString *error) {
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        *error = Deck::tr("Could not read the deck template");
+        return false;
+    }
+    *content = QString::fromUtf8(file.readAll());
+    return true;
+}
+
+// Fills the bundled deck page: shared chrome, plus the stylesheet, script, and slides
+// the two HTML exports each supply in their own form.
+QString Deck::htmlPage(const QString &stylesheet, const QString &script, const QString &sections) const {
+    QString page, error;
+    if (!readResource(":/deck.html", &page, &error))
+        return {};
+    return page
+        .replace("{{LANG}}", QLocale().name().split('_').value(0, "en"))
+        .replace("{{TITLE}}", title().toHtmlEscaped())
+        .replace("{{PREVIOUS}}", tr("Previous slide").toHtmlEscaped())
+        .replace("{{NEXT}}", tr("Next slide").toHtmlEscaped())
+        .replace("{{STYLESHEET}}", stylesheet)
+        .replace("{{SCRIPT}}", script)
+        .replace("{{SLIDES}}", sections.trimmed());
+}
+
+// Encodes one rendered slide as WebP, named for a screen reader, and for search, as PDF bookmarks do.
+static bool encodeSlide(const QString &rendered, int index, const QString &headline,
+                        QByteArray *encoded, QString *altText, QString *error) {
+    QByteArray webpBytes;
+    if (!webp(QImage(rendered), &webpBytes, error))
+        return false;
+    *encoded = webpBytes;
+    const QString title = headline.trimmed();
+    const QString alt = title.isEmpty()
+                            ? Deck::tr("Slide %1").arg(index)
+                            : Deck::tr("Slide %1: %2").arg(index).arg(title);
+    *altText = alt.toHtmlEscaped();
+    return true;
+}
+
 bool Deck::exportHtml(const QString &path) {
     // Render beside the destination, not in /tmp: /tmp is usually RAM-backed, and a deck's
     // rendered slide images would otherwise sit in memory until inlined.
@@ -1721,39 +1775,115 @@ bool Deck::exportHtml(const QString &path) {
     }
     if (!renderImages(temp.path(), 1920, false, 0.8))
         return false;
-    QFile page(":/deck.html");
-    if (!page.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        setStatus(tr("Could not read the deck template"));
+    QString error, stylesheet, script;
+    if (!readResource(":/deck.css", &stylesheet, &error) || !readResource(":/deck.js", &script, &error)) {
+        setStatus(error);
         return false;
     }
     QString sections;
     for (int i = 0; i < count(); ++i) {
         emit exportAdvanced(0.8 + 0.2 * (i + 1) / count(), tr("Inlining slide %1 of %2").arg(i + 1).arg(count()));
-        QString error;
         QByteArray webpBytes;
-        if (!webp(QImage(temp.filePath(QString("slide-%1.png").arg(i + 1, 3, 10, QChar('0')))),
-                  &webpBytes, &error)) {
+        QString alt;
+        if (!encodeSlide(temp.filePath(QString("slide-%1.png").arg(i + 1, 3, 10, QChar('0'))),
+                         i + 1, slideTitle(slide(i)), &webpBytes, &alt, &error)) {
             setStatus(tr("Slide %1: %2").arg(i + 1).arg(error));
             return false;
         }
-        // The alt text names each slide for a screen reader, and for search, as PDF bookmarks do.
-        const QString title = slideTitle(slide(i)).trimmed();
-        const QString alt = title.isEmpty()
-                                ? tr("Slide %1").arg(i + 1)
-                                : tr("Slide %1: %2").arg(i + 1).arg(title);
         sections += QString("<section class=\"slide\">\n<img src=\"data:image/webp;base64,%1\" alt=\"%2\">\n</section>\n")
-                        .arg(QString::fromLatin1(webpBytes.toBase64()), alt.toHtmlEscaped());
+                        .arg(QString::fromLatin1(webpBytes.toBase64()), alt);
     }
-    QString deck = QString::fromUtf8(page.readAll());
-    page.close();
-    deck.replace("{{LANG}}", QLocale().name().split('_').value(0, "en"))
-        .replace("{{TITLE}}", title().toHtmlEscaped())
-        .replace("{{PREVIOUS}}", tr("Previous slide").toHtmlEscaped())
-        .replace("{{NEXT}}", tr("Next slide").toHtmlEscaped())
-        .replace("{{SLIDES}}", sections.trimmed());
+    // One self-contained file: the stylesheet and script ride inside the page itself.
+    const QString deck = htmlPage("<style>\n" + stylesheet + "\n</style>",
+                                  "<script>\n" + script + "\n</script>", sections);
+    if (deck.isEmpty()) {
+        setStatus(tr("Could not read the deck template"));
+        return false;
+    }
     QSaveFile file(path);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text) ||
         file.write(deck.toUtf8()) < 0 || !file.commit()) {
+        setStatus(file.errorString());
+        return false;
+    }
+    emit exportAdvanced(1.0, tr("Exported %1").arg(path));
+    setStatus(tr("Exported %1").arg(path));
+    return true;
+}
+
+// The same deck in an editable shape: the page, the stylesheet, and the script as
+// separate files beside the slides as WebP, so any text editor can restyle the
+// deck without Hype. Every slide encodes before the first file is written, and
+// index.html is written last, so a failed export never leaves a folder that opens.
+bool Deck::exportHtmlFolder(const QString &path) {
+    const QFileInfo destination(path);
+    if (destination.exists() && !QDir(path).isEmpty()) {
+        setStatus(tr("Choose a new or empty folder: %1 has files in it.").arg(path));
+        return false;
+    }
+    // Render beside the destination, not in /tmp: /tmp is usually RAM-backed, and a deck's
+    // rendered slide images would otherwise sit in memory until encoded.
+    QTemporaryDir temp(destination.absoluteDir().filePath(".hype-render-XXXXXX"));
+    if (!temp.isValid()) {
+        setStatus(tr("Could not prepare the export: %1").arg(temp.errorString()));
+        return false;
+    }
+    if (!renderImages(temp.path(), 1920, false, 0.8))
+        return false;
+    QString error, stylesheet, script;
+    if (!readResource(":/deck.css", &stylesheet, &error) || !readResource(":/deck.js", &script, &error)) {
+        setStatus(error);
+        return false;
+    }
+    QList<QByteArray> encoded;
+    QString sections;
+    for (int i = 0; i < count(); ++i) {
+        emit exportAdvanced(0.8 + 0.15 * (i + 1) / count(),
+                             tr("Encoding slide %1 of %2").arg(i + 1).arg(count()));
+        QByteArray webpBytes;
+        QString alt;
+        if (!encodeSlide(temp.filePath(QString("slide-%1.png").arg(i + 1, 3, 10, QChar('0'))),
+                         i + 1, slideTitle(slide(i)), &webpBytes, &alt, &error)) {
+            setStatus(tr("Slide %1: %2").arg(i + 1).arg(error));
+            return false;
+        }
+        encoded << webpBytes;
+        sections += QString("<section class=\"slide\">\n<img src=\"slides/slide-%1.webp\" alt=\"%2\">\n</section>\n")
+                        .arg(i + 1, 3, 10, QChar('0')).arg(alt);
+    }
+    if (!QDir().mkpath(path + "/slides")) {
+        setStatus(tr("Could not create %1").arg(path + "/slides"));
+        return false;
+    }
+    for (int i = 0; i < encoded.size(); ++i) {
+        emit exportAdvanced(0.95 + 0.05 * (i + 1) / encoded.size(),
+                            tr("Writing slide %1 of %2").arg(i + 1).arg(encoded.size()));
+        QSaveFile slideFile(path + QString("/slides/slide-%1.webp").arg(i + 1, 3, 10, QChar('0')));
+        if (!slideFile.open(QIODevice::WriteOnly) ||
+            slideFile.write(encoded[i]) != encoded[i].size() || !slideFile.commit()) {
+            setStatus(slideFile.errorString());
+            return false;
+        }
+    }
+    const QList<QPair<QString, QString>> chrome = {{QStringLiteral("deck.css"), stylesheet},
+                                                   {QStringLiteral("deck.js"), script}};
+    for (const auto &[name, content] : chrome) {
+        QSaveFile chromeFile(path + "/" + name);
+        if (!chromeFile.open(QIODevice::WriteOnly | QIODevice::Text) ||
+            chromeFile.write(content.toUtf8()) < 0 || !chromeFile.commit()) {
+            setStatus(chromeFile.errorString());
+            return false;
+        }
+    }
+    const QString page = htmlPage("<link rel=\"stylesheet\" href=\"deck.css\">",
+                                  "<script src=\"deck.js\"></script>", sections);
+    if (page.isEmpty()) {
+        setStatus(tr("Could not read the deck template"));
+        return false;
+    }
+    QSaveFile file(path + "/index.html");
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text) ||
+        file.write(page.toUtf8()) < 0 || !file.commit()) {
         setStatus(file.errorString());
         return false;
     }

@@ -28,8 +28,11 @@ matter, slide separators, and image and video options, for this version of Hype.
    split the slide.
 4. Look: `hype render <file> --slide N -o /tmp/slide.png`, then view the PNG.
    Do this for slides whose layout matters: images, code, long text.
-5. Export when asked: `hype export <file> talk.pdf`, `talk.pptx`, or `talk.html` —
-   the last is one self-contained navigable web deck that opens in any browser.
+5. Export when asked: `hype export <file> talk.pdf`, `talk.pptx`, `talk.html`,
+   or a folder ending in `/` such as `deck/` — the last is the same navigable
+   web deck as `talk.html`, but as an editable folder: `index.html`, `deck.css`,
+   `deck.js`, and every slide as WebP in `slides/`. `talk.html` is the one
+   self-contained file that opens in any browser.
 
 ## Working with the person
 

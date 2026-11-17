@@ -262,25 +262,37 @@ int render(const QStringList &arguments) {
 }
 
 int exportDeck(const QStringList &arguments) {
-    Command command("export",
-                    "Export a presentation as PDF, PowerPoint, or a self-contained HTML deck, chosen by the file extension.");
-    command.parser.addPositionalArgument("output", "File ending in .pdf, .pptx, or .html", "<output>");
+    Command command(
+        "export",
+        "Export a presentation as PDF, PowerPoint, or an HTML deck: one self-contained file, "
+        "or an editable folder for a path ending in /.");
+    command.parser.addPositionalArgument("output",
+                                        "File ending in .pdf, .pptx, or .html, or a new folder ending in /",
+                                        "<output>");
     command.json();
     command.parser.process(arguments);
     const QString output = command.argument(2);
-    const QString format = QFileInfo(output).suffix().toLower();
-    if (format != "pdf" && format != "pptx" && format != "html")
-        return fail("Name an output file ending in .pdf, .pptx, or .html.");
+    // A trailing slash, or a path that is already a directory, names the HTML folder export.
+    const QString directory = output.endsWith('/') ? output.left(output.size() - 1) : output;
+    const bool folder = output.endsWith('/') ||
+                        (QFileInfo(output).isDir() && QFileInfo(output).suffix().isEmpty());
+    const QString format = folder ? QString("html-folder") : QFileInfo(output).suffix().toLower();
+    if (format != "pdf" && format != "pptx" && format != "html" && format != "html-folder")
+        return fail("Name an output file ending in .pdf, .pptx, or .html, or a new folder ending in / "
+                    "for an editable HTML deck.");
     Deck deck;
     if (!command.load(deck))
         return 1;
-    QDir().mkpath(QFileInfo(output).absolutePath());
+    QDir().mkpath(QFileInfo(directory).absolutePath());
     if (!(format == "pdf"   ? deck.exportPdf(output)
           : format == "pptx" ? deck.exportPptx(output)
-                             : deck.exportHtml(output)))
+          : format == "html" ? deck.exportHtml(output)
+                             : deck.exportHtmlFolder(directory)))
         return fail(deck.status());
     if (command.parser.isSet("json"))
-        print({{"output", QFileInfo(output).absoluteFilePath()}, {"format", format}, {"slides", deck.count()}});
+        print({{"output", QFileInfo(format == "html-folder" ? directory : output).absoluteFilePath()},
+               {"format", format},
+               {"slides", deck.count()}});
     else
         print(stdout, deck.status());
     return 0;
@@ -398,7 +410,7 @@ QString cliSummary() {
            "  check <presentation>            Report every problem, with slide and line\n"
            "  slides <presentation>           Outline the slides\n"
            "  render <presentation>           Render one slide or all of them to PNG\n"
-           "  export <presentation> <output>  Export PDF, PowerPoint, or a navigable HTML deck\n"
+           "  export <presentation> <output>  Export PDF, PowerPoint, or an HTML deck or folder\n"
            "  themes                          List installed themes\n"
            "  help format                     How to write a presentation\n"
            "  skill [install]                 Print the skill for coding agents, or install it";
