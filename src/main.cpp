@@ -51,7 +51,7 @@ int main(int argc, char **argv) {
     bool windowless = command;
     for (int i = 1; i < argc; ++i) {
         const QByteArray argument(argv[i]);
-        for (const char *option : {"--pdf", "--pptx", "--render", "--save", "--help", "--version"})
+        for (const char *option : {"--pdf", "--pptx", "--html", "--render", "--save", "--help", "--version"})
             windowless = windowless || argument.startsWith(option);
         windowless = windowless || argument == "-h" || argument == "-v";
     }
@@ -70,6 +70,7 @@ int main(int argc, char **argv) {
     args.addPositionalArgument("presentation", "Markdown presentation");
     args.addOption({"pdf", "Export PDF and exit", "file"});
     args.addOption({"pptx", "Export rendered PowerPoint and exit", "file"});
+    args.addOption({"html", "Export a self-contained navigable HTML deck and exit", "file"});
     args.addOption({"render", "Render slide PNGs and manifest and exit", "directory"});
     args.addOption({"theme", "Apply installed theme", "name"});
     args.addOption({"save", "Save changes, such as --theme, and exit"});
@@ -85,7 +86,8 @@ int main(int argc, char **argv) {
         arguments.removeAt(1);
     args.process(arguments);
     const bool exportWorker = args.isSet(snapshotOption);
-    const bool exporting = args.isSet("pdf") || args.isSet("pptx") || args.isSet("render") || args.isSet("save");
+    const bool exporting =
+        args.isSet("pdf") || args.isSet("pptx") || args.isSet("html") || args.isSet("render") || args.isSet("save");
     // The window, and the export worker whose progress it shows, follow the Omarchy language; commands and
     // command-line exports stay in English for the scripts and agents that read them.
     std::optional<Translator> translator;
@@ -100,7 +102,7 @@ int main(int argc, char **argv) {
         fflush(stdout);
     };
     if (exportWorker) {
-        if (!args.isSet("pdf") && !args.isSet("pptx")) return 1;
+        if (!args.isSet("pdf") && !args.isSet("pptx") && !args.isSet("html")) return 1;
         if (!deck.loadExportSnapshot(args.value(snapshotOption))) {
             report({{"error", deck.status()}});
             return 1;
@@ -130,11 +132,12 @@ int main(int argc, char **argv) {
     }
     if (args.isSet("slide"))
         deck.select(args.value("slide").toInt() - 1);
-    for (const QString &option : {QString("pdf"), QString("pptx"), QString("render")})
+    for (const QString &option : {QString("pdf"), QString("pptx"), QString("html"), QString("render")})
         if (args.isSet(option)) {
             headless = true;
             success = success && (option == "pdf"    ? deck.exportPdf(args.value(option))
                                   : option == "pptx" ? deck.exportPptx(args.value(option))
+                                  : option == "html" ? deck.exportHtml(args.value(option))
                                                      : deck.renderImages(args.value(option)));
         }
     if (headless) {

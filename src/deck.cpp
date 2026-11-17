@@ -43,6 +43,7 @@
 #include <csignal>
 #include <cstdio>
 #include <cstring>
+#include <webp/encode.h>
 
 // Hype's free functions translate like its classes do; the Translator ignores the context.
 static QString tr(const char *text) { return QCoreApplication::translate("Hype", text); }
@@ -139,6 +140,28 @@ QString setScalar(QString header, const QString &key, const QString &value) {
         header.insert(end, line + "\n");
     }
     return header;
+}
+// The headline, or else the first line of text, or else of code. Fences close as in parseDeck.
+QString slideTitle(const QString &text) {
+    static const QRegularExpression fenceRe("^(`{3,}|~{3,})(.*)$");
+    QString first, code, fence;
+    for (const auto &raw : text.split('\n')) {
+        const QString line = raw.trimmed();
+        const auto match = fenceRe.match(line);
+        const QString run = match.captured(1);
+        if (match.hasMatch() && fence.isEmpty())
+            fence = run;
+        else if (match.hasMatch() && run[0] == fence[0] && run.size() >= fence.size() &&
+                 match.captured(2).trimmed().isEmpty())
+            fence.clear();
+        else if (!fence.isEmpty() && code.isEmpty())
+            code = line;
+        else if (fence.isEmpty() && line.startsWith('#'))
+            return line.mid(line.indexOf(' ') + 1).trimmed();
+        else if (fence.isEmpty() && first.isEmpty())
+            first = QString(line).remove(QRegularExpression(R"(^(>|[-*+]|\d+\.)\s+|\\$)")).trimmed();
+    }
+    return first.isEmpty() ? code : first;
 }
 // The first slide's problem, for a structure whose boundaries are already known.
 static QString slidesError(const ParsedDeck &parsed) {
@@ -1348,7 +1371,7 @@ bool Deck::loadExportSnapshot(const QString &path) {
     return validateStructure("export");
 }
 void Deck::startExport(const QString &format, const QString &path) {
-    if (m_exporting || path.isEmpty() || !QStringList{"pdf", "pptx"}.contains(format))
+    if (m_exporting || path.isEmpty() || !QStringList{"pdf", "pptx", "html"}.contains(format))
         return;
     if (!validateStructure("export")) {
         m_exportFailed = true;
@@ -1503,7 +1526,7 @@ static bool opaque(const QImage &image) {
     }
     return true;
 }
-bool Deck::renderImages(const QString &directory, int width, bool powerPoint) {
+bool Deck::renderImages(const QString &directory, int width, bool powerPoint, double portion) {
     if (!validateStructure("export"))
         return false;
     for (int i = 0; i < count(); ++i) {
@@ -1558,7 +1581,6 @@ bool Deck::renderImages(const QString &directory, int width, bool powerPoint) {
             return still;
         });
     if (!overlap) {
-        const double portion = 0.8;
         while (!stills.waitForDone(100)) {
             const auto done = std::count_if(rendered.cbegin(), rendered.cend(), [](const auto &f) { return f.isFinished(); });
             emit exportAdvanced(portion * done / count(), tr("Exporting slide %1 of %2").arg(qMin<qsizetype>(count(), done + 1)).arg(count()));
@@ -1569,7 +1591,6 @@ bool Deck::renderImages(const QString &directory, int width, bool powerPoint) {
     QJsonArray slides;
     QHash<QString, QString> convertedVideos;
     for (int i = 0; i < count(); ++i) {
-        const double portion = powerPoint ? 0.8 : 1.0;
         // `message` names the slide as %1 and the slide count as %2.
         auto progress = [this, i, portion](double fraction, const QString &message) {
             emit exportAdvanced(portion * (i + fraction) / count(), message.arg(i + 1).arg(count()));
@@ -1661,7 +1682,7 @@ bool Deck::exportPptx(const QString &path) {
         setStatus(tr("Could not prepare the export: %1").arg(temp.errorString()));
         return false;
     }
-    if (!renderImages(temp.path(), 3840, true))
+    if (!renderImages(temp.path(), 3840, true, 0.8))
         return false;
     QString error;
     emit exportAdvanced(0.8, tr("Packaging PowerPoint…"));
@@ -1670,6 +1691,73 @@ bool Deck::exportPptx(const QString &path) {
         setStatus(tr("PowerPoint export failed: %1").arg(error));
         return false;
     }
+    setStatus(tr("Exported %1").arg(path));
+    return true;
+}
+// WebP carries the same picture as PNG in a tenth of the bytes at 1920px, so a whole
+// deck fits in one file that opens anywhere; alpha, and so a translucent background,
+// survives. libwebp is linked directly rather than going through Qt's image plugins,
+// whose WebP writer is only present when an extra package is installed.
+static bool webp(const QImage &image, QByteArray *encoded, QString *error) {
+    const QImage rgba = image.convertToFormat(QImage::Format_RGBA8888);
+    uint8_t *output = nullptr;
+    const size_t size = WebPEncodeRGBA(rgba.constBits(), rgba.width(), rgba.height(),
+                                       rgba.bytesPerLine(), 85.0f, &output);
+    if (!size) {
+        *error = tr("Cannot encode image as WebP");
+        return false;
+    }
+    *encoded = QByteArray(reinterpret_cast<const char *>(output), qsizetype(size));
+    WebPFree(output);
+    return true;
+}
+bool Deck::exportHtml(const QString &path) {
+    // Render beside the destination, not in /tmp: /tmp is usually RAM-backed, and a deck's
+    // rendered slide images would otherwise sit in memory until inlined.
+    QTemporaryDir temp(QFileInfo(path).absoluteDir().filePath(".hype-render-XXXXXX"));
+    if (!temp.isValid()) {
+        setStatus(tr("Could not prepare the export: %1").arg(temp.errorString()));
+        return false;
+    }
+    if (!renderImages(temp.path(), 1920, false, 0.8))
+        return false;
+    QFile page(":/deck.html");
+    if (!page.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        setStatus(tr("Could not read the deck template"));
+        return false;
+    }
+    QString sections;
+    for (int i = 0; i < count(); ++i) {
+        emit exportAdvanced(0.8 + 0.2 * (i + 1) / count(), tr("Inlining slide %1 of %2").arg(i + 1).arg(count()));
+        QString error;
+        QByteArray webpBytes;
+        if (!webp(QImage(temp.filePath(QString("slide-%1.png").arg(i + 1, 3, 10, QChar('0')))),
+                  &webpBytes, &error)) {
+            setStatus(tr("Slide %1: %2").arg(i + 1).arg(error));
+            return false;
+        }
+        // The alt text names each slide for a screen reader, and for search, as PDF bookmarks do.
+        const QString title = slideTitle(slide(i)).trimmed();
+        const QString alt = title.isEmpty()
+                                ? tr("Slide %1").arg(i + 1)
+                                : tr("Slide %1: %2").arg(i + 1).arg(title);
+        sections += QString("<section class=\"slide\">\n<img src=\"data:image/webp;base64,%1\" alt=\"%2\">\n</section>\n")
+                        .arg(QString::fromLatin1(webpBytes.toBase64()), alt.toHtmlEscaped());
+    }
+    QString deck = QString::fromUtf8(page.readAll());
+    page.close();
+    deck.replace("{{LANG}}", QLocale().name().split('_').value(0, "en"))
+        .replace("{{TITLE}}", title().toHtmlEscaped())
+        .replace("{{PREVIOUS}}", tr("Previous slide").toHtmlEscaped())
+        .replace("{{NEXT}}", tr("Next slide").toHtmlEscaped())
+        .replace("{{SLIDES}}", sections.trimmed());
+    QSaveFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text) ||
+        file.write(deck.toUtf8()) < 0 || !file.commit()) {
+        setStatus(file.errorString());
+        return false;
+    }
+    emit exportAdvanced(1.0, tr("Exported %1").arg(path));
     setStatus(tr("Exported %1").arg(path));
     return true;
 }

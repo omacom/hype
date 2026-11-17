@@ -107,29 +107,6 @@ QString toText(const QString &path, const Problem &problem) {
         .arg(problem.slide ? QString("slide %1 ").arg(problem.slide) : QString())
         .arg(problem.error ? "error" : "warning", problem.message);
 }
-// The headline, or else the first line of text, or else of code. Fences close as in parseDeck.
-QString slideTitle(const QString &text) {
-    static const QRegularExpression fenceRe("^(`{3,}|~{3,})(.*)$");
-    QString first, code, fence;
-    for (const auto &raw : text.split('\n')) {
-        const QString line = raw.trimmed();
-        const auto match = fenceRe.match(line);
-        const QString run = match.captured(1);
-        if (match.hasMatch() && fence.isEmpty())
-            fence = run;
-        else if (match.hasMatch() && run[0] == fence[0] && run.size() >= fence.size() &&
-                 match.captured(2).trimmed().isEmpty())
-            fence.clear();
-        else if (!fence.isEmpty() && code.isEmpty())
-            code = line;
-        else if (fence.isEmpty() && line.startsWith('#'))
-            return line.mid(line.indexOf(' ') + 1).trimmed();
-        else if (fence.isEmpty() && first.isEmpty())
-            first = QString(line).remove(QRegularExpression(R"(^(>|[-*+]|\d+\.)\s+|\\$)")).trimmed();
-    }
-    return first.isEmpty() ? code : first;
-}
-
 struct Command {
     QCommandLineParser parser;
     Command(const QString &name, const QString &description, bool presentation = true) {
@@ -285,19 +262,22 @@ int render(const QStringList &arguments) {
 }
 
 int exportDeck(const QStringList &arguments) {
-    Command command("export", "Export a presentation as PDF or PowerPoint, chosen by the file extension.");
-    command.parser.addPositionalArgument("output", "File ending in .pdf or .pptx", "<output>");
+    Command command("export",
+                    "Export a presentation as PDF, PowerPoint, or a self-contained HTML deck, chosen by the file extension.");
+    command.parser.addPositionalArgument("output", "File ending in .pdf, .pptx, or .html", "<output>");
     command.json();
     command.parser.process(arguments);
     const QString output = command.argument(2);
     const QString format = QFileInfo(output).suffix().toLower();
-    if (format != "pdf" && format != "pptx")
-        return fail("Name an output file ending in .pdf or .pptx.");
+    if (format != "pdf" && format != "pptx" && format != "html")
+        return fail("Name an output file ending in .pdf, .pptx, or .html.");
     Deck deck;
     if (!command.load(deck))
         return 1;
     QDir().mkpath(QFileInfo(output).absolutePath());
-    if (!(format == "pdf" ? deck.exportPdf(output) : deck.exportPptx(output)))
+    if (!(format == "pdf"   ? deck.exportPdf(output)
+          : format == "pptx" ? deck.exportPptx(output)
+                             : deck.exportHtml(output)))
         return fail(deck.status());
     if (command.parser.isSet("json"))
         print({{"output", QFileInfo(output).absoluteFilePath()}, {"format", format}, {"slides", deck.count()}});
@@ -418,7 +398,7 @@ QString cliSummary() {
            "  check <presentation>            Report every problem, with slide and line\n"
            "  slides <presentation>           Outline the slides\n"
            "  render <presentation>           Render one slide or all of them to PNG\n"
-           "  export <presentation> <output>  Export PDF or PowerPoint\n"
+           "  export <presentation> <output>  Export PDF, PowerPoint, or a navigable HTML deck\n"
            "  themes                          List installed themes\n"
            "  help format                     How to write a presentation\n"
            "  skill [install]                 Print the skill for coding agents, or install it";

@@ -152,13 +152,30 @@ class CliTests(unittest.TestCase):
         exported = json.loads(self.hype('export', self.deck, 'talk.pptx', '--json').stdout)
         self.assertEqual((exported['format'], exported['slides']), ('pptx', 3))
         self.assertEqual((self.root / 'talk.pptx').read_bytes()[:2], b'PK')
-        self.assertIn('.pdf or .pptx', self.hype('export', self.deck, 'talk.key', code=1).stderr)
+        self.assertIn('.pdf, .pptx, or .html', self.hype('export', self.deck, 'talk.key', code=1).stderr)
+
+    def test_export_html_writes_one_self_contained_deck(self):
+        self.write(DECK)
+        exported = json.loads(self.hype('export', self.deck, 'talk.html', '--json').stdout)
+        self.assertEqual((exported['format'], exported['slides']), ('html', 3))
+        page = (self.root / 'talk.html').read_text()
+        self.assertEqual(page.count('data:image/webp;base64,'), 3)
+        self.assertIn('<section class="slide">', page)
+        self.assertIn('alt="Slide 1: One"', page)
+        self.assertNotIn('{{', page)
+        # An unfinished deck exports nothing, and says where the problem is.
+        self.write('# One\n\n---\n\n```ruby\na = 1\n')
+        self.assertIn('Unclosed code fence', self.hype('export', self.deck, 'talk.html', code=1).stderr)
+        self.assertEqual((self.root / 'talk.html').read_text(), page)
 
     def test_flags_export_without_a_display_and_need_a_presentation(self):
         self.write(DECK)
         self.hype(self.deck, '--pdf', 'flag.pdf')
         self.assertEqual((self.root / 'flag.pdf').read_bytes()[:5], b'%PDF-')
+        self.hype(self.deck, '--html', 'flag.html')
+        self.assertIn('data:image/webp;base64,', (self.root / 'flag.html').read_text())
         self.assertIn('Name a Markdown presentation', self.hype('--pdf', 'none.pdf', code=1).stderr)
+        self.assertIn('Name a Markdown presentation', self.hype('--html', 'none.html', code=1).stderr)
         self.assertFalse((self.root / 'config/hype/hype.ini').exists())
 
     def test_themes_and_help(self):

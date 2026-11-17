@@ -23,6 +23,8 @@ struct ParsedDeck {
 ParsedDeck parseDeck(const QString &source);
 QString scalar(const QString &header, const QString &key, const QString &fallback = {});
 QString setScalar(QString header, const QString &key, const QString &value);
+// The headline, or else the first line of text or code: what names a slide in an outline.
+QString slideTitle(const QString &text);
 
 class Deck : public QAbstractListModel {
     Q_OBJECT
@@ -110,8 +112,13 @@ class Deck : public QAbstractListModel {
     Q_INVOKABLE bool restoreVersion(const QString &name);
     bool exportPdf(const QString &path);
     bool exportPptx(const QString &path);
+    // One self-contained file: every slide inlined as WebP, wrapped in a navigable page.
+    bool exportHtml(const QString &path);
     // For PowerPoint, animations become videos and opaque slides are stored as JPEG.
-    bool renderImages(const QString &directory, int width = 1920, bool powerPoint = false);
+    // Portion is the share of the export progress bar rendering reports, so a caller
+    // that continues afterwards, like packaging or inlining, can take over from there.
+    bool renderImages(const QString &directory, int width = 1920, bool powerPoint = false,
+                      double portion = 1.0);
     Q_INVOKABLE void select(int index);
     // After a language switch, so what the window shows is made again in the new language.
     void retranslate();

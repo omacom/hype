@@ -3326,6 +3326,7 @@ static void write(const QString &path, const QString &content) {
         write(output, "keep me");
         QVERIFY(!d.exportPdf(output));
         QVERIFY(!d.exportPptx(tmp.filePath("out.pptx")));
+        QVERIFY(!d.exportHtml(tmp.filePath("out.html")));
         QVERIFY(!d.renderImages(tmp.filePath("rendered")));
         QSignalSpy finished(&d, &Deck::exportFinished);
         d.startExport("pdf", output);
@@ -3345,6 +3346,31 @@ static void write(const QString &path, const QString &content) {
         QPdfDocument pdf;
         QCOMPARE(pdf.load(tmp.filePath("complete.pdf")), QPdfDocument::Error::None);
         QCOMPARE(pdf.pageCount(), 3);
+    }
+    void exportHtmlProducesASelfContainedDeck() {
+        QTemporaryDir tmp;
+        write(tmp.path() + "/talk.md", "---\ntitle: \"A <big> idea\"\n---\n\n# One\n\n---\n\n# Two\n\n- a\n");
+        Deck d;
+        QVERIFY(d.loadPath(tmp.path() + "/talk.md"));
+        QVERIFY(d.exportHtml(tmp.path() + "/talk.html"));
+        QFile file(tmp.path() + "/talk.html");
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        const QString page = QString::fromUtf8(file.readAll());
+        // Every slide inlined as WebP, named for a screen reader and search.
+        QCOMPARE(page.count("data:image/webp;base64,"), 2);
+        QCOMPARE(page.count("<section class=\"slide\">"), 2);
+        QVERIFY(page.contains("<title>A &lt;big&gt; idea</title>"));
+        QVERIFY(page.contains("alt=\"Slide 1: One\""));
+        QVERIFY(page.contains("alt=\"Slide 2: Two\""));
+        // One self-contained file: nothing loads from outside it.
+        QVERIFY(!page.contains("href=\""));
+        QCOMPARE(page.count("src=\""), page.count("src=\"data:"));
+        QVERIFY(!page.contains("{{"));
+        // A failed export leaves an existing file alone.
+        d.editSlide("```rust\nfn main() {}");
+        QVERIFY(!d.exportHtml(tmp.path() + "/talk.html"));
+        QVERIFY(file.seek(0));
+        QCOMPARE(QString::fromUtf8(file.readAll()), page);
     }
     void saveCopyRollsBackOnFailure() {
         QTemporaryDir tmp;

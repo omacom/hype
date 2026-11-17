@@ -699,6 +699,7 @@ ApplicationWindow {
     Shortcut { enabled: !win.popupOpen && !deck.compressingImage; sequences: [StandardKey.Quit]; context: Qt.ApplicationShortcut; onActivated: win.close() }
     Shortcut { sequence: "Ctrl+E"; enabled: !win.popupOpen && !deck.compressingImage && !win.presenting && !deck.exporting; onActivated: deck.exportDialog("pdf") }
     Shortcut { sequence: "Ctrl+Shift+E"; enabled: !win.popupOpen && !deck.compressingImage && !win.presenting && !deck.exporting; onActivated: deck.exportDialog("pptx") }
+    Shortcut { sequence: "Ctrl+Alt+E"; enabled: !win.popupOpen && !deck.compressingImage && !win.presenting && !deck.exporting; onActivated: deck.exportDialog("html") }
     Shortcut { sequences: ["?", "Shift+?"]; enabled: !win.popupOpen && !deck.compressingImage && !win.presenting && !slideEditor.activeFocus && !sourceEditor.activeFocus; onActivated: shortcutsOverlay.open() }
     Shortcut { sequence: "F1"; enabled: !win.popupOpen && !deck.compressingImage && !win.presenting; onActivated: shortcutsOverlay.open() }
     Shortcut { sequence: "Ctrl+M"; enabled: !win.popupOpen && !deck.compressingImage && (!win.presenting); onActivated: win.toggleOverview() }
@@ -1118,6 +1119,7 @@ ApplicationWindow {
                     AppMenuSeparator {}
                     AppMenuItem { text: qsTr("Export as PDF…"); hint: "Ctrl+E"; enabled: !deck.exporting; onTriggered: deck.exportDialog("pdf") }
                     AppMenuItem { text: qsTr("Export as PowerPoint…"); hint: "Ctrl+Shift+E"; enabled: !deck.exporting; onTriggered: deck.exportDialog("pptx") }
+                    AppMenuItem { text: qsTr("Export as HTML…"); hint: "Ctrl+Alt+E"; enabled: !deck.exporting; onTriggered: deck.exportDialog("html") }
                     AppMenuSeparator {}
                     AppMenuItem { text: qsTr("Version history…"); onTriggered: historyDialog.open() }
                 }
@@ -1138,7 +1140,7 @@ ApplicationWindow {
         readonly property var groups: [
             { title: qsTr("Presentation"), keys: [
                 ["Ctrl+N", qsTr("New presentation")], ["Ctrl+O", qsTr("Open")], ["Ctrl+S", qsTr("Save")], ["Ctrl+Shift+S", qsTr("Save as")], ["Ctrl+Q", qsTr("Quit")],
-                ["Ctrl+E", qsTr("Export as PDF")], ["Ctrl+Shift+E", qsTr("Export as PowerPoint")], ["Ctrl+Space / F5", qsTr("Present")], ["Shift+F5", qsTr("Present from first slide")], ["Esc", qsTr("Stop presenting")],
+                ["Ctrl+E", qsTr("Export as PDF")], ["Ctrl+Shift+E", qsTr("Export as PowerPoint")], ["Ctrl+Alt+E", qsTr("Export as HTML deck")], ["Ctrl+Space / F5", qsTr("Present")], ["Shift+F5", qsTr("Present from first slide")], ["Esc", qsTr("Stop presenting")],
                 ["Space", qsTr("Play or pause video while presenting")] ] },
             { title: qsTr("View"), keys: [
                 ["Ctrl+M", qsTr("Overview on or off")], ["Ctrl+.", qsTr("Markdown source on or off")],

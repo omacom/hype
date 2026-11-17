@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="{{LANG}}">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{TITLE}}</title>
+    <style>
+      :root { color-scheme: dark; }
+      html, body { height: 100%; }
+      body {
+        margin: 0;
+        overflow: hidden;
+        background: #000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-family: system-ui, sans-serif;
+      }
+      .stage {
+        position: relative;
+        aspect-ratio: 16 / 9;
+        width: min(100vw, 100vh * 16 / 9);
+        max-height: 100vh;
+        background: #000;
+      }
+      .slide { display: none; }
+      .slide.active { display: block; }
+      .slide img {
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+        display: block;
+      }
+      .nav {
+        position: absolute;
+        top: 50%;
+        transform: translateY(-50%);
+        padding: 14px 10px;
+        border: none;
+        border-radius: 6px;
+        background: rgba(255, 255, 255, 0.08);
+        color: #eee;
+        font-size: 28px;
+        line-height: 1;
+        cursor: pointer;
+        opacity: 0;
+        transition: opacity 0.2s;
+      }
+      .nav:hover { background: rgba(255, 255, 255, 0.2); opacity: 1; }
+      .nav:focus-visible { opacity: 0.7; }
+      .stage:hover .nav { opacity: 0.7; }
+      .prev { left: 10px; }
+      .next { right: 10px; }
+      .counter {
+        position: absolute;
+        right: 12px;
+        bottom: 10px;
+        padding: 2px 9px;
+        border-radius: 10px;
+        background: rgba(0, 0, 0, 0.4);
+        color: rgba(255, 255, 255, 0.6);
+        font-size: 13px;
+        pointer-events: none;
+      }
+      @media (hover: none) {
+        .nav { opacity: 0.5; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="stage" id="stage">
+      {{SLIDES}}
+      <button type="button" class="nav prev" aria-label="{{PREVIOUS}}">&#8249;</button>
+      <button type="button" class="nav next" aria-label="{{NEXT}}">&#8250;</button>
+      <div class="counter" id="counter"></div>
+    </div>
+    <script>
+      "use strict"
+
+      const stage = document.getElementById("stage")
+      const slides = [ ...stage.querySelectorAll(".slide") ]
+      const counter = document.getElementById("counter")
+      const prev = stage.querySelector(".prev")
+      const next = stage.querySelector(".next")
+      let current = -1
+
+      function fromHash() {
+        const n = parseInt(location.hash.slice(1), 10)
+        return Number.isInteger(n) ? n - 1 : 0
+      }
+
+      function show(index) {
+        current = Math.max(0, Math.min(slides.length - 1, index))
+        slides.forEach((slide, i) => slide.classList.toggle("active", i === current))
+        counter.textContent = `${current + 1} / ${slides.length}`
+        history.replaceState(null, "", `#${current + 1}`)
+      }
+
+      function go(step) {
+        show(current + step)
+      }
+
+      document.addEventListener("keydown", (event) => {
+        if (event.ctrlKey || event.metaKey || event.altKey) return
+        if (
+          (event.key === " " || event.key === "Enter") &&
+          event.target instanceof Element &&
+          event.target.closest("button")
+        ) {
+          return
+        }
+        switch (event.key) {
+          case "ArrowRight":
+          case "ArrowDown":
+          case "PageDown":
+          case " ":
+            event.preventDefault()
+            go(1)
+            break
+          case "ArrowLeft":
+          case "ArrowUp":
+          case "PageUp":
+            event.preventDefault()
+            go(-1)
+            break
+          case "Home":
+            event.preventDefault()
+            show(0)
+            break
+          case "End":
+            event.preventDefault()
+            show(slides.length - 1)
+            break
+          case "f":
+          case "F":
+            if (document.fullscreenElement) document.exitFullscreen()
+            else stage.requestFullscreen()
+            break
+        }
+      })
+
+      stage.addEventListener("click", () => go(1))
+      prev.addEventListener("click", (event) => {
+        event.stopPropagation()
+        go(-1)
+      })
+      next.addEventListener("click", (event) => {
+        event.stopPropagation()
+        go(1)
+      })
+
+      let swipe = null
+      stage.addEventListener("pointerdown", (event) => {
+        swipe = event.clientX
+      })
+      stage.addEventListener("pointerup", (event) => {
+        if (swipe === null) return
+        const dx = event.clientX - swipe
+        swipe = null
+        if (Math.abs(dx) > 48) go(dx < 0 ? 1 : -1)
+      })
+
+      window.addEventListener("hashchange", () => show(fromHash()))
+
+      show(fromHash())
+    </script>
+  </body>
+</html>
