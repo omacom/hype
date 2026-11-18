@@ -1335,8 +1335,23 @@ const slides = [...stage.querySelectorAll(".slide")]
 // reloading it—so one canvas per index is enough. A picture or font that
 // arrives after the first paint repaints the same canvas in place, which keeps
 // the identity a caller already holds and lets a transition upload it late.
+//
+// A transition reads the outgoing slide and the incoming one, so only the last
+// few textures can be in flight; any more would just hold 1920 × 1080 pixels
+// for slides the viewer has left. The cache is a small LRU: a read marks its
+// entry as most recent, an insert drops the oldest, and a slide that comes back
+// is painted again on demand.
 
+const TEXTURE_CACHE_LIMIT = 4
 const slideTextures = new Map()
+
+function keepTexture(index, texture) {
+  slideTextures.delete(index)
+  slideTextures.set(index, texture)
+  while (slideTextures.size > TEXTURE_CACHE_LIMIT) {
+    slideTextures.delete(slideTextures.keys().next().value)
+  }
+}
 
 // Picture formats a browser can animate on its own. A still file in one of them
 // costs a single extra paint; a stale frame would otherwise show mid-transition.
@@ -1359,6 +1374,8 @@ function slideTexture(index, refresh = false) {
   const section = slides[index]
   const cached = slideTextures.get(index)
   if (cached) {
+    // Reading the cache is what a transition does, so it refreshes recency.
+    keepTexture(index, cached)
     // A video or an animated picture has moved past the frame the cache holds,
     // so a transition repaints it in place and keeps the identity it uploads.
     if (refresh && hasMovingMedia(section)) {
@@ -1367,9 +1384,12 @@ function slideTexture(index, refresh = false) {
     return cached
   }
   const texture = paintSlideToCanvas(section)
-  slideTextures.set(index, texture)
-  // A texture painted before its pictures decoded is repainted, not replaced.
-  const repaint = () => paintSlideToCanvas(section, texture)
+  keepTexture(index, texture)
+  // A texture painted before its pictures decoded is repainted, not replaced,
+  // unless the cache has evicted it in the meantime.
+  const repaint = () => {
+    if (slideTextures.get(index) === texture) paintSlideToCanvas(section, texture)
+  }
   for (const element of section.querySelectorAll("img, video")) {
     if (element.tagName === "VIDEO") {
       if (element.readyState < 2) {
@@ -1383,7 +1403,8 @@ function slideTexture(index, refresh = false) {
 }
 
 // Text fitted with a fallback face is refitted once the real font loads, so a
-// texture painted before that would carry the old metrics.
+// texture painted before that would carry the old metrics. Only the entries
+// still cached need repainting: a slide painted later already has the font.
 document.fonts.ready.then(() => {
   for (const [index, texture] of slideTextures)
     paintSlideToCanvas(slides[index], texture)
@@ -1750,5 +1771,12 @@ window.addEventListener("hashchange", () => show(fromHash()))
 show(fromHash())
 
 // The rasterizer's contract, for both a rendered folder deck and a baked
-// one-file deck: which transition enters a slide, and that slide as a texture.
-window.HypeDeck = { resolveTransition, slideTexture }
+// one-file deck: which transition enters a slide, that slide as a texture, and
+// how many textures the cache is holding.
+window.HypeDeck = {
+  resolveTransition,
+  slideTexture,
+  get textureCount() {
+    return slideTextures.size
+  }
+}

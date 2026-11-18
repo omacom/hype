@@ -407,6 +407,107 @@ transition-duration: 4
 """
 
 
+# A deck longer than the texture cache's limit. Visiting every slide must leave
+# only the last few textures behind: a transition needs two, and the rest would
+# hold pixel memory for slides the viewer has left.
+BOUNDED_PAGE = """<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>deck texture cache</title>
+    <link rel="stylesheet" href="__STYLESHEET__">
+  </head>
+  <body>
+    <div class="stage" id="stage">
+      <button type="button" class="nav prev" aria-label="Previous">&#8249;</button>
+      <button type="button" class="nav next" aria-label="Next">&#8250;</button>
+      <div class="counter" id="counter"></div>
+    </div>
+    <script type="text/markdown" id="source">---
+transition: "crossfade"
+transition-duration: 0.1
+---
+
+# One
+
+---
+
+# Two
+
+---
+
+# Three
+
+---
+
+# Four
+
+---
+
+# Five
+
+---
+
+# Six
+
+---
+
+# Seven
+
+---
+
+# Eight</script>
+    <script type="application/json" id="palette">{"background": "#1a1b26", "foreground": "#a9b1d6", "accent": "#7aa2f7"}</script>
+    <script type="application/json" id="transitions">{"crossfade":"vec4 transition(vec2 uv) { return mix(texture2D(fromTex, uv), texture2D(toTex, uv), progress); }"}</script>
+    <script src="__SCRIPT__"></script>
+    <script>
+      window.addEventListener("load", () => {
+        const results = []
+        const add = (ok, name, detail) =>
+          results.push((ok ? "PASS " : "FAIL ") + name + (detail === undefined ? "" : " (" + detail + ")"))
+        const hook = window.HypeDeck
+        const counting = !!hook && typeof hook.slideTexture === "function"
+          && typeof hook.textureCount === "number"
+        add(counting, "HypeDeck textureCount hook", counting ? hook.textureCount : "missing")
+        if (counting) {
+          // The deck's own limit: a transition holds two textures at once.
+          const limit = 4
+          const sections = [...document.querySelectorAll("section.slide")]
+          // Visiting asks for textures: leaving a slide and arriving at the next
+          // is two requests. The overlay may be refused a WebGL context here, so
+          // the cache's entry point is then driven the way a transition drives it.
+          for (let index = 1; index < sections.length; index++) {
+            try { window.show(index) } catch {}
+          }
+          add(hook.textureCount <= limit, "visiting stays within the limit", hook.textureCount)
+          const textures = []
+          for (let index = 0; index < sections.length; index++)
+            textures.push(hook.slideTexture(index))
+          add(textures.every(texture => texture instanceof HTMLCanvasElement),
+              "every slide rasterizes")
+          add(hook.textureCount <= limit, "texture cache bounded", hook.textureCount)
+          add(hook.textureCount < sections.length, "cache smaller than the deck",
+              hook.textureCount + " of " + sections.length)
+
+          const size = hook.textureCount
+          add(hook.slideTexture(5) === textures[5], "cached slide keeps its texture")
+          add(hook.textureCount === size, "re-reading a cached slide does not grow the cache")
+          const repainted = hook.slideTexture(0)
+          add(repainted instanceof HTMLCanvasElement && repainted !== textures[0],
+              "evicted slide repaints on demand")
+          add(hook.textureCount <= limit, "repaint stays within the limit", hook.textureCount)
+        }
+        const report = document.createElement("pre")
+        report.id = "results"
+        report.textContent = results.join("\\n")
+        document.body.appendChild(report)
+      })
+    </script>
+  </body>
+</html>
+"""
+
+
 @unittest.skipUnless(CHROMIUM, 'chromium is not installed')
 class DeckTransitionTests(unittest.TestCase):
     def render(self, page, files=None):
@@ -457,6 +558,15 @@ class DeckTransitionTests(unittest.TestCase):
         self.assertIn('PASS refresh repaints moving media', report)
         self.assertTrue('PASS departing moving texture repainted' in report
                         or 'SKIP webgl' in report, report)
+
+    def test_texture_cache_stays_bounded(self):
+        report = self.render(BOUNDED_PAGE)
+        self.assertNotIn('FAIL', report, report)
+        self.assertIn('PASS every slide rasterizes', report)
+        self.assertIn('PASS texture cache bounded', report)
+        self.assertIn('PASS cache smaller than the deck', report)
+        self.assertIn('PASS evicted slide repaints on demand', report)
+        self.assertIn('PASS repaint stays within the limit', report)
 
 
 if __name__ == '__main__':
