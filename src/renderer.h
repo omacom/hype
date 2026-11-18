@@ -39,6 +39,9 @@ QString withMediaDirectives(const QString &source, const QStringList &remove,
 QString speakerNotes(const QString &source);
 Media parseMedia(const QString &source, const QString &base);
 QString ensurePoster(const QString &video, const QString &base);
+// What the slide draws without because its template lacks it; see composedWarnings().
+QStringList slideWarnings(const QString &source, const QString &base,
+                          const QVariantMap &palette = {});
 QStringList slideProblems(const QString &source, const QString &base,
                           const QVariantMap &palette = {});
 // Shared with the component engine.

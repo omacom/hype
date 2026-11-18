@@ -30,6 +30,8 @@ QString libraryDirectory();
 // Every template a presentation in `base` can name, in the order names are looked up;
 // a name appears once, as the one `template:` finds.
 QList<Entry> available(const QString &base);
+// The file of each of those templates, without reading any of them.
+QStringList files(const QString &base);
 // The slides of the template at `path` that show something; a template.md has none.
 QList<Starter> starterSlides(const QString &path);
 // A template's slides as a copy reads: without its definitions or section marks.

@@ -17,6 +17,10 @@ bool isComposedSlide(const QString &source, const QVariantMap &palette);
 // Errors: unknown components or props, unclosed tags, missing images or icons.
 QStringList composedProblems(const QString &source, const QString &base,
                              const QVariantMap &palette);
+// What the slide draws without: components, props and slots of another template than the
+// one in use. The slide still shows, so these are for telling the author, not for refusing.
+QStringList composedWarnings(const QString &source, const QString &base,
+                             const QVariantMap &palette);
 // Paints in 1920×1080 slide units; the caller has already scaled the painter.
 // `warning` receives fit and readability warnings.
 void paintComposed(QPainter *painter, const QString &source, const QString &base,
@@ -50,6 +54,9 @@ QString definitionsIn(const QString &text);
 QString withoutDefinitions(const QString &source);
 // Registers definitions and returns the id palettes refer to them by, as template_id.
 QString rememberTemplate(const QString &text);
+// Registers what the templates in these files call their components, props and slots, and
+// returns the id palettes refer to it by, as vocabulary_id.
+QString rememberVocabulary(const QStringList &files);
 bool templateShowsPages(const QString &id);
 
 // True for a component Hype itself provides, under any of its names.

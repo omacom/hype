@@ -649,6 +649,29 @@ const QRegularExpression &placeholder() {
     return re;
 }
 
+// A slide written for one template and moved to another names components, props and slots
+// the new one does not have. That is not a slip of the keyboard: some template within
+// reach does define them. Such a slide draws without them, and says so as a warning; a
+// name no template knows is still an error.
+const QChar softMark(0x1f);
+QString soft(const QString &message) { return softMark + message; }
+QStringList pick(const QStringList &problems, bool softOnes) {
+    QStringList chosen;
+    for (const QString &problem : problems)
+        if (problem.startsWith(softMark) == softOnes &&
+            !chosen.contains(softOnes ? problem.mid(1) : problem))
+            chosen << (softOnes ? problem.mid(1) : problem);
+    return chosen;
+}
+// What every template within reach calls its components, and each one's props and slots.
+struct Vocabulary {
+    QHash<QString, QSet<QString>> components;
+    bool has(const QString &component) const { return components.contains(component); }
+    bool has(const QString &component, const QString &prop) const {
+        return components.value(component).contains(prop);
+    }
+};
+
 // `slide` numbers errors by the lines of a slide rather than of a template file.
 Definitions readDefinitions(const QString &text, bool slide = false) {
     Definitions result;
@@ -720,6 +743,13 @@ Definitions definitions(const QString &id) {
     return registry.value(id);
 }
 
+QHash<QString, Vocabulary> vocabularies;
+QStringList vocabularyOrder;
+Vocabulary vocabulary(const QString &id) {
+    QMutexLocker lock(&registryMutex);
+    return vocabularies.value(id);
+}
+
 // Text with the slide line each of its lines came from.
 struct Lines {
     QStringList text;
@@ -770,12 +800,48 @@ struct Built {
     }
 };
 
-void expand(QVector<Node> &nodes, const Definitions &defs, const QVariantMap &palette,
-            QStringList &errors, int depth) {
+void expand(QVector<Node> &nodes, const Definitions &defs, const Vocabulary &others,
+            const QVariantMap &palette, QStringList &errors, int depth) {
     for (int i = 0; i < nodes.size(); ++i) {
         const auto def = defs.byName.constFind(nodes[i].type);
+        if (def == defs.byName.cend() && !specs().contains(canonical(nodes[i].type)) &&
+            nodes[i].type != "Define" && nodes[i].type != "Slot" && depth <= 8) {
+            // A component nobody here defines. What it wraps is still the author's, so it is
+            // drawn as it would be outside the component rather than dropped.
+            const Node use = nodes[i];
+            const QString where = "<" + use.type + "> on slide line " + QString::number(use.line);
+            if (others.has(use.type))
+                errors << soft(where +
+                               " belongs to another template, not this one; what it holds is "
+                               "drawn without it");
+            else
+                errors << "Unknown component " + where +
+                              suggestion(use.type,
+                                         specs().keys() + aliases().keys() + defs.byName.keys(),
+                                         "<%1>");
+            QVector<Node> held;
+            if (!use.text.trimmed().isEmpty()) {
+                // Its slots have nowhere to go; what they hold is content like the rest.
+                static const QRegularExpression slotTag(
+                    "<Slot\\s+name\\s*=\\s*\"[^\"]*\"\\s*>|</Slot>");
+                QStringList lines = blankComments(use.text).split('\n');
+                for (QString &line : lines)
+                    line.remove(slotTag);
+                int leading = 0;
+                while (leading < lines.size() && lines[leading].trimmed().isEmpty())
+                    ++leading;
+                parseLines(lines, use.textLine > 0 ? use.textLine - leading - 1 : use.line - 1,
+                           held, errors, 0);
+            }
+            expand(held, defs, others, palette, errors, depth + 1);
+            nodes.remove(i);
+            for (int k = 0; k < held.size(); ++k)
+                nodes.insert(i + k, held[k]);
+            i += held.size() - 1;
+            continue;
+        }
         if (def == defs.byName.cend()) {
-            expand(nodes[i].kids, defs, palette, errors, depth);
+            expand(nodes[i].kids, defs, others, palette, errors, depth);
             continue;
         }
         const Node use = nodes[i];
@@ -787,10 +853,16 @@ void expand(QVector<Node> &nodes, const Definitions &defs, const QVariantMap &pa
         }
         QStringList known =
             def->defaults.keys() + QStringList(def->placeholders.begin(), def->placeholders.end());
-        for (auto it = use.props.cbegin(); it != use.props.cend(); ++it)
-            if (!known.contains(it.key()) && !common.contains(it.key()))
-                errors << "<" + use.type + "> on slide line " + QString::number(use.line) +
-                              " has no prop “" + it.key() + "”" + suggestion(it.key(), known);
+        for (auto it = use.props.cbegin(); it != use.props.cend(); ++it) {
+            if (known.contains(it.key()) || common.contains(it.key()))
+                continue;
+            const QString missing = "<" + use.type + "> on slide line " +
+                                    QString::number(use.line) + " has no prop “" + it.key() + "”";
+            // Another template's component of this name takes the prop; this one leaves it out.
+            errors << (others.has(use.type, it.key())
+                           ? soft(missing + " in this template; it is left out")
+                           : missing + suggestion(it.key(), known));
+        }
         // <Slot name="x">…</Slot> inside a use fills {x}; the rest is {children}.
         Lines children;
         QMap<QString, Lines> filled;
@@ -837,12 +909,20 @@ void expand(QVector<Node> &nodes, const Definitions &defs, const QVariantMap &pa
                 k = j;
             }
         }
-        for (const QString &name : filled.keys())
-            if (!def->placeholders.contains(name))
-                errors << "<" + use.type + "> on slide line " + QString::number(use.line) +
-                              " has no slot “" + name + "”" +
-                              suggestion(name, QStringList(def->placeholders.begin(),
-                                                           def->placeholders.end()));
+        for (const QString &name : filled.keys()) {
+            if (def->placeholders.contains(name))
+                continue;
+            const QString missing = "<" + use.type + "> on slide line " +
+                                    QString::number(use.line) + " has no slot “" + name + "”";
+            errors << (others.has(use.type, name)
+                           ? soft(missing + " in this template; what it holds joins the rest")
+                           : missing + suggestion(name, QStringList(def->placeholders.begin(),
+                                                                    def->placeholders.end())));
+            // Either way the words were written to be shown, so they follow the other content.
+            const Lines orphan = filled.take(name);
+            children.text << "" << orphan.text;
+            children.origin << use.line << orphan.origin;
+        }
         Built body;
         const auto fromUse = [&](int) { return use.line; };
         auto addLines = [&](const Lines &lines) {
@@ -914,7 +994,7 @@ void expand(QVector<Node> &nodes, const Definitions &defs, const QVariantMap &pa
             }
         };
         place(made);
-        expand(made, defs, palette, errors, depth + 1);
+        expand(made, defs, others, palette, errors, depth + 1);
         if (made.size() == 1)
             for (const QString &key : common)
                 if (use.props.contains(key))
@@ -1569,6 +1649,7 @@ QString componentFrame(const QString &source, const Definitions &defs, bool *fou
 Composition compose(const QString &source, const QVariantMap &palette, Ctx &c, bool check = true) {
     Composition slide;
     const Definitions defs = definitions(palette.value("template_id").toString());
+    const Vocabulary others = vocabulary(palette.value("vocabulary_id").toString());
     QString body = source;
     QString frame = slideFrame(source, palette);
     bool own = false;
@@ -1585,9 +1666,13 @@ Composition compose(const QString &source, const QVariantMap &palette, Ctx &c, b
         for (Node &n : nodes)
             if (n.textLine > 0)
                 n.textLine -= 1;
-    } else if (!frame.isEmpty())
-        slide.errors << "The frame <" + frame + "> is not defined by the template";
-    expand(nodes, defs, palette, slide.errors, 0);
+    } else if (!frame.isEmpty()) {
+        const QString missing = "The frame <" + frame + "> is not defined by the template";
+        slide.errors << (others.has(frame)
+                             ? soft(missing + " in use; the slide is drawn without a frame")
+                             : missing);
+    }
+    expand(nodes, defs, others, palette, slide.errors, 0);
     if (check) {
         // The slide's own definitions are checked here, where their lines are known.
         if (source.contains("<Define"))
@@ -1774,9 +1859,13 @@ QStringList composedProblems(const QString &source, const QString &base,
                              const QVariantMap &palette) {
     Ctx c = context(base, palette);
     Composition slide = compose(source, palette, c);
-    QStringList problems = slide.errors;
-    problems.removeDuplicates();
-    return problems;
+    return pick(slide.errors, false);
+}
+
+QStringList composedWarnings(const QString &source, const QString &base,
+                             const QVariantMap &palette) {
+    Ctx c = context(base, palette);
+    return pick(compose(source, palette, c).errors, true);
 }
 
 namespace {
@@ -1880,10 +1969,8 @@ void paintComposed(QPainter *p, const QString &source, const QString &base,
     Ctx c = context(base, palette);
     c.p = p;
     Composition slide = compose(source, palette, c);
-    if (problems) {
-        *problems = slide.errors;
-        problems->removeDuplicates();
-    }
+    if (problems)
+        *problems = pick(slide.errors, false);
     const qreal scale = fitSlide(slide, c, source, base, palette);
     paintComposition(slide, c);
     if (warning) {
@@ -2052,6 +2139,50 @@ QString definitionsIn(const QString &text) {
     for (const auto &[first, last] : definitionBlocks(lines))
         blocks << lines.mid(first, last - first + 1).join('\n');
     return blocks.join("\n\n");
+}
+
+QString rememberVocabulary(const QStringList &files) {
+    // Each file is read once per version of it: a library template can run to hundreds of slides.
+    static QHash<QString, QHash<QString, QSet<QString>>> read;
+    QStringList stamps;
+    for (const QString &file : files) {
+        const QFileInfo info(file);
+        stamps << file + ':' + QString::number(info.lastModified().toMSecsSinceEpoch()) + ':' +
+                      QString::number(info.size());
+    }
+    const QString id = QString::fromLatin1(
+        QCryptographicHash::hash(stamps.join('\n').toUtf8(), QCryptographicHash::Sha1).toHex());
+    QMutexLocker lock(&registryMutex);
+    if (vocabularies.contains(id))
+        return id;
+    Vocabulary all;
+    for (int i = 0; i < files.size(); ++i) {
+        if (!read.contains(stamps[i])) {
+            if (read.size() > 256)
+                read.clear();
+            QHash<QString, QSet<QString>> words;
+            QFile file(files[i]);
+            if (file.open(QIODevice::ReadOnly)) {
+                const Definitions defs =
+                    readDefinitions(definitionsIn(QString::fromUtf8(file.readAll())));
+                for (auto it = defs.byName.cbegin(); it != defs.byName.cend(); ++it) {
+                    QSet<QString> names = it->placeholders;
+                    for (const QString &key : it->defaults.keys())
+                        names.insert(key);
+                    words.insert(it.key(), names);
+                }
+            }
+            read.insert(stamps[i], words);
+        }
+        const auto words = read.value(stamps[i]);
+        for (auto it = words.cbegin(); it != words.cend(); ++it)
+            all.components[it.key()].unite(it.value());
+    }
+    vocabularies.insert(id, all);
+    vocabularyOrder << id;
+    while (vocabularyOrder.size() > 64)
+        vocabularies.remove(vocabularyOrder.takeFirst());
+    return id;
 }
 
 QString rememberTemplate(const QString &text) {

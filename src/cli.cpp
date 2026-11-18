@@ -61,6 +61,9 @@ QList<Problem> slideProblemsAt(const Deck &deck, const ParsedDeck &parsed, int i
     for (const auto &message :
          slideProblems(deck.slide(index), deck.baseDir(), deck.slidePalette(index)))
         problems << Problem{index + 1, line, true, message};
+    for (const auto &message :
+         slideWarnings(deck.slide(index), deck.baseDir(), deck.slidePalette(index)))
+        problems << Problem{index + 1, line, false, message};
     if (deck.slide(index).trimmed().isEmpty())
         problems << Problem{index + 1, line, false, "Empty slide"};
     return problems;
@@ -111,7 +114,10 @@ QList<Problem> findProblems(const Deck &deck) {
     // Only painting reveals text that had to shrink too far, so lay out every slide.
     std::function<QList<Problem>(int)> inspect = [&](int index) {
         auto found = slideProblemsAt(deck, parsed, index);
-        if (found.isEmpty()) {
+        // A slide with an error is not laid out for its warnings; one drawn without a
+        // template's component still is.
+        if (std::none_of(found.cbegin(), found.cend(),
+                         [](const Problem &problem) { return problem.error; })) {
             QString warning;
             paint(deck, index, 480, &warning);
             if (!warning.isEmpty())

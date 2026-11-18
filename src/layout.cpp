@@ -54,6 +54,48 @@ QColor Ctx::color(const QString &key) const {
     return {};
 }
 
+namespace {
+// The color a word names: the web's color names, and a few more that slides use.
+QColor wordColor(const QString &word) {
+    static const QHash<QString, QString> more{
+        {"amber", "#f59e0b"}, {"rose", "#f43f5e"},  {"emerald", "#10b981"}, {"sky", "#0ea5e9"},
+        {"mint", "#34d399"},  {"peach", "#fb923c"}, {"slate", "#64748b"},   {"stone", "#78716c"}};
+    static const QRegularExpression letters("^[a-z]+$");
+    if (more.contains(word))
+        return QColor(more.value(word));
+    return letters.match(word).hasMatch() && word != "transparent" && QColor::isValidColorName(word)
+               ? QColor(word)
+               : QColor();
+}
+// The palette's color closest in hue, among those that are colors rather than the page,
+// the text or a shade of them. Invalid when none is within an eighth of the wheel.
+QColor nearestInPalette(const QColor &wanted, const QVariantMap &palette) {
+    static const QRegularExpression structural(
+        "^(ink|muted|surface|line|selection|cursor)$|(^|_)(background|foreground|dark|darker|light|"
+        "lighter)(_|$)|^gradient");
+    QColor best;
+    qreal least = 45;
+    for (auto it = palette.cbegin(); it != palette.cend(); ++it) {
+        const QString value = it.value().toString();
+        if (!value.startsWith('#') || structural.match(it.key()).hasMatch())
+            continue;
+        const QColor candidate(value);
+        if (!candidate.isValid() || candidate.hslSaturationF() < 0.2)
+            continue;
+        qreal apart = qAbs(candidate.hslHueF() - wanted.hslHueF()) * 360;
+        if (apart > 180)
+            apart = 360 - apart;
+        // Of two colors as near in hue, the one as light as the word's is the closer.
+        apart += qAbs(candidate.lightnessF() - wanted.lightnessF()) * 20;
+        if (apart < least) {
+            least = apart;
+            best = candidate;
+        }
+    }
+    return best;
+}
+} // namespace
+
 QColor Ctx::tone(const QString &raw, const Ink &ink) const {
     const QString v = raw.trimmed().toLower();
     if (v.isEmpty())
@@ -83,6 +125,15 @@ QColor Ctx::tone(const QString &raw, const Ink &ink) const {
         return QColor(palette.value(v).toString());
     if (const QColor derived = color(v); derived.isValid())
         return derived;
+    // A color word this palette does not define draws as the nearest color it does: a slide
+    // that says coral keeps a warm red under a template whose reds go by other names.
+    // Where the palette has nothing near, the word means what it means on the web.
+    if (const QColor wanted = wordColor(v); wanted.isValid()) {
+        if (wanted.hslSaturationF() < 0.15)
+            return ink.muted;
+        const QColor near = nearestInPalette(wanted, palette);
+        return near.isValid() ? near : wanted;
+    }
     return {};
 }
 

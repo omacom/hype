@@ -616,6 +616,10 @@ QString ensurePoster(const QString &video, const QString &base) {
     }
     return result;
 }
+QStringList slideWarnings(const QString &source, const QString &base, const QVariantMap &palette) {
+    return isComposedSlide(source, palette) ? composedWarnings(source, base, palette)
+                                            : QStringList();
+}
 QStringList slideProblems(const QString &source, const QString &base, const QVariantMap &palette) {
     if (isComposedSlide(source, palette))
         return composedProblems(source, base, palette);

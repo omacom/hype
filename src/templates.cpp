@@ -131,6 +131,24 @@ QList<Entry> available(const QString &base) {
     return found;
 }
 
+QStringList files(const QString &base) {
+    QStringList found, names;
+    for (const QString &root :
+         {QDir(base).absoluteFilePath("templates"), libraryDirectory(), QString(":/templates")}) {
+        if (root.isEmpty())
+            continue;
+        for (const QString &folder : QDir(root).entryList(QDir::Dirs | QDir::NoDotAndDotDot,
+                                                          QDir::Name | QDir::IgnoreCase)) {
+            const QString path = fileIn(root + "/" + folder);
+            if (path.isEmpty() || names.contains(folder))
+                continue;
+            names << folder;
+            found << path;
+        }
+    }
+    return found;
+}
+
 QString withoutTemplateMarks(const QString &source) {
     QString shown = withoutDefinitionLines(source);
     if (!shown.contains("section="))

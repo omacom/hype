@@ -1625,6 +1625,78 @@ static void write(const QString &path, const QString &content) {
         QTRY_COMPARE(deck.palette()["accent"].toString(), QString("#654321"));
         QVERIFY(!isComposedSlide(deck.slide(0), deck.palette())); // No frame any more.
     }
+    // A presentation moved to another template names what its old one had. Its slides still
+    // draw and say what they drew without; a name no template has is an error as before.
+    void slidesDrawThroughWhatAnotherTemplateHad() {
+        QTemporaryDir dir;
+        // Only the templates written here are within reach, not this machine's library.
+        const bool hadData = qEnvironmentVariableIsSet("XDG_DATA_HOME");
+        const QByteArray oldData = qgetenv("XDG_DATA_HOME");
+        qputenv("XDG_DATA_HOME", dir.filePath("data").toUtf8());
+        const auto restore = qScopeGuard(
+            [&] { hadData ? qputenv("XDG_DATA_HOME", oldData) : qunsetenv("XDG_DATA_HOME"); });
+        QVERIFY(QDir(dir.path()).mkpath("templates/studio") &&
+                QDir(dir.path()).mkpath("templates/plain"));
+        write(dir.filePath("templates/studio/template.md"),
+              "---\ncolor_coral: \"#f97362\"\n---\n\n"
+              "<Define name=\"Wordmark\">\n<Text>Omacom</Text>\n{children}\n</Define>\n\n"
+              "<Define name=\"Section\" number=\"\">\n# {number} {children}\n{aside}\n</Define>\n");
+        write(
+            dir.filePath("templates/plain/template.md"),
+            "---\ncolor_background: \"#ffffff\"\ncolor_foreground: \"#000000\"\ncolor_red: "
+            "\"#ff0000\"\n"
+            "color_blue: \"#0000ff\"\n---\n\n<Define name=\"Section\">\n# {children}\n</Define>\n");
+        const QString slides =
+            "<Wordmark>\n# Kept words\n</Wordmark>\n\n---\n\n"
+            "<Section number=\"01\">\nWhere we are\n<Slot name=\"aside\">\nAside "
+            "words\n</Slot>\n</Section>\n\n"
+            "---\n\n<Background fill=\"coral\"/>\n\n---\n\n<Wordmrak/>\n\n---\n\n"
+            "<Section nmber=\"1\">x</Section>\n\n---\n\n<Background fill=\"corall\"/>\n";
+        auto errors = [](const Deck &deck, int i) {
+            return slideProblems(deck.slide(i), deck.baseDir(), deck.slidePalette(i)).join("\n");
+        };
+        auto warnings = [](const Deck &deck, int i) {
+            return slideWarnings(deck.slide(i), deck.baseDir(), deck.slidePalette(i)).join("\n");
+        };
+        write(dir.filePath("talk.md"), "---\ntemplate: studio\n---\n\n" + slides);
+        Deck written;
+        QVERIFY(written.loadPath(dir.filePath("talk.md"), false));
+        for (int i = 0; i < 3; ++i) {
+            QCOMPARE(errors(written, i), QString());
+            QCOMPARE(warnings(written, i), QString());
+        }
+        QVERIFY(nearColor(renderSlide(written, 2).pixelColor(960, 540), QColor("#f97362"), 2));
+
+        write(dir.filePath("moved.md"), "---\ntemplate: plain\n---\n\n" + slides);
+        Deck moved;
+        QVERIFY(moved.loadPath(dir.filePath("moved.md"), false));
+        // A component only the other template has: what it holds is drawn without it.
+        QCOMPARE(errors(moved, 0), QString());
+        QVERIFY(
+            warnings(moved, 0).contains("<Wordmark> on slide line 2 belongs to another template"));
+        write(dir.filePath("bare.md"), "---\ntemplate: plain\n---\n\n<Wordmark>\n</Wordmark>\n");
+        Deck bare;
+        QVERIFY(bare.loadPath(dir.filePath("bare.md"), false));
+        QVERIFY(renderSlide(moved, 0) != renderSlide(bare, 0));
+        // A prop and a slot this template's component of the same name lacks.
+        QCOMPARE(errors(moved, 1), QString());
+        QVERIFY(warnings(moved, 1).contains("no prop “number” in this template"));
+        QVERIFY(warnings(moved, 1).contains("no slot “aside” in this template"));
+        write(dir.filePath("joined.md"),
+              "---\ntemplate: plain\n---\n\n<Section>\nWhere we are\n\nAside words\n</Section>\n");
+        Deck joined;
+        QVERIFY(joined.loadPath(dir.filePath("joined.md"), false));
+        QCOMPARE(renderSlide(moved, 1), renderSlide(joined, 0));
+        // A color word this template has no color named for: its nearest, with nothing to report.
+        QCOMPARE(errors(moved, 2), QString());
+        QCOMPARE(warnings(moved, 2), QString());
+        QVERIFY(nearColor(renderSlide(moved, 2).pixelColor(960, 540), QColor("#ff0000"), 2));
+        // Names no template has are slips, and stay errors.
+        QVERIFY(errors(moved, 3).contains("Unknown component <Wordmrak>"));
+        QVERIFY(errors(moved, 4).contains("no prop “nmber”"));
+        QVERIFY(errors(moved, 5).contains("unknown color “corall”"));
+        QCOMPARE(warnings(moved, 3) + warnings(moved, 4) + warnings(moved, 5), QString());
+    }
     void presentationsAreTemplatesAndDefineComponents() {
         QTemporaryDir dir;
         QVERIFY(QDir(dir.path()).mkpath("base/images") && QDir(dir.path()).mkpath("kit") &&

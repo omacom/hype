@@ -51,7 +51,7 @@ template frame.
 
 | Kind | Values |
 | --- | --- |
-| Colors (`tone`, `fill`, `ring`, `border`) | `accent`, `ink` (text color), `muted`, `surface` (card), `background`, `line`, `gradient`, `green`, `red`, `yellow`, `magenta`, `cyan`, any `color_*` key in the front matter, `white`, `black`, or `#rrggbb` |
+| Colors (`tone`, `fill`, `ring`, `border`) | `accent`, `ink` (text color), `muted`, `surface` (card), `background`, `line`, `gradient`, `green`, `red`, `yellow`, `magenta`, `cyan`, any `color_*` key in the front matter, `white`, `black`, or `#rrggbb`. A color word the palette has no color named for (`coral`, `teal`, `indigo`, `amber`, any web color name) draws as the palette's nearest color, so a slide keeps its colors under another template |
 | Fills | Any color, `gradient` (the theme's), or two colors for a gradient: `fill="purple pink"` with `angle="135"` (CSS degrees). `Text` takes these as its `tone` too, for gradient lettering |
 | Sizes (`size` on text) | `xs` 18, `sm` 22, `md` 26, `lg` 32, `xl` 40, `2xl` 52, `3xl` 64, `4xl` 80, `5xl` 104, or pixels on a 1920×1080 slide |
 | Spacing (`gap`, `pad`) | `none`, `xs`, `sm`, `md`, `lg`, `xl`, or pixels. `pad="24 40"` is vertical then horizontal; four values go top, right, bottom, left |
@@ -470,6 +470,21 @@ a `theme:`, its colors come too. A `theme:` the presentation names itself
 recolors the template instead. A template can name a `template:` of its own:
 Hype follows the chain, and the nearer template wins each setting and
 component.
+
+### Moving a presentation to another template
+
+Change `template:` and every slide takes the new look. A slide may name things only
+its old template had. Where another template within reach (beside the presentation,
+in the library, or built in) defines them, the slide still draws and `hype check`
+says what it drew without, as warnings:
+
+- a component the new template lacks: what it holds is drawn without it
+- a prop the new template's component of that name lacks: it is left out
+- a slot it lacks: what the slot holds joins the rest of the content
+- a color it has no name for: its nearest color, with nothing to report
+
+A name no template has is a slip, and stays an error. So does a picture that lived
+in the old template's `images/`.
 
 ### The template library
 

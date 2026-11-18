@@ -810,6 +810,9 @@ QVariantMap Deck::palette() const {
     }
     if (!pack.error.isEmpty())
         colors["template_error"] = pack.error;
+    // What the other templates within reach define, so a slide written for one of them
+    // draws without what this template lacks instead of failing.
+    colors["vocabulary_id"] = rememberVocabulary(templates::files(baseDir()));
     colors["title"] = title();
     fonts::loadDirectory(baseDir() + "/fonts");
     fonts::loadDownloaded(requestedFonts()); // The template may name fonts of its own.
