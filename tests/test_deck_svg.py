@@ -42,7 +42,7 @@ PAGE = """<!DOCTYPE html>
   <rect x="120" y="20" width="60" height="100" fill="var(--accent)"/>
 </svg>
 ```</script>
-    <script type="application/json" id="palette">{"background": "#1a1b26", "foreground": "#a9b1d6", "accent": "#7aa2f7"}</script>
+    <script type="application/json" id="palette">{"background": "#1a1b26", "foreground": "#a9b1d6", "accent": "#7aa2f7", "font": "Acme & Co \\\"Sharp\\\" <Bold>"}</script>
     <script src="__SCRIPT__"></script>
     <script>
       window.addEventListener("load", () => {
@@ -65,6 +65,12 @@ PAGE = """<!DOCTYPE html>
         const drawn = ordinary && ordinary.naturalWidth === 300 && ordinary.naturalHeight === 120
         results.push((drawn ? "PASS " : "FAIL ") + "ordinary drawing: "
           + (ordinary ? ordinary.naturalWidth + "x" + ordinary.naturalHeight : "missing"))
+        // A font with XML metacharacters must still leave every drawing decodable.
+        const decoded = Array.from(images).every(image => image.complete && image.naturalWidth > 0)
+        const broken = Array.from(images).filter(image => !image.complete || image.naturalWidth === 0)
+          .map(image => image.src.slice(0, 40)).join(", ")
+        results.push((decoded ? "PASS " : "FAIL ")
+          + "drawings decode with hostile font: " + (decoded ? "yes" : broken))
         const report = document.createElement("pre")
         report.id = "results"
         report.textContent = results.join("\\n")
@@ -92,7 +98,7 @@ class DeckSvgTests(unittest.TestCase):
             self.assertIsNotNone(match, result.stdout + result.stderr)
             report = html.unescape(match.group(1))
             self.assertNotIn('FAIL', report, report)
-            self.assertEqual(report.count('PASS'), 5, report)
+            self.assertEqual(report.count('PASS'), 6, report)
 
 
 if __name__ == '__main__':

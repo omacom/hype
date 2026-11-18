@@ -347,6 +347,12 @@ function drawSvg(canvas, rect, svg, palette) {
   canvas.appendChild(box)
 }
 
+function escapeAttr(value) {
+  return String(value)
+    .replace(/&/g, "&amp;").replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;").replace(/>/g, "&gt;")
+}
+
 function themedSvg(svg, palette) {
   let themed = svg.replace(/var\(\s*--([a-z_-]+)\s*\)/g, (whole, name) =>
     palette[name.replace(/-/g, "_")] || whole)
@@ -355,9 +361,9 @@ function themedSvg(svg, palette) {
     const attributes = root[1]
     let defaults = ""
     if (!/(^|\s)xmlns\s*=/.test(attributes)) defaults += ' xmlns="http://www.w3.org/2000/svg"'
-    if (!/(^|\s)color\s*=/.test(attributes)) defaults += ` color="${palette.foreground}"`
-    if (!/(^|\s)fill\s*=/.test(attributes)) defaults += ` fill="${palette.foreground}"`
-    if (!/(^|\s)font-family\s*=/.test(attributes)) defaults += ` font-family="${palette.font || "JetBrains Mono"}"`
+    if (!/(^|\s)color\s*=/.test(attributes)) defaults += ` color="${escapeAttr(palette.foreground)}"`
+    if (!/(^|\s)fill\s*=/.test(attributes)) defaults += ` fill="${escapeAttr(palette.foreground)}"`
+    if (!/(^|\s)font-family\s*=/.test(attributes)) defaults += ` font-family="${escapeAttr(palette.font || "JetBrains Mono")}"`
     themed = themed.slice(0, root.index + 4) + defaults + themed.slice(root.index + 4)
   }
   return themed
