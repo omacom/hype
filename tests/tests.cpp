@@ -5,6 +5,7 @@
 #include "renderer.h"
 #include "images.h"
 #include "syntax.h"
+#include "transitions.h"
 #include "translator.h"
 #include <QApplication>
 #include <QAbstractTextDocumentLayout>
@@ -1187,6 +1188,40 @@ static void write(const QString &path, const QString &content) {
         }
         d.selectAt(parsed.slides[1].start);
         QCOMPARE(d.selected(), 1);
+    }
+    void transitionRegistryIsShared() {
+        const QStringList names = transitionNames();
+        QVERIFY(names.contains("none"));
+        for (const char *name : {"crossfade", "dissolve", "liquid", "glitch"}) {
+            QVERIFY2(names.contains(name), name);
+            const QString body = transitionBody(name);
+            QVERIFY2(!body.isEmpty(), name);
+            // The shared helpers ride in every body, and every body defines the
+            // contract both renderers call.
+            QVERIFY2(body.contains("float snoise(vec2"), name);
+            QVERIFY2(body.contains("vec4 transition(vec2 uv)"), name);
+            QVERIFY2(body.contains("texture2D(fromTex"), name);
+            QVERIFY2(body.contains("texture2D(toTex"), name);
+
+            const QString shader = qtFragmentShader(name);
+            QVERIFY2(shader.contains("uniform sampler2D fromTex;"), name);
+            QVERIFY2(shader.contains("uniform sampler2D toTex;"), name);
+            QVERIFY2(shader.contains("uniform float progress;"), name);
+            QVERIFY2(shader.contains("varying vec2 qt_TexCoord0;"), name);
+            QVERIFY2(shader.contains("transition(qt_TexCoord0)"), name);
+        }
+        QVERIFY(transitionBody("none").isEmpty());
+        QVERIFY(qtFragmentShader("none").isEmpty());
+        QVERIFY(transitionBody("missing").isEmpty());
+
+        // The export gets every real body, keyed by name, and none for "none".
+        const QByteArray json = transitionsJson();
+        QVERIFY(!json.contains("</script"));
+        const auto object = QJsonDocument::fromJson(json).object();
+        QCOMPARE(object.size(), 4);
+        QVERIFY(!object.contains("none"));
+        for (const char *name : {"crossfade", "dissolve", "liquid", "glitch"})
+            QCOMPARE(object.value(name).toString(), transitionBody(name));
     }
     void newDeckTitleFollowsFileName() {
         QTemporaryDir tmp;
