@@ -169,6 +169,13 @@ class CliTests(unittest.TestCase):
         self.assertIn('Unclosed code fence', self.hype('export', self.deck, 'talk.html', code=1).stderr)
         self.assertEqual((self.root / 'talk.html').read_text(), page)
 
+    def test_export_html_removes_notes_within_each_slide(self):
+        self.write('# One `\n\n---\n\n# Two\n\n<!-- private note -->\n\n---\n\n# Three `\n')
+        self.hype(self.deck, '--html', 'notes.html')
+        self.hype(self.deck, '--html-folder', 'notes-folder')
+        for page in (self.root / 'notes.html', self.root / 'notes-folder/index.html'):
+            self.assertNotIn('private note', page.read_text())
+
     def test_export_html_carries_transition_shaders(self):
         self.write('---\ntransition: liquid\n---\n\n# One\n\n---\n\n# Two\n\n'
                    '<!-- hype: transition="glitch" -->\n')

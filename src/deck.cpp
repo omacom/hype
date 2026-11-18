@@ -1986,10 +1986,11 @@ bool Deck::exportHtmlFolder(const QString &path) {
     }
     // The Markdown is the deck's source of truth: edit the block below in any text
     // editor and refresh the page. A </script inside it would close the block early,
-    // so it is escaped here and unescaped by the script that reads it.
+    // so it is escaped here and unescaped by the script that reads it. Speaker notes
+    // stay out here too: the folder is handed to readers.
+    const QString markdown = withExportedMedia(withoutSpeakerNotes(m_source), base, targets);
     const QString page = htmlPage("<link rel=\"stylesheet\" href=\"deck.css\">",
-                                  "<script src=\"deck.js\"></script>", {},
-                                  sourceBlock(withExportedMedia(m_source, base, targets)));
+                                  "<script src=\"deck.js\"></script>", {}, sourceBlock(markdown));
     if (page.isEmpty()) {
         setStatus(tr("Could not read the deck template"));
         return false;
