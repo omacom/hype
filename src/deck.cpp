@@ -6,6 +6,7 @@
 #include "images.h"
 #include "pptx.h"
 #include "renderer.h"
+#include "transitions.h"
 #include <QGuiApplication>
 #include <QCache>
 #include <QClipboard>
@@ -634,6 +635,38 @@ QColor Deck::accent() const { return QColor(palette()["accent"].toString()); }
 void Deck::chooseTheme(const QString &name) {
     replaceHeader(themedHeader(m_parsed.header, name, m_themes.value(name)));
 }
+QStringList Deck::transitionNames() const { return ::transitionNames(); }
+QString Deck::transitionName() const {
+    const QString name = scalar(m_parsed.header, "transition", "none");
+    return ::transitionNames().contains(name) ? name : QStringLiteral("none");
+}
+double Deck::transitionDuration() const {
+    bool ok = false;
+    const double seconds = scalar(m_parsed.header, "transition-duration", "0.6").toDouble(&ok);
+    return ok ? qBound(0.1, seconds, 4.0) : 0.6;
+}
+QString Deck::slideTransitionOverride() const {
+    return slideProperty(slideText(), "transition");
+}
+QString Deck::slideTransition() const {
+    const QString override = slideTransitionOverride();
+    return ::transitionNames().contains(override) ? override : transitionName();
+}
+void Deck::chooseTransition(const QString &name) {
+    if (!::transitionNames().contains(name) ||
+        scalar(m_parsed.header, "transition", "none") == name)
+        return;
+    replaceHeader(setScalar(m_parsed.header, "transition", name));
+}
+void Deck::setSlideTransition(const QString &name) {
+    if (!name.isEmpty() && !::transitionNames().contains(name))
+        return;
+    const QString source = slideText();
+    const QString updated = withSlideProperty(source, "transition", name);
+    if (updated != source)
+        editSlide(updated);
+}
+QString Deck::transitionShader(const QString &name) const { return qtFragmentShader(name); }
 QStringList Deck::mediaPositions() const { return ::mediaPositions(); }
 QVariantMap Deck::media() const {
     const QString source = slideSource(), base = baseDir();

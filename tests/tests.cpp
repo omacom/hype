@@ -1223,6 +1223,86 @@ static void write(const QString &path, const QString &content) {
         for (const char *name : {"crossfade", "dissolve", "liquid", "glitch"})
             QCOMPARE(object.value(name).toString(), transitionBody(name));
     }
+    void transitionSelectionWritesFrontMatterAndSlides() {
+        Deck deck;
+        QCOMPARE(deck.transitionName(), "none");
+        QCOMPARE(deck.transitionDuration(), 0.6);
+        QVERIFY(deck.slideTransitionOverride().isEmpty());
+        QCOMPARE(deck.transitionNames(), ::transitionNames());
+
+        deck.editSource("# One\n\n---\n\n# Two\n");
+        deck.chooseTransition("liquid");
+        QCOMPARE(deck.transitionName(), "liquid");
+        QVERIFY(deck.source().contains("transition: \"liquid\""));
+        deck.undo();
+        QCOMPARE(deck.transitionName(), "none");
+        deck.redo();
+        QCOMPARE(deck.transitionName(), "liquid");
+
+        // Unknown names are ignored when chosen and fall back to no animation.
+        deck.chooseTransition("missing");
+        QCOMPARE(deck.transitionName(), "liquid");
+        deck.editSource("---\ntransition: missing\n---\n\n# One\n");
+        QCOMPARE(deck.transitionName(), "none");
+
+        // Seconds, clamped to a range a presenter can use.
+        deck.editSource("---\ntransition: liquid\ntransition-duration: 9\n---\n\n# One\n");
+        QCOMPARE(deck.transitionDuration(), 4.0);
+        deck.editSource("---\ntransition-duration: 0.01\n---\n\n# One\n");
+        QCOMPARE(deck.transitionDuration(), 0.1);
+        deck.editSource("---\ntransition-duration: soon\n---\n\n# One\n");
+        QCOMPARE(deck.transitionDuration(), 0.6);
+
+        // A slide override is a directive; clearing it returns to the deck default.
+        deck.editSource("---\ntransition: liquid\n---\n\n# One\n\n---\n\n# Two\n");
+        deck.select(1);
+        deck.setSlideTransition("glitch");
+        QCOMPARE(deck.slideTransitionOverride(), "glitch");
+        QCOMPARE(deck.transitionName(), "liquid");
+        QVERIFY(deck.slide(1).contains("<!-- hype: transition=\"glitch\" -->"));
+        QVERIFY(!deck.slide(0).contains("hype:"));
+        deck.undo();
+        QVERIFY(deck.slideTransitionOverride().isEmpty());
+        deck.redo();
+        QCOMPARE(deck.slideTransitionOverride(), "glitch");
+        deck.setSlideTransition("");
+        QVERIFY(deck.slideTransitionOverride().isEmpty());
+        QVERIFY(!deck.slide(1).contains("transition="));
+
+        QCOMPARE(deck.transitionShader("liquid"), qtFragmentShader("liquid"));
+        QVERIFY(deck.transitionShader("liquid").contains("vec4 transition(vec2 uv)"));
+        QVERIFY(deck.transitionShader("none").isEmpty());
+    }
+    void slidePropertyWritesIntoDirectives() {
+        // An existing directive gains the attribute and keeps the others.
+        QCOMPARE(withSlideProperty("<!-- hype: background=\"#112233\" -->\n# Title\n",
+                                   "transition", "glitch"),
+                 QString("<!-- hype: background=\"#112233\" transition=\"glitch\" -->\n# Title\n"));
+        // Replacing leaves one entry, not two.
+        QCOMPARE(withSlideProperty("<!-- hype: transition=\"liquid\" foreground=\"#fff\" -->\n",
+                                   "transition", "glitch"),
+                 QString("<!-- hype: transition=\"glitch\" foreground=\"#fff\" -->\n"));
+        // Without a directive one is appended at the slide's end.
+        QCOMPARE(withSlideProperty("# Title\n\n", "transition", "glitch"),
+                 QString("# Title\n<!-- hype: transition=\"glitch\" -->\n\n"));
+        QCOMPARE(withSlideProperty("", "transition", "glitch"),
+                 QString("<!-- hype: transition=\"glitch\" -->"));
+        // Clearing removes the attribute; the directive goes when nothing is left.
+        QCOMPARE(withSlideProperty("<!-- hype: transition=\"glitch\" foreground=\"#fff\" -->\n",
+                                   "transition", ""),
+                 QString("<!-- hype: foreground=\"#fff\" -->\n"));
+        QCOMPARE(withSlideProperty("<!-- hype: transition=\"glitch\" -->\n# Title\n",
+                                   "transition", ""),
+                 QString("# Title\n"));
+        QCOMPARE(withSlideProperty("# Title\n<!-- hype: transition=\"glitch\" -->",
+                                   "transition", ""),
+                 QString("# Title"));
+        // A directive in a code fence is code, not a property.
+        const QString fenced = "```html\n<!-- hype: transition=\"glitch\" -->\n```\n# Title\n";
+        QCOMPARE(withSlideProperty(fenced, "transition", ""), fenced);
+        QCOMPARE(withSlideProperty(fenced, "transition", "liquid"),
+                 fenced + "<!-- hype: transition=\"liquid\" -->\n");
+    }
     void newDeckTitleFollowsFileName() {
         QTemporaryDir tmp;
         Deck d;

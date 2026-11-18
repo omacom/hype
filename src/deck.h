@@ -51,6 +51,11 @@ class Deck : public QAbstractListModel {
     Q_PROPERTY(QStringList fontNames READ fontNames CONSTANT)
     Q_PROPERTY(QString fontName READ fontName NOTIFY fontChanged)
     Q_PROPERTY(QStringList themeNames READ themeNames NOTIFY themesChanged)
+    Q_PROPERTY(QStringList transitionNames READ transitionNames CONSTANT)
+    Q_PROPERTY(QString transitionName READ transitionName NOTIFY changed)
+    Q_PROPERTY(double transitionDuration READ transitionDuration NOTIFY changed)
+    Q_PROPERTY(QString slideTransition READ slideTransition NOTIFY selectionChanged)
+    Q_PROPERTY(QString slideTransitionOverride READ slideTransitionOverride NOTIFY selectionChanged)
     Q_PROPERTY(QStringList mediaPositions READ mediaPositions CONSTANT)
     Q_PROPERTY(QString themeName READ themeName NOTIFY changed)
     Q_PROPERTY(QColor background READ background NOTIFY changed)
@@ -93,6 +98,12 @@ class Deck : public QAbstractListModel {
     Q_INVOKABLE void chooseFont(const QString &family);
     QStringList themeNames() const;
     QString themeName() const;
+    QStringList transitionNames() const;
+    QString transitionName() const;
+    double transitionDuration() const;
+    // What the selected slide plays: its own choice, or the deck's default.
+    QString slideTransition() const;
+    QString slideTransitionOverride() const;
     QColor background() const;
     QColor foreground() const;
     QColor accent() const;
@@ -141,6 +152,9 @@ class Deck : public QAbstractListModel {
     Q_INVOKABLE void undo();
     Q_INVOKABLE void redo();
     Q_INVOKABLE void chooseTheme(const QString &name);
+    Q_INVOKABLE void chooseTransition(const QString &name);
+    Q_INVOKABLE void setSlideTransition(const QString &name);
+    Q_INVOKABLE QString transitionShader(const QString &name) const;
     Q_INVOKABLE void openDialog();
     Q_INVOKABLE void save();
     Q_INVOKABLE void saveAs();

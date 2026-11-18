@@ -228,6 +228,68 @@ QString withMediaDirectives(const QString &source, const QStringList &remove,
     reference.replace(2, end - 2, kept.join(' '));
     return withMedia(source, reference);
 }
+QString withSlideProperty(const QString &source, const QString &key, const QString &value) {
+    static const QRegularExpression comment("<!--\\s*hype:([\\s\\S]*?)-->");
+    const auto match = comment.match(outsideCode(source));
+    const auto escaped = [](QString text) {
+        return text.replace('\\', "\\\\").replace('"', "\\\"");
+    };
+    if (!match.hasMatch()) {
+        if (value.isEmpty())
+            return source;
+        // After the slide's own text, ahead of any blank lines that follow it.
+        int end = source.size();
+        while (end > 0 && source.at(end - 1).isSpace())
+            --end;
+        return source.left(end) + (end ? "\n" : "") + "<!-- hype: " + key + "=\"" +
+               escaped(value) + "\" -->" + source.mid(end);
+    }
+
+    const int start = match.capturedStart(), length = match.capturedLength();
+    QString directive = source.mid(start, length);
+    const auto existing =
+        QRegularExpression("\\b" + QRegularExpression::escape(key) + "\\s*=\\s*\"[^\"]*\"")
+            .match(directive);
+
+    if (value.isEmpty()) {
+        if (!existing.hasMatch())
+            return source;
+        int from = existing.capturedStart(), to = existing.capturedEnd();
+        while (from > 0 && directive.at(from - 1).isSpace())
+            --from;
+        directive.remove(from, to - from);
+        const int body = directive.indexOf(':') + 1;
+        if (directive.mid(body, directive.size() - 3 - body).trimmed().isEmpty()) {
+            // Nothing else lives in the directive: take the comment out, and its
+            // line with it when it stood alone.
+            int removeFrom = start, removeTo = start + length;
+            const int lineStart = source.lastIndexOf('\n', start - 1) + 1;
+            const int lineEnd = source.indexOf('\n', start + length);
+            const QString before = source.mid(lineStart, start - lineStart);
+            const QString after =
+                lineEnd < 0 ? QString() : source.mid(start + length, lineEnd - start - length);
+            if (before.trimmed().isEmpty() && after.trimmed().isEmpty()) {
+                if (lineEnd >= 0)
+                    removeTo = lineEnd + 1;
+                else if (removeFrom > 0)
+                    --removeFrom;
+            }
+            return source.left(removeFrom) + source.mid(removeTo);
+        }
+        // Keep a single space between "hype:" and the remaining attributes.
+        static const QRegularExpression opening("^(<!--\\s*hype:)\\s+");
+        directive.replace(opening, "\\1 ");
+    } else if (existing.hasMatch()) {
+        directive.replace(existing.capturedStart(), existing.capturedLength(),
+                          key + "=\"" + escaped(value) + "\"");
+    } else {
+        int close = directive.size() - 3;
+        while (close > 0 && directive.at(close - 1).isSpace())
+            --close;
+        directive.insert(close, ' ' + key + "=\"" + escaped(value) + "\"");
+    }
+    return source.left(start) + directive + source.mid(start + length);
+}
 QString withExportedMedia(const QString &source, const QString &base,
                           const QHash<QString, QString> &targets) {
     if (targets.isEmpty())
@@ -710,7 +772,7 @@ QImage softenedImage(const QImage &image, const QSizeF &slideSize) {
     }
     return softened;
 }
-static QString slideProperty(const QString &source, const QString &key) {
+QString slideProperty(const QString &source, const QString &key) {
     QRegularExpression re("<!--\\s*hype:[\\s\\S]*?\\b" + key + "=\"([^\"]*)\"[\\s\\S]*?-->");
     return re.match(source).captured(1);
 }

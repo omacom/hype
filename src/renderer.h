@@ -29,6 +29,12 @@ QImage softenedImage(const QImage &image, const QSizeF &slideSize);
 QString withMedia(const QString &source, const QString &reference);
 QString withMediaDirectives(const QString &source, const QStringList &remove,
                             const QStringList &add);
+// The value of a key="value" attribute in a slide's hype: directive, or empty.
+QString slideProperty(const QString &source, const QString &key);
+// Sets, replaces, or with an empty value removes one key="value" attribute in a
+// slide's hype: directive. A slide without one gets a directive at its end;
+// code keeps its text.
+QString withSlideProperty(const QString &source, const QString &key, const QString &value);
 // Rewrites media references and poster directives to the paths an exported folder
 // actually has. `targets` maps each source file's absolute path to its path there.
 QString withExportedMedia(const QString &source, const QString &base,
