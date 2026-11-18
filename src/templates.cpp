@@ -88,16 +88,18 @@ QString withoutDefinitionLines(QString source) {
     return kept.join('\n');
 }
 
-void copyFolder(const QString &from, const QString &to) {
+// False when a file could not be copied, so a copy missing its pictures is never kept.
+bool copyFolder(const QString &from, const QString &to) {
     if (!QFileInfo(from).isDir())
-        return;
+        return true;
     QDirIterator it(from, QDir::Files | QDir::Hidden, QDirIterator::Subdirectories);
     while (it.hasNext()) {
         const QString file = it.next();
         const QString target = to + "/" + QDir(from).relativeFilePath(file);
-        QDir().mkpath(QFileInfo(target).absolutePath());
-        QFile::copy(file, target);
+        if (!QDir().mkpath(QFileInfo(target).absolutePath()) || !QFile::copy(file, target))
+            return false;
     }
+    return true;
 }
 
 // Removes a library entry; links inside it go, never what they point at.
@@ -251,24 +253,34 @@ QString save(const QString &presentation, const QString &requested, bool copy, b
         return "There is no folder for the template library";
     const QString target = library + "/" + name;
     const QFileInfo existing(target);
-    if (existing.exists() || existing.isSymLink()) {
+    const bool replacing = existing.exists() || existing.isSymLink();
+    if (replacing) {
         // A copy saved over itself would delete what it is copied from.
-        if (source.canonicalFilePath().startsWith(existing.canonicalFilePath() + "/"))
+        const QString held = existing.canonicalFilePath();
+        if (!held.isEmpty() && source.canonicalFilePath().startsWith(held + "/"))
             return "That presentation is the template " + name + " already";
         if (!replace)
             return "A template named " + name +
                    " already exists; replace it or choose another name";
-        if (const QString error = removeEntry(target); !error.isEmpty())
-            return error;
     }
-    if (!QDir().mkpath(target))
+    // The new entry is made under another name and takes this one only when it is whole,
+    // so a replacement that fails leaves the template it would have replaced. Names that
+    // start with a dot are never listed as templates.
+    const QString staging = library + "/." + name + ".saving",
+                  replaced = library + "/." + name + ".replaced";
+    for (const QString &leftover : {staging, replaced})
+        if (QFileInfo(leftover).exists() || QFileInfo(leftover).isSymLink())
+            removeEntry(leftover);
+    if (!QDir().mkpath(staging))
         return "Could not create " + target;
-    const QString file = target + "/presentation.md";
+    auto abandon = [&](const QString &error) {
+        QDir(staging).removeRecursively();
+        return error;
+    };
+    const QString file = target + "/presentation.md", staged = staging + "/presentation.md";
     if (!copy) {
-        if (!QFile::link(source.absoluteFilePath(), file)) {
-            QDir(target).removeRecursively();
-            return "Could not link " + file + " to " + source.absoluteFilePath();
-        }
+        if (!QFile::link(source.absoluteFilePath(), staged))
+            return abandon("Could not link " + file + " to " + source.absoluteFilePath());
     } else {
         QString text = readText(source.absoluteFilePath());
         const ParsedDeck parsed = parseDeck(text);
@@ -284,20 +296,32 @@ QString save(const QString &presentation, const QString &requested, bool copy, b
                 text = setScalar(parsed.header, "template", QFileInfo(found).absoluteFilePath()) +
                        text.mid(parsed.header.size());
         }
-        QSaveFile out(file);
-        if (!out.open(QIODevice::WriteOnly) || out.write(text.toUtf8()) < 0 || !out.commit()) {
-            QDir(target).removeRecursively();
-            return "Could not write " + file;
-        }
-        copyFolder(source.absolutePath() + "/images", target + "/images");
-        copyFolder(source.absolutePath() + "/fonts", target + "/fonts");
+        QSaveFile out(staged);
+        if (!out.open(QIODevice::WriteOnly) || out.write(text.toUtf8()) < 0 || !out.commit())
+            return abandon("Could not write " + file);
+        for (const QString &folder : {QString("images"), QString("fonts")})
+            if (!copyFolder(source.absolutePath() + "/" + folder, staging + "/" + folder))
+                return abandon("Could not copy the presentation's " + folder + " to " + target);
+    }
+    if (replacing && !QDir().rename(target, replaced))
+        return abandon("Could not replace " + target);
+    auto restore = [&] {
+        if (replacing)
+            QDir().rename(replaced, target);
+    };
+    if (!QDir().rename(staging, target)) {
+        restore();
+        return abandon("Could not create " + target);
     }
     // A template that would build on itself is no use to anyone.
     const TemplatePack pack = loadTemplate(name, library);
     if (pack.error.contains("builds on itself")) {
-        QDir(target).removeRecursively();
+        removeEntry(target);
+        restore();
         return "The template " + name + " would build on itself: " + pack.error;
     }
+    if (replacing)
+        removeEntry(replaced);
     if (saved)
         *saved = target;
     return {};

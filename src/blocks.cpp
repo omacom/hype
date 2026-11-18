@@ -890,7 +890,8 @@ void expand(QVector<Node> &nodes, const Definitions &defs, const Vocabulary &oth
                     slot.text << rest;
                     slot.origin << origin;
                 }
-                for (++j; !closed && j < lines.size(); ++j) {
+                // A slot closed on its opening line takes no further lines.
+                for (j = closed ? k : k + 1; !closed && j < lines.size(); ++j) {
                     const int at = lines[j].indexOf("</Slot>");
                     const int line = use.textLine > 0 ? use.textLine + j : use.line;
                     if (at >= 0) {
@@ -2155,8 +2156,10 @@ QString rememberVocabulary(const QStringList &files) {
     const QString id = QString::fromLatin1(
         QCryptographicHash::hash(stamps.join('\n').toUtf8(), QCryptographicHash::Sha1).toHex());
     QMutexLocker lock(&registryMutex);
-    if (vocabularies.contains(id))
+    if (vocabularies.contains(id)) {
+        vocabularyOrder.move(vocabularyOrder.indexOf(id), vocabularyOrder.size() - 1);
         return id;
+    }
     Vocabulary all;
     for (int i = 0; i < files.size(); ++i) {
         if (!read.contains(stamps[i])) {
@@ -2199,8 +2202,19 @@ QString rememberTemplate(const QString &text) {
         // Each edit of a template registers it anew; keep the recent ones.
         while (registryOrder.size() > 64)
             registry.remove(registryOrder.takeFirst());
+    } else {
+        // Asked for again, so still in use.
+        registryOrder.move(registryOrder.indexOf(id), registryOrder.size() - 1);
     }
     return id;
+}
+
+bool remembers(const QVariantMap &palette) {
+    const QString definitionsId = palette.value("template_id").toString(),
+                  vocabularyId = palette.value("vocabulary_id").toString();
+    QMutexLocker lock(&registryMutex);
+    return (definitionsId.isEmpty() || registry.contains(definitionsId)) &&
+           (vocabularyId.isEmpty() || vocabularies.contains(vocabularyId));
 }
 
 bool templateShowsPages(const QString &id) { return definitions(id).pages; }

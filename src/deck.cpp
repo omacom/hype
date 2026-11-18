@@ -770,7 +770,7 @@ QVariantMap Deck::palette() const {
     fonts::loadDownloaded(requestedFonts());
     if (!m_paletteCache.isEmpty() && m_paletteHeader == m_parsed.header &&
         m_paletteDefinitions == m_parsed.definitions && m_paletteStamp == templateStamp() &&
-        m_paletteEpoch == fonts::epoch())
+        m_paletteEpoch == fonts::epoch() && remembers(m_paletteCache))
         return m_paletteCache;
     QVariantMap colors{
         {"background", "#1a1b26"}, {"foreground", "#c0caf5"}, {"accent", "#7aa2f7"},
@@ -1191,7 +1191,10 @@ bool Deck::saveCopyPath(const QString &path) {
     // Check every collision before publishing anything; compare streams so a
     // large video never requires two whole-file buffers in the editor.
     const QString stagingPrefix = QDir(staging.path()).absolutePath() + '/';
-    for (const QString &kind : {QString("images"), QString("videos")}) {
+    // Pictures and videos, and what the presentation is drawn with: its own fonts, and
+    // the templates kept beside it.
+    for (const QString &kind :
+         {QString("images"), QString("videos"), QString("fonts"), QString("templates")}) {
         const QDir source(baseDir() + '/' + kind);
         // Copy the whole tree, hidden files included, since references may
         // point anywhere inside it. Poster caches are regenerated on demand.
@@ -1547,6 +1550,8 @@ static QString encodeRender(const QString &source, const QString &base, const QV
     stream << source << base << colors << translationGeneration();
     auto media = parseMedia(source, base);
     QStringList files{media.path, media.poster};
+    for (const GalleryItem &item : media.gallery)
+        files << item.path;
     if (isComposedSlide(source, colors))
         files += componentAssets(source, base, colors);
     for (const QString &path : files) {
@@ -1713,9 +1718,9 @@ void Deck::setMediaPosition(const QString &position) {
         return;
     // Placing replaces the full layout; a new placement starts at the default size.
     const QString size = QString("size=%1%").arg(media.placed() ? media.size : defaultPlacedSize);
-    editSlide(withMediaDirectives(slideSource(),
-                                  {"fit", "span", "background", "overlay", "position", "size"},
-                                  {"position=" + position, size}));
+    editSlide(withMediaDirectives(
+        slideSource(), {"fit", "span", "background", "overlay", "layout", "position", "size"},
+        {"position=" + position, size}));
 }
 void Deck::setMediaSize(double percent) {
     const auto media = parseMedia(slideSource(), baseDir());

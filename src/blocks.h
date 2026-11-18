@@ -57,6 +57,9 @@ QString rememberTemplate(const QString &text);
 // Registers what the templates in these files call their components, props and slots, and
 // returns the id palettes refer to it by, as vocabulary_id.
 QString rememberVocabulary(const QStringList &files);
+// Whether the definitions and vocabulary a palette names are still held. Only recent ones
+// are kept, so a palette cached for a long while checks before it is used again.
+bool remembers(const QVariantMap &palette);
 bool templateShowsPages(const QString &id);
 
 // True for a component Hype itself provides, under any of its names.

@@ -245,54 +245,61 @@ bool downloadsAllowed() { return qEnvironmentVariable("HYPE_FONT_DOWNLOADS") != 
 
 QVector<Family> catalog(bool fetch) {
     Catalog &catalog = shared();
-    QMutexLocker lock(&catalog.mutex);
     const QFileInfo cache(catalogFile());
-    if (catalog.path != cache.absoluteFilePath()) {
-        catalog.families.clear();
-        catalog.index.clear();
-        catalog.loaded = catalog.fetched = false;
-        catalog.path = cache.absoluteFilePath();
-    }
-    const bool fresh =
-        cache.exists() && cache.lastModified().daysTo(QDateTime::currentDateTime()) < 7;
-    if (!catalog.loaded && cache.exists()) {
-        QFile file(cache.absoluteFilePath());
-        if (file.open(QIODevice::ReadOnly))
-            parseCatalog(QJsonDocument::fromJson(file.readAll()).array(), catalog);
-        catalog.loaded = true;
-    }
-    if (fetch && !fresh && !catalog.fetched && downloadsAllowed()) {
-        catalog.fetched = true; // Once a process, whether or not it works.
-        const QJsonDocument metadata =
-            json(get(server("https://fonts.google.com/metadata/fonts"), nullptr));
-        const QJsonArray list = metadata.object()["familyMetadataList"].toArray();
-        if (!list.isEmpty()) {
-            QVector<QPair<int, QJsonObject>> ranked;
-            for (const QJsonValue &value : list) {
-                const QJsonObject object = value.toObject();
-                QJsonArray styles;
-                for (const QString &style : object["fonts"].toObject().keys())
-                    styles << style;
-                ranked.append({object["popularity"].toInt(1 << 20),
-                               QJsonObject{{"name", object["family"]},
-                                           {"category", object["category"]},
-                                           {"styles", styles}}});
-            }
-            // Most popular first, so searches lead with the fonts people reach for.
-            std::stable_sort(ranked.begin(), ranked.end(),
-                             [](const auto &a, const auto &b) { return a.first < b.first; });
-            QJsonArray compactList;
-            for (const auto &entry : ranked)
-                compactList << entry.second;
-            QDir().mkpath(cache.absolutePath());
-            QSaveFile file(cache.absoluteFilePath());
-            if (file.open(QIODevice::WriteOnly)) {
-                file.write(QJsonDocument(compactList).toJson(QJsonDocument::Compact));
-                file.commit();
-            }
-            parseCatalog(compactList, catalog);
+    {
+        QMutexLocker lock(&catalog.mutex);
+        if (catalog.path != cache.absoluteFilePath()) {
+            catalog.families.clear();
+            catalog.index.clear();
+            catalog.loaded = catalog.fetched = false;
+            catalog.path = cache.absoluteFilePath();
+        }
+        const bool fresh =
+            cache.exists() && cache.lastModified().daysTo(QDateTime::currentDateTime()) < 7;
+        if (!catalog.loaded && cache.exists()) {
+            QFile file(cache.absoluteFilePath());
+            if (file.open(QIODevice::ReadOnly))
+                parseCatalog(QJsonDocument::fromJson(file.readAll()).array(), catalog);
             catalog.loaded = true;
         }
+        if (!fetch || fresh || catalog.fetched || !downloadsAllowed())
+            return catalog.families;
+        catalog.fetched = true; // Once a process, whether or not it works.
+    }
+    // Asked for without the lock: the window reads the list it has while this waits.
+    const QJsonDocument metadata =
+        json(get(server("https://fonts.google.com/metadata/fonts"), nullptr));
+    const QJsonArray list = metadata.object()["familyMetadataList"].toArray();
+    QJsonArray compactList;
+    if (!list.isEmpty()) {
+        QVector<QPair<int, QJsonObject>> ranked;
+        for (const QJsonValue &value : list) {
+            const QJsonObject object = value.toObject();
+            QJsonArray styles;
+            for (const QString &style : object["fonts"].toObject().keys())
+                styles << style;
+            ranked.append(
+                {object["popularity"].toInt(1 << 20), QJsonObject{{"name", object["family"]},
+                                                                  {"category", object["category"]},
+                                                                  {"styles", styles}}});
+        }
+        // Most popular first, so searches lead with the fonts people reach for.
+        std::stable_sort(ranked.begin(), ranked.end(),
+                         [](const auto &a, const auto &b) { return a.first < b.first; });
+        for (const auto &entry : ranked)
+            compactList << entry.second;
+        QDir().mkpath(cache.absolutePath());
+        QSaveFile file(cache.absoluteFilePath());
+        if (file.open(QIODevice::WriteOnly)) {
+            file.write(QJsonDocument(compactList).toJson(QJsonDocument::Compact));
+            file.commit();
+        }
+    }
+    QMutexLocker lock(&catalog.mutex);
+    // Unless the catalog moved to another file meanwhile, as it does between tests.
+    if (!compactList.isEmpty() && catalog.path == cache.absoluteFilePath()) {
+        parseCatalog(compactList, catalog);
+        catalog.loaded = true;
     }
     return catalog.families;
 }

@@ -2060,6 +2060,115 @@ static void write(const QString &path, const QString &content) {
         QVERIFY(problems("axis=\"left\"").contains("axis"));
         QVERIFY(problems("lane-fill=\"blak\"").contains("unknown color “blak”"));
     }
+    void slotsClosedOnTheirLineKeepWhatFollows() {
+        Deck deck;
+        const QString pair = "<Define name=\"Pair\">\n<Row>\n<Column>\n{children}\n</Column>\n"
+                             "<Column>\n{aside}\n</Column>\n</Row>\n</Define>\n\n";
+        deck.editSource(
+            "---\ncolor_background: \"#ffffff\"\ncolor_foreground: \"#111111\"\n---\n\n" + pair +
+            "---\n\n<Pair>\n<Slot name=\"aside\">Note</Slot>\nAfter the slot\n</Pair>\n\n---\n\n"
+            "<Pair>\n<Slot name=\"aside\">\nNote\n</Slot>\nAfter the slot\n</Pair>\n\n---\n\n"
+            "<Pair>\n<Slot name=\"aside\">Note</Slot>\n</Pair>\n");
+        QCOMPARE(deck.count(), 4);
+        for (int i = 1; i < 4; ++i)
+            QCOMPARE(slideProblems(deck.slide(i), deck.baseDir(), deck.slidePalette(i)),
+                     QStringList());
+        // The line after a one-line slot is drawn, as it is after a slot that takes several.
+        QCOMPARE(renderSlide(deck, 1), renderSlide(deck, 2));
+        QVERIFY(renderSlide(deck, 1) != renderSlide(deck, 3));
+    }
+    void placingAnImageLeavesItsLayoutBehind() {
+        QTemporaryDir dir;
+        QVERIFY(QDir().mkpath(dir.path() + "/images"));
+        QImage picture(100, 100, QImage::Format_RGB32);
+        picture.fill(Qt::red);
+        QVERIFY(picture.save(dir.path() + "/images/logo.png"));
+        Deck deck;
+        QVERIFY(deck.savePath(dir.path() + "/talk.md"));
+        deck.editSource("# Headline\n\n![](logo.png)\n");
+        deck.setMediaMode("split");
+        QVERIFY(deck.slide(0).contains("layout=split"));
+        // A corner under Place replaces the layout, which a placed image cannot have.
+        deck.setMediaPosition("bottom-right");
+        QVERIFY2(!deck.slide(0).contains("layout"), qPrintable(deck.slide(0)));
+        QVERIFY(parseMedia(deck.slide(0), deck.baseDir()).placed());
+        QCOMPARE(slideProblems(deck.slide(0), deck.baseDir(), deck.slidePalette(0)), QStringList());
+    }
+    void galleryPicturesAreInTheRenderId() {
+        QTemporaryDir dir;
+        QVERIFY(QDir().mkpath(dir.path() + "/images"));
+        QImage picture(100, 100, QImage::Format_RGB32);
+        picture.fill(Qt::red);
+        QVERIFY(picture.save(dir.path() + "/images/first.png"));
+        QVERIFY(picture.save(dir.path() + "/images/second.png"));
+        Deck deck;
+        QVERIFY(deck.savePath(dir.path() + "/talk.md"));
+        deck.editSlide("<!-- hype: layout=\"gallery\" -->\n# Our teams\n## First\n![](first.png)\n"
+                       "## Second\n![](second.png)\n");
+        const QString before = deck.renderId(0);
+        // Replacing the second picture, which is no slide's one picture, redraws the slide.
+        picture = QImage(60, 120, QImage::Format_RGB32);
+        picture.fill(Qt::blue);
+        QVERIFY(picture.save(dir.path() + "/images/second.png"));
+        QFile touched(dir.path() + "/images/second.png");
+        QVERIFY(touched.open(QIODevice::ReadWrite));
+        QVERIFY(touched.setFileTime(QDateTime::currentDateTime().addSecs(10),
+                                    QFileDevice::FileModificationTime));
+        touched.close();
+        QTest::qWait(1100); // Render ids are reused for a second.
+        QVERIFY(deck.renderId(0) != before);
+    }
+    void definitionsOutliveManyOtherTemplates() {
+        Deck deck;
+        deck.editSource("<Define name=\"Mark\">\n**{children}**\n</Define>\n\n<Mark>Kept</Mark>\n");
+        QCOMPARE(slideProblems(deck.slide(0), deck.baseDir(), deck.slidePalette(0)), QStringList());
+        // Only recent definitions are held; a presentation left open while many other
+        // templates were looked at still finds its own.
+        for (int i = 0; i < 80; ++i)
+            rememberTemplate(QString("<Define name=\"Other%1\">\n{children}\n</Define>\n").arg(i));
+        QCOMPARE(slideProblems(deck.slide(0), deck.baseDir(), deck.slidePalette(0)), QStringList());
+    }
+    void replacingATemplateThatFailsKeepsTheOldOne() {
+        QTemporaryDir dir;
+        const bool had = qEnvironmentVariableIsSet("XDG_DATA_HOME");
+        const QByteArray old = qgetenv("XDG_DATA_HOME");
+        qputenv("XDG_DATA_HOME", dir.filePath("data").toUtf8());
+        const auto restore = qScopeGuard(
+            [had, old] { had ? qputenv("XDG_DATA_HOME", old) : qunsetenv("XDG_DATA_HOME"); });
+        QVERIFY(QDir(dir.path()).mkpath("brand/images") && QDir(dir.path()).mkpath("pitch"));
+        write(dir.filePath("brand/images/mark.png"), "picture");
+        write(dir.filePath("brand/presentation.md"), "---\ntitle: Brand\n---\n\n# The brand\n");
+        const QString library = templates::libraryDirectory();
+        QString saved;
+        QCOMPARE(
+            templates::save(dir.filePath("brand/presentation.md"), "brand", true, false, &saved),
+            QString());
+        // A presentation built on the template cannot become it, and trying leaves it alone.
+        write(dir.filePath("pitch/presentation.md"), "---\ntemplate: brand\n---\n\n# A pitch\n");
+        QVERIFY(templates::save(dir.filePath("pitch/presentation.md"), "brand", true, true, &saved)
+                    .contains("build on itself"));
+        QFile kept(library + "/brand/presentation.md");
+        QVERIFY(kept.open(QIODevice::ReadOnly));
+        QVERIFY(kept.readAll().contains("# The brand"));
+        QVERIFY(QFileInfo::exists(library + "/brand/images/mark.png"));
+        // Nothing half-made is left in the library either way.
+        QCOMPARE(QDir(library).entryList(QDir::AllEntries | QDir::Hidden | QDir::NoDotAndDotDot),
+                 QStringList{"brand"});
+        // A picture that cannot be copied fails the save rather than making a template without it.
+        QVERIFY(QDir(dir.path()).mkpath("locked/images"));
+        write(dir.filePath("locked/presentation.md"), "# Locked\n");
+        write(dir.filePath("locked/images/secret.png"), "picture");
+        QVERIFY(QFile::setPermissions(dir.filePath("locked/images/secret.png"), {}));
+        // Root reads every file, so there the copy cannot fail this way.
+        if (!QFile(dir.filePath("locked/images/secret.png")).open(QIODevice::ReadOnly)) {
+            QVERIFY(templates::save(dir.filePath("locked/presentation.md"), "locked", true, false,
+                                    &saved)
+                        .contains("Could not copy"));
+            QCOMPARE(
+                QDir(library).entryList(QDir::AllEntries | QDir::Hidden | QDir::NoDotAndDotDot),
+                QStringList{"brand"});
+        }
+    }
     void presentationsAreTemplatesAndDefineComponents() {
         QTemporaryDir dir;
         QVERIFY(QDir(dir.path()).mkpath("base/images") && QDir(dir.path()).mkpath("kit") &&
@@ -4863,8 +4972,15 @@ static void write(const QString &path, const QString &content) {
         const QString copy = tmp.filePath("copy");
         QVERIFY(QDir().mkpath(copy + "/images"));
         write(copy + "/images/.hype-poster-0123456789abcdef.jpg", "other cache");
+        // Its own fonts, and a template kept beside it, go along with its pictures.
+        QVERIFY(QDir().mkpath(original + "/fonts") &&
+                QDir().mkpath(original + "/templates/studio"));
+        write(original + "/fonts/Brand.ttf", "font");
+        write(original + "/templates/studio/presentation.md", "# Studio\n");
         QVERIFY2(d.saveCopyPath(copy + "/talk.md"), qPrintable(d.status()));
         QCOMPARE(d.path(), copy + "/talk.md");
+        QVERIFY(QFileInfo::exists(copy + "/fonts/Brand.ttf"));
+        QVERIFY(QFileInfo::exists(copy + "/templates/studio/presentation.md"));
         for (const QString &relative :
              {QString("images/nested/photo.png"), QString("videos/clips/talk.mp4"),
               QString("images/posters/.cover.png"), QString("images/.private/logo.png"),
