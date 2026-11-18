@@ -84,7 +84,11 @@ A pipe is an ordinary character | not proof of a table.
 ---
 First line of a wrapped paragraph.
 Second line of a wrapped paragraph.
-Third line with an explicit break marker\\</script>
+Third line with an explicit break marker\\
+
+---
+Use `hype \\
+now` to run it.</script>
     <script type="application/json" id="palette">{"background": "#1a1b26", "foreground": "#a9b1d6", "accent": "#7aa2f7"}</script>
     <script src="__SCRIPT__"></script>
     <script>
@@ -151,6 +155,15 @@ Third line with an explicit break marker\\</script>
             results.push((right ? "PASS " : "FAIL ") + label + " line breaks=" + breaks
               + " text=" + text)
           }
+          if (index === 10) {
+            // A backslash inside a code span that crosses a line boundary is code,
+            // not a hard-break marker, so it must survive to the slide.
+            const code = content.querySelector("p code")
+            const text = code ? code.textContent : ""
+            const right = text.includes("hype") && text.includes("now")
+              && text.includes("\\\\")
+            results.push((right ? "PASS " : "FAIL ") + label + " code backslash=" + text)
+          }
         }
         const wanted = document.querySelectorAll("section.slide").length
         const rendered = document.querySelectorAll("section.slide .text").length
@@ -184,8 +197,9 @@ class DeckRenderTests(unittest.TestCase):
             report = html.unescape(match.group(1))
             self.assertNotIn('FAIL', report, report)
             # Every slide fits and is measured: one fit line per slide, plus the
-            # list, table, overlay, blur, line-break, and rendered-slide checks.
-            self.assertEqual(report.count('PASS'), 19, report)
+            # list, table, overlay, blur, line-break, code-backslash, and
+            # rendered-slide checks.
+            self.assertEqual(report.count('PASS'), 21, report)
 
 
 if __name__ == '__main__':

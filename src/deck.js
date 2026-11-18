@@ -593,7 +593,19 @@ function appendLines(parent, lines) {
 }
 
 function paragraphText(lines) {
-  return lines.map(line => line.replace(/ +$/, "").replace(/\\$/, "")).join("\n")
+  const joined = lines.join("\n")
+  // outsideCode masks fenced blocks and inline spans with spaces while keeping
+  // offsets, so a marker hidden there is code, not text.
+  const masked = outsideCode(joined)
+  let offset = 0
+  return lines.map(line => {
+    const start = offset
+    offset += line.length + 1
+    let end = line.length
+    while (end > 0 && line[end - 1] === " " && masked[start + end - 1] === " ") end--
+    if (end > 0 && masked[start + end - 1] === "\\") end--
+    return line.slice(0, end)
+  }).join("\n")
 }
 
 // Markdown becomes a neutral block list—styled runs with no DOM in them—so the
