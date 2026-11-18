@@ -1,4 +1,17 @@
-:root { color-scheme: dark; }
+:root {
+  color-scheme: dark;
+  /* The deck's theme, set by deck.js from the palette baked at export time. */
+  --background: #1a1b26;
+  --foreground: #c0caf5;
+  --accent: #7aa2f7;
+  --green: #9ece6a;
+  --red: #f7768e;
+  --yellow: #e0af68;
+  --magenta: #bb9af7;
+  --cyan: #7dcfff;
+  --dark-foreground: #787c99;
+  --font: "JetBrains Mono";
+}
 html, body { height: 100%; }
 body {
   margin: 0;
@@ -24,6 +37,119 @@ body {
   object-fit: contain;
   display: block;
 }
+
+/* Slides rendered from the Markdown block in an editable folder export. Each
+   is laid out in Hype's 1080p coordinates and scaled to the window. */
+.canvas {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1920px;
+  height: 1080px;
+  transform-origin: 0 0;
+  overflow: hidden;
+}
+.media {
+  position: absolute;
+  object-fit: contain;
+}
+.media.cover { object-fit: cover; }
+.media.soft { filter: blur(2px); }
+.backdrop {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1920px;
+  height: 1080px;
+  overflow: hidden;
+}
+.backdrop img, .backdrop video {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 110%;
+  height: 110%;
+  transform: translate(-50%, -50%);
+  object-fit: cover;
+  filter: blur(48px);
+}
+.overlay {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1920px;
+  height: 1080px;
+  pointer-events: none;
+}
+.svg-box {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.missing {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  white-space: pre-line;
+  color: var(--accent);
+  font-family: system-ui, sans-serif;
+  font-size: 32px;
+}
+.text {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  justify-content: center; /* The fitted text centers vertically, as in Hype. */
+}
+.text .content {
+  width: 100%;
+  font-family: var(--font), monospace;
+  line-height: 1.15;
+}
+.text.centered .content { text-align: center; }
+.text .content > * { margin: 0 0 0.22em; }
+.text .content > :last-child { margin-bottom: 0; }
+.text h1, .text h2, .text h3, .text h4, .text h5, .text h6 {
+  font-weight: 700;
+  margin-top: 0.15em;
+  font-size: 1.25em;
+}
+.text h1 { font-size: 1.8em; }
+.text strong { color: var(--accent); }
+.text :is(h1, h2, h3, h4, h5, h6) strong { color: inherit; }
+.text a { color: var(--accent); }
+.text em { font-style: italic; }
+.text blockquote { margin: 0; padding: 0 0 0 1em; }
+.text blockquote p:last-child { margin-bottom: 0; }
+.text .attribution { font-size: 0.7em; }
+.text ul, .text ol { margin: 0 0 0.22em; padding: 0 0 0 1.4em; }
+.text li { margin: 0; }
+.text code { font-family: "JetBrains Mono", monospace; }
+.text pre {
+  margin: 0;
+  font-family: "JetBrains Mono", monospace;
+  line-height: 1.2;
+  white-space: pre;
+}
+.text table { border-collapse: collapse; margin: 0 auto; }
+.text:not(.centered) table { margin: 0; }
+.text th, .text td { padding: 0.25em 0; }
+.text th:not(:last-child), .text td:not(:last-child) { padding-right: 0.8em; }
+.text th:not(:first-child), .text td:not(:first-child) { padding-left: 0.8em; }
+.text thead tr { border-bottom: 0.06em solid var(--accent); }
+.text tbody tr { border-bottom: 0.03em solid color-mix(in srgb, var(--foreground) 20%, transparent); }
+.text tbody tr:last-child { border-bottom: none; }
+.text .k { color: var(--magenta); }
+.text .s { color: var(--green); }
+.text .n { color: var(--red); }
+.text .c { color: var(--dark-foreground); }
+.text .f { color: var(--accent); }
+.text .t { color: var(--yellow); }
+.text .p { color: var(--cyan); }
+
 .nav {
   position: absolute;
   top: 50%;

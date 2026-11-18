@@ -57,6 +57,7 @@
   "Converting the animation on slide %1 of %2": "Converting the animation on slide %1 of %2",
   "Converting the video on slide %1 of %2": "Converting the video on slide %1 of %2",
   "Copy": "Copy",
+  "Copying media %1 of %2": "Copying media %1 of %2",
   "Could not back up this version. Changes are still in the editor.": "Could not back up this version. Changes are still in the editor.",
   "Could not compress the pasted image.": "Could not compress the pasted image.",
   "Could not connect to the desktop file chooser.": "Could not connect to the desktop file chooser.",
@@ -98,7 +99,6 @@
   "Duplicate slide": "Duplicate slide",
   "Duplicate slides": "Duplicate slides",
   "Editing": "Editing",
-  "Encoding slide %1 of %2": "Encoding slide %1 of %2",
   "End of presentation": "End of presentation",
   "End show": "End show",
   "Export as HTML deck": "Export as HTML deck",
@@ -261,7 +261,6 @@
   "View": "View",
   "Visual · Switch to Markdown": "Visual · Switch to Markdown",
   "White": "White",
-  "Writing slide %1 of %2": "Writing slide %1 of %2",
   "Your headline": "Your headline",
   "Your next idea": "Your next idea",
   "←/→ change slide   ·   Space plays media   ·   Esc ends the show": "←/→ change slide   ·   Space plays media   ·   Esc ends the show"

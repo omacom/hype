@@ -35,6 +35,7 @@
 #include <QStandardPaths>
 #include <QTemporaryDir>
 #include <QThreadPool>
+#include <QUuid>
 #include <QtConcurrentRun>
 #include <atomic>
 #include <malloc.h>
@@ -1735,19 +1736,37 @@ static bool readResource(const QString &path, QString *content, QString *error) 
 }
 
 // Fills the bundled deck page: shared chrome, plus the stylesheet, script, and slides
-// the two HTML exports each supply in their own form.
-QString Deck::htmlPage(const QString &stylesheet, const QString &script, const QString &sections) const {
+// the two HTML exports each supply in their own form. The folder export also passes
+// its Markdown source and theme as inert script blocks, which its script renders.
+QString Deck::htmlPage(const QString &stylesheet, const QString &script, const QString &sections,
+                        const QString &source) const {
     QString page, error;
     if (!readResource(":/deck.html", &page, &error))
         return {};
-    return page
-        .replace("{{LANG}}", QLocale().name().split('_').value(0, "en"))
-        .replace("{{TITLE}}", title().toHtmlEscaped())
-        .replace("{{PREVIOUS}}", tr("Previous slide").toHtmlEscaped())
-        .replace("{{NEXT}}", tr("Next slide").toHtmlEscaped())
-        .replace("{{STYLESHEET}}", stylesheet)
-        .replace("{{SCRIPT}}", script)
-        .replace("{{SLIDES}}", sections.trimmed());
+    const QHash<QString, QString> values = {
+        {"LANG", QLocale().name().split('_').value(0, "en")},
+        {"TITLE", title().toHtmlEscaped()},
+        {"PREVIOUS", tr("Previous slide").toHtmlEscaped()},
+        {"NEXT", tr("Next slide").toHtmlEscaped()},
+        {"STYLESHEET", stylesheet},
+        {"SCRIPT", script},
+        {"SOURCE", source},
+        {"SLIDES", sections.trimmed()},
+    };
+    // Every slot is filled in one pass over the template, so a slot's value is never read
+    // as a slot itself: a deck titled "{{SCRIPT}}" keeps its title instead of pulling the
+    // whole script into the tab.
+    static const QRegularExpression slot("\\{\\{([A-Z]+)\\}\\}");
+    QString filled;
+    qsizetype end = 0;
+    for (QRegularExpressionMatchIterator it = slot.globalMatch(page); it.hasNext();) {
+        const QRegularExpressionMatch match = it.next();
+        filled += page.sliced(end, match.capturedStart() - end);
+        const auto value = values.constFind(match.captured(1));
+        filled += value == values.cend() ? match.captured(0) : *value;
+        end = match.capturedEnd();
+    }
+    return filled + page.sliced(end);
 }
 
 // Encodes one rendered slide as WebP, named for a screen reader, and for search, as PDF bookmarks do.
@@ -1785,8 +1804,11 @@ bool Deck::exportHtml(const QString &path) {
         emit exportAdvanced(0.8 + 0.2 * (i + 1) / count(), tr("Inlining slide %1 of %2").arg(i + 1).arg(count()));
         QByteArray webpBytes;
         QString alt;
+        // The alt text is read by anyone who receives the file, so it is drawn from the
+        // visible slide: speaker notes, comments and media directives stay out of it.
         if (!encodeSlide(temp.filePath(QString("slide-%1.png").arg(i + 1, 3, 10, QChar('0'))),
-                         i + 1, slideTitle(slide(i)), &webpBytes, &alt, &error)) {
+                         i + 1, slideTitle(parseMedia(slide(i), baseDir()).text), &webpBytes, &alt,
+                         &error)) {
             setStatus(tr("Slide %1: %2").arg(i + 1).arg(error));
             return false;
         }
@@ -1811,82 +1833,122 @@ bool Deck::exportHtml(const QString &path) {
     return true;
 }
 
-// The same deck in an editable shape: the page, the stylesheet, and the script as
-// separate files beside the slides as WebP, so any text editor can restyle the
-// deck without Hype. Every slide encodes before the first file is written, and
-// index.html is written last, so a failed export never leaves a folder that opens.
+// The same deck in an editable shape: the Markdown rides inside index.html, with the
+// theme's resolved colors beside it, and the page's script renders the slides in the
+// browser, mirroring Hype's layout. Media ships as the real files, so videos play.
+// The folder is built beside the destination and moved into place only after every
+// write succeeds, so a failed export leaves nothing behind and can be retried.
 bool Deck::exportHtmlFolder(const QString &path) {
     const QFileInfo destination(path);
     if (destination.exists() && !QDir(path).isEmpty()) {
         setStatus(tr("Choose a new or empty folder: %1 has files in it.").arg(path));
         return false;
     }
-    // Render beside the destination, not in /tmp: /tmp is usually RAM-backed, and a deck's
-    // rendered slide images would otherwise sit in memory until encoded.
-    QTemporaryDir temp(destination.absoluteDir().filePath(".hype-render-XXXXXX"));
-    if (!temp.isValid()) {
-        setStatus(tr("Could not prepare the export: %1").arg(temp.errorString()));
-        return false;
-    }
-    if (!renderImages(temp.path(), 1920, false, 0.8))
+    if (!validateStructure("export"))
         return false;
     QString error, stylesheet, script;
     if (!readResource(":/deck.css", &stylesheet, &error) || !readResource(":/deck.js", &script, &error)) {
         setStatus(error);
         return false;
     }
-    QList<QByteArray> encoded;
-    QString sections;
-    for (int i = 0; i < count(); ++i) {
-        emit exportAdvanced(0.8 + 0.15 * (i + 1) / count(),
-                             tr("Encoding slide %1 of %2").arg(i + 1).arg(count()));
-        QByteArray webpBytes;
-        QString alt;
-        if (!encodeSlide(temp.filePath(QString("slide-%1.png").arg(i + 1, 3, 10, QChar('0'))),
-                         i + 1, slideTitle(slide(i)), &webpBytes, &alt, &error)) {
-            setStatus(tr("Slide %1: %2").arg(i + 1).arg(error));
-            return false;
+    // Collect the media the slides name, at the paths the browser will resolve them.
+    struct Copy { QString from, to; };
+    QList<Copy> copies;
+    QSet<QString> seen;
+    const QString base = baseDir();
+    for (const auto &slide : m_parsed.slides) {
+        const auto media = parseMedia(slide.source, base);
+        for (const auto &item : {qMakePair(media.path, media.video), qMakePair(media.poster, false)}) {
+            // A missing file is not a failure: the browser draws Hype's missing-media
+            // notice in its place, as the editor does.
+            if (item.first.isEmpty() || !QFile::exists(item.first))
+                continue;
+            QString target = QDir(base).relativeFilePath(QFileInfo(item.first).absoluteFilePath());
+            if (target.startsWith(".."))
+                target = (item.second ? "videos/" : "images/") + QFileInfo(item.first).fileName();
+            if (seen.contains(target))
+                continue;
+            seen.insert(target);
+            copies.append({item.first, target});
         }
-        encoded << webpBytes;
-        sections += QString("<section class=\"slide\">\n<img src=\"slides/slide-%1.webp\" alt=\"%2\">\n</section>\n")
-                        .arg(i + 1, 3, 10, QChar('0')).arg(alt);
     }
-    if (!QDir().mkpath(path + "/slides")) {
-        setStatus(tr("Could not create %1").arg(path + "/slides"));
+    // Build beside the destination, not in /tmp: the finished folder then moves into
+    // place in one rename, which has to stay on one filesystem. A plain mkdir, not
+    // QTemporaryDir, so the folder keeps the permissions a new folder normally gets.
+    const QString parent = destination.absoluteDir().absolutePath();
+    if (!QDir().mkpath(parent)) {
+        setStatus(tr("Could not create %1").arg(parent));
         return false;
     }
-    for (int i = 0; i < encoded.size(); ++i) {
-        emit exportAdvanced(0.95 + 0.05 * (i + 1) / encoded.size(),
-                            tr("Writing slide %1 of %2").arg(i + 1).arg(encoded.size()));
-        QSaveFile slideFile(path + QString("/slides/slide-%1.webp").arg(i + 1, 3, 10, QChar('0')));
-        if (!slideFile.open(QIODevice::WriteOnly) ||
-            slideFile.write(encoded[i]) != encoded[i].size() || !slideFile.commit()) {
-            setStatus(slideFile.errorString());
+    QString temp;
+    for (int attempt = 0; attempt < 100 && temp.isEmpty(); ++attempt) {
+        const QString candidate =
+            parent + "/.hype-export-" + QUuid::createUuid().toString(QUuid::WithoutBraces).left(12);
+        if (QFileInfo::exists(candidate))
+            continue; // A collision is vanishingly unlikely, but pick again.
+        if (!QDir().mkdir(candidate))
+            break; // The parent is not writable.
+        temp = candidate;
+    }
+    if (temp.isEmpty()) {
+        setStatus(tr("Could not create %1").arg(path));
+        return false;
+    }
+    // Every failed write below leaves the destination untouched and removes the draft.
+    auto discard = qScopeGuard([&] { QDir(temp).removeRecursively(); });
+    for (int i = 0; i < copies.size(); ++i) {
+        emit exportAdvanced(0.2 + 0.6 * (i + 1) / copies.size(),
+                             tr("Copying media %1 of %2").arg(i + 1).arg(copies.size()));
+        const QString target = temp + "/" + copies[i].to;
+        if (!QDir().mkpath(QFileInfo(target).absolutePath()) || !QFile::copy(copies[i].from, target)) {
+            setStatus(tr("Could not prepare the export: %1").arg(path + "/" + copies[i].to));
             return false;
         }
     }
     const QList<QPair<QString, QString>> chrome = {{QStringLiteral("deck.css"), stylesheet},
                                                    {QStringLiteral("deck.js"), script}};
     for (const auto &[name, content] : chrome) {
-        QSaveFile chromeFile(path + "/" + name);
+        QSaveFile chromeFile(temp + "/" + name);
         if (!chromeFile.open(QIODevice::WriteOnly | QIODevice::Text) ||
             chromeFile.write(content.toUtf8()) < 0 || !chromeFile.commit()) {
             setStatus(chromeFile.errorString());
             return false;
         }
     }
+    // The Markdown is the deck's source of truth: edit the block below in any text
+    // editor and refresh the page. A </script inside it would close the block early,
+    // so it is escaped here and unescaped by the script that reads it.
+    QString markdown = m_source;
+    markdown.replace("</script", "<\\/script", Qt::CaseInsensitive);
+    const QByteArray colors =
+        QJsonDocument(QJsonObject::fromVariantMap(palette())).toJson(QJsonDocument::Compact);
+    const QString source =
+        "<script type=\"text/markdown\" id=\"source\">\n" + markdown + "\n</script>\n"
+        "<script type=\"application/json\" id=\"palette\">" + QString::fromUtf8(colors) + "</script>";
     const QString page = htmlPage("<link rel=\"stylesheet\" href=\"deck.css\">",
-                                  "<script src=\"deck.js\"></script>", sections);
+                                  "<script src=\"deck.js\"></script>", {}, source);
     if (page.isEmpty()) {
         setStatus(tr("Could not read the deck template"));
         return false;
     }
-    QSaveFile file(path + "/index.html");
+    QSaveFile file(temp + "/index.html");
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text) ||
         file.write(page.toUtf8()) < 0 || !file.commit()) {
         setStatus(file.errorString());
         return false;
     }
+    // Every file is written: move the folder into place. An existing empty destination
+    // was allowed above, so clear it first; anything else is left untouched.
+    const QFileInfo finished(destination.absoluteFilePath());
+    if (finished.exists() && !QDir().rmdir(finished.absoluteFilePath())) {
+        setStatus(tr("Could not create %1").arg(path));
+        return false;
+    }
+    if (!QDir().rename(temp, destination.absoluteFilePath())) {
+        setStatus(tr("Could not create %1").arg(path));
+        return false;
+    }
+    discard.dismiss();
     emit exportAdvanced(1.0, tr("Exported %1").arg(path));
     setStatus(tr("Exported %1").arg(path));
     return true;

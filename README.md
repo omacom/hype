@@ -171,7 +171,7 @@ Choose **Export as PDF**, **Export as PowerPoint**, **Export as HTML**, or **Exp
 
 **Export as HTML** writes one self-contained file: every slide rendered at 1920 pixels wide, inlined as WebP, wrapped in a page with arrow-key, click, swipe, and touch navigation, a slide counter, and `#N` deep links. It opens in any browser straight from a file manager or an email attachment — no fonts, no internet, no unzipping. The Markdown file stays the source of truth; export again to refresh the deck.
 
-**Export as HTML folder** writes the same deck in an editable shape: `index.html`, `deck.css`, and `deck.js` beside every slide as WebP in `slides/`. Restyle the stylesheet, edit the script, or swap a slide image in any editor — no Hype needed. Pick a new or empty folder; export again to refresh it. Zip the folder to share the whole deck.
+**Export as HTML folder** writes the same deck as an editable folder: the Markdown rides inside `index.html`, which renders it with `deck.js` and `deck.css` — mirroring Hype's layout, theme, and media directives — beside the deck's real images and videos. Edit the Markdown block in any text editor, refresh the browser, and the deck updates; no Hype needed. Pick a new or empty folder; export again to refresh it. Zip the folder to share the whole deck.
 
 Export runs in the background. The top bar shows progress through rendering, video conversion, and packaging under the presentation name, with a **Cancel export** button. You can keep editing; the export uses the presentation as it was when you started. Failed or cancelled exports leave an existing file intact.
 

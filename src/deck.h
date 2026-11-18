@@ -114,8 +114,9 @@ class Deck : public QAbstractListModel {
     bool exportPptx(const QString &path);
     // One self-contained file: every slide inlined as WebP, wrapped in a navigable page.
     bool exportHtml(const QString &path);
-    // The same deck as an editable folder: the page, stylesheet, and script as
-    // separate files beside the slides, so any text editor can restyle it.
+    // The same deck as an editable folder: the Markdown rides inside the page,
+    // and the script renders it in the browser, so edits in any text editor
+    // show on refresh.
     bool exportHtmlFolder(const QString &path);
     // For PowerPoint, animations become videos and opaque slides are stored as JPEG.
     // Portion is the share of the export progress bar rendering reports, so a caller
@@ -222,8 +223,10 @@ class Deck : public QAbstractListModel {
                const ParsedDeck *structure = nullptr);
     void replaceHeader(const QString &header);
     // Fills the bundled deck page: shared chrome plus the stylesheet, script, and slides
-    // the two HTML exports supply in their own form.
-    QString htmlPage(const QString &stylesheet, const QString &script, const QString &sections) const;
+    // the two HTML exports supply in their own form. The folder export also passes its
+    // Markdown source, which the deck's script renders in the browser.
+    QString htmlPage(const QString &stylesheet, const QString &script, const QString &sections,
+                     const QString &source = {}) const;
     void replaceSlides(const QStringList &slides, int selected, int anchor = -1);
     bool confirmDiscard();
     bool validateStructure(const QString &operation);

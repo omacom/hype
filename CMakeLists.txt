@@ -78,12 +78,13 @@ endif()
 set_tests_properties(hype_tests PROPERTIES ENVIRONMENT
   "QT_QPA_PLATFORM=offscreen;QT_QPA_PLATFORMTHEME=generic;QT_STYLE_OVERRIDE=Fusion")
 
-# The commands, exports and shutdown, driven through build/hype as an agent would.
+# The commands, exports and shutdown through build/hype as an agent would, and
+# the exported deck's navigation in a browser (skipped where chromium is absent).
 # test_trials covers the trial import tools, which need their own Python packages.
 find_package(Python3 COMPONENTS Interpreter)
 if(Python3_FOUND)
   add_test(NAME hype_commands
-    COMMAND ${Python3_EXECUTABLE} -m unittest test_cli test_export test_shutdown
+    COMMAND ${Python3_EXECUTABLE} -m unittest test_cli test_export test_deck_navigation test_shutdown
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/tests)
 else()
   add_test(NAME hype_commands COMMAND sh -c "echo 'hype_commands needs Python 3' >&2; exit 1")

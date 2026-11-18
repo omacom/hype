@@ -3372,49 +3372,103 @@ static void write(const QString &path, const QString &content) {
         QVERIFY(file.seek(0));
         QCOMPARE(QString::fromUtf8(file.readAll()), page);
     }
-    void exportHtmlFolderProducesAnEditableDeck() {
+    void exportHtmlAltTextLeavesSpeakerNotesOut() {
         QTemporaryDir tmp;
-        write(tmp.path() + "/talk.md", "---\ntitle: \"A <big> idea\"\n---\n\n# One\n\n---\n\n# Two\n\n- a\n");
+        write(tmp.path() + "/talk.md",
+              "---\ntitle: Notes\n---\n\n<!-- Private speaker note -->\n\nVisible line\n");
+        Deck d;
+        QVERIFY(d.loadPath(tmp.path() + "/talk.md"));
+        QVERIFY(d.exportHtml(tmp.path() + "/talk.html"));
+        QFile file(tmp.path() + "/talk.html");
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        const QString page = QString::fromUtf8(file.readAll());
+        // The alt text names the visible slide for anyone who receives the file, so a hidden
+        // speaker note on a slide without a headline never becomes part of it.
+        QVERIFY(page.contains("alt=\"Slide 1: Visible line\""));
+        QVERIFY(!page.contains("Private speaker note"));
+    }
+    void htmlTitleIsNotASlot() {
+        QTemporaryDir tmp;
+        write(tmp.path() + "/talk.md", "---\ntitle: \"{{SCRIPT}}\"\n---\n\n# One\n");
+        Deck d;
+        QVERIFY(d.loadPath(tmp.path() + "/talk.md"));
+        QVERIFY(d.exportHtml(tmp.path() + "/talk.html"));
+        QFile file(tmp.path() + "/talk.html");
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        const QString page = QString::fromUtf8(file.readAll());
+        // A title that reads like a slot stays the title: filled slots are never rescanned,
+        // so the script does not land in the tab.
+        QVERIFY(page.contains("<title>{{SCRIPT}}</title>"));
+        QVERIFY(page.contains("<script>"));
+    }
+    void exportHtmlFolderShipsAnEditableMarkdownDeck() {
+        QTemporaryDir tmp;
+        QDir().mkpath(tmp.path() + "/images");
+        write(tmp.path() + "/talk.md",
+              "---\ntitle: \"A <big> idea\"\n---\n\n# One\n\n---\n\n![](city.jpg)\n\n---\n\n```html\n"
+              "<script>\n</script>\n```\n");
+        write(tmp.path() + "/images/city.jpg", "city");
         Deck d;
         QVERIFY(d.loadPath(tmp.path() + "/talk.md"));
         const QString folder = tmp.path() + "/deck-html";
         QVERIFY(d.exportHtmlFolder(folder));
-        // The editable shape: the page, the stylesheet, and the script as files beside the slides.
+        // The editable shape: the Markdown rides inside the page, which renders it,
+        // beside the stylesheet, the script, and the deck's real media.
         QVERIFY(QFile::exists(folder + "/index.html"));
         QVERIFY(QFile::exists(folder + "/deck.css"));
         QVERIFY(QFile::exists(folder + "/deck.js"));
-        QCOMPARE(QDir(folder + "/slides").entryList(QDir::Files).size(), 2);
-        QFile first(folder + "/slides/slide-001.webp");
-        QVERIFY(first.open(QIODevice::ReadOnly));
-        QCOMPARE(first.read(4), QByteArray("RIFF")); // WebP, like the single-file deck inlines.
+        QVERIFY(QFile::exists(folder + "/images/city.jpg"));
+        QCOMPARE(QDir(folder + "/slides").exists(), false); // Slides render, not bake.
+        QFile city(folder + "/images/city.jpg");
+        QVERIFY(city.open(QIODevice::ReadOnly));
+        QCOMPARE(city.readAll(), QByteArray("city"));
         QFile file(folder + "/index.html");
         QVERIFY(file.open(QIODevice::ReadOnly));
         const QString page = QString::fromUtf8(file.readAll());
         QVERIFY(page.contains("<title>A &lt;big&gt; idea</title>"));
         QVERIFY(page.contains("<link rel=\"stylesheet\" href=\"deck.css\">"));
         QVERIFY(page.contains("<script src=\"deck.js\"></script>"));
-        QVERIFY(page.contains("src=\"slides/slide-001.webp\""));
-        QVERIFY(page.contains("src=\"slides/slide-002.webp\""));
-        QVERIFY(page.contains("alt=\"Slide 1: One\""));
-        QVERIFY(page.contains("alt=\"Slide 2: Two\""));
+        QVERIFY(page.contains("<script type=\"text/markdown\" id=\"source\">"));
+        QVERIFY(page.contains("# One"));
+        QVERIFY(page.contains("![](city.jpg)"));
+        QVERIFY(page.contains("<script type=\"application/json\" id=\"palette\">"));
+        // A closing script tag inside the Markdown must not close its block early.
+        QVERIFY(page.contains("<\\/script>"));
         QVERIFY(!page.contains("{{"));
         QVERIFY(!page.contains("data:"));
         // The stylesheet and the script are the real deck files, editable without Hype.
         QFile css(folder + "/deck.css");
         QVERIFY(css.open(QIODevice::ReadOnly));
-        QVERIFY(QString::fromUtf8(css.readAll()).contains("object-fit: contain"));
+        QVERIFY(QString::fromUtf8(css.readAll()).contains("--foreground"));
         QFile js(folder + "/deck.js");
         QVERIFY(js.open(QIODevice::ReadOnly));
-        QVERIFY(QString::fromUtf8(js.readAll()).contains("addEventListener"));
+        QVERIFY(QString::fromUtf8(js.readAll()).contains("renderMarkdownDeck"));
         // A folder that already has files is refused, and left alone.
         QVERIFY(!d.exportHtmlFolder(folder));
         QVERIFY(file.seek(0));
         QCOMPARE(QString::fromUtf8(file.readAll()), page);
-        // A failed export writes no deck: nothing that opens is left behind.
+        // A failed export writes no deck: nothing that opens is left behind, and
+        // nothing blocks retrying the same folder.
         d.editSlide("```rust\nfn main() {}");
         const QString fresh = tmp.path() + "/fresh-html";
         QVERIFY(!d.exportHtmlFolder(fresh));
-        QVERIFY(!QFile::exists(fresh + "/index.html"));
+        QVERIFY(!QFileInfo::exists(fresh));
+        for (const QString &name : QDir(tmp.path()).entryList(QDir::Dirs | QDir::Hidden))
+            QVERIFY2(!name.startsWith(".hype-export-"), qPrintable(name));
+        d.editSlide("# Two");
+        QVERIFY(d.exportHtmlFolder(fresh));
+        QVERIFY(QFile::exists(fresh + "/index.html"));
+        // An existing empty folder is accepted, and replaced by the finished export.
+        const QString empty = tmp.path() + "/empty-html";
+        QVERIFY(QDir().mkdir(empty));
+        QVERIFY(d.exportHtmlFolder(empty));
+        QVERIFY(QFile::exists(empty + "/index.html"));
+        // A failed export into an existing empty folder leaves that folder as it was.
+        d.editSlide("```rust\nfn main() {}");
+        const QString blocked = tmp.path() + "/blocked-html";
+        QVERIFY(QDir().mkdir(blocked));
+        QVERIFY(!d.exportHtmlFolder(blocked));
+        QVERIFY(QDir(blocked).isEmpty());
     }
     void saveCopyRollsBackOnFailure() {
         QTemporaryDir tmp;
