@@ -1332,9 +1332,10 @@ const slides = [...stage.querySelectorAll(".slide")]
 //
 // The rasterizer's output, kept per slide for this load. A folder export's
 // slides do not change while the page is open—editing the Markdown means
-// reloading it—so one canvas per index is enough. A picture or font that
+// reloading it—so one record per index is enough. A picture or font that
 // arrives after the first paint repaints the same canvas in place, which keeps
-// the identity a caller already holds and lets a transition upload it late.
+// the identity a caller already holds, bumps its revision, and lets a
+// transition upload or re-upload it late.
 //
 // A transition reads the outgoing slide and the incoming one, so only the last
 // few textures can be in flight; any more would just hold 1920 × 1080 pixels
@@ -1345,12 +1346,40 @@ const slides = [...stage.querySelectorAll(".slide")]
 const TEXTURE_CACHE_LIMIT = 4
 const slideTextures = new Map()
 
-function keepTexture(index, texture) {
+function keepTexture(index, record) {
   slideTextures.delete(index)
-  slideTextures.set(index, texture)
+  slideTextures.set(index, record)
   while (slideTextures.size > TEXTURE_CACHE_LIMIT) {
     slideTextures.delete(slideTextures.keys().next().value)
   }
+}
+
+// Whether every picture the rasterizer would draw can be drawn now. An SVG
+// drawing is an <img> too, so a decoded one is complete with an intrinsic size.
+function mediaReady(section) {
+  for (const element of section.querySelectorAll("img, video")) {
+    if (element.tagName === "VIDEO") {
+      if (element.readyState < 2) return false
+    } else if (!element.complete || !element.naturalWidth) {
+      return false
+    }
+  }
+  return true
+}
+
+// The hook a transition uses to decide whether a slide can be mixed yet.
+function slideReady(index) {
+  return Number.isInteger(index) && index >= 0 && index < slides.length &&
+    mediaReady(slides[index])
+}
+
+// Paints a cached canvas again in place and tells anyone waiting on it. The
+// revision lets a running transition re-upload pixels that changed under it.
+function repaintTexture(index, record) {
+  if (slideTextures.get(index) !== record) return
+  paintSlideToCanvas(slides[index], record.canvas)
+  record.revision += 1
+  for (const listener of record.listeners) listener()
 }
 
 // Picture formats a browser can animate on its own. A still file in one of them
@@ -1368,6 +1397,13 @@ function hasMovingMedia(section) {
 }
 
 function slideTexture(index, refresh = false) {
+  const record = textureRecord(index, refresh)
+  return record ? record.canvas : null
+}
+
+// The rasterizer's result: the canvas a transition uploads, whether the slide's
+// media has painted, and the revision that changes on every in-place repaint.
+function textureRecord(index, refresh = false) {
   if (!Number.isInteger(index) || index < 0 || index >= slides.length) {
     return null
   }
@@ -1378,36 +1414,36 @@ function slideTexture(index, refresh = false) {
     keepTexture(index, cached)
     // A video or an animated picture has moved past the frame the cache holds,
     // so a transition repaints it in place and keeps the identity it uploads.
-    if (refresh && hasMovingMedia(section)) {
-      paintSlideToCanvas(section, cached)
-    }
+    if (refresh && hasMovingMedia(section)) repaintTexture(index, cached)
     return cached
   }
-  const texture = paintSlideToCanvas(section)
-  keepTexture(index, texture)
+  const record = {
+    canvas: paintSlideToCanvas(section),
+    revision: 0,
+    listeners: new Set(),
+    get ready() { return slideReady(index) }
+  }
+  keepTexture(index, record)
   // A texture painted before its pictures decoded is repainted, not replaced,
   // unless the cache has evicted it in the meantime.
-  const repaint = () => {
-    if (slideTextures.get(index) === texture) paintSlideToCanvas(section, texture)
-  }
   for (const element of section.querySelectorAll("img, video")) {
     if (element.tagName === "VIDEO") {
       if (element.readyState < 2) {
-        element.addEventListener("loadeddata", repaint, { once: true })
+        element.addEventListener("loadeddata", () => repaintTexture(index, record), { once: true })
       }
-    } else if (!element.complete) {
-      element.addEventListener("load", repaint, { once: true })
+    } else if (!element.complete || !element.naturalWidth) {
+      element.addEventListener("load", () => repaintTexture(index, record), { once: true })
     }
   }
-  return texture
+  return record
 }
 
 // Text fitted with a fallback face is refitted once the real font loads, so a
 // texture painted before that would carry the old metrics. Only the entries
 // still cached need repainting: a slide painted later already has the font.
 document.fonts.ready.then(() => {
-  for (const [index, texture] of slideTextures)
-    paintSlideToCanvas(slides[index], texture)
+  for (const [index, record] of slideTextures)
+    repaintTexture(index, record)
 })
 
 function scaleCanvases() {
@@ -1495,6 +1531,10 @@ const transitions = (() => {
   const programs = new Map()
   let frame = 0
   let generation = 0
+  let waitCleanup = null
+  // Long enough for a picture already in flight, short enough that a transition
+  // with missing media does not feel like a stall.
+  const PREPARE_TIMEOUT = 300
 
   function setUp() {
     if (canvas) return gl !== null
@@ -1604,15 +1644,48 @@ const transitions = (() => {
   // `refresh` repaints a moving slide's cached canvas before it is uploaded.
   function textureFor(index, refresh) {
     try {
-      return slideTexture(index, refresh)
+      return textureRecord(index, refresh)
     } catch {
       return null
     }
   }
 
+  // A transition cannot mix a frame that has no picture in it: the load handler
+  // repaints the canvas after the texture was uploaded. Give the media its
+  // repaint callbacks a short chance to arrive, then leave the new slide as it
+  // is, as a native timeout would.
+  function whenReady(records, callback) {
+    if (records.every(record => record.ready)) {
+      callback()
+      return
+    }
+    let timer = 0
+    let finished = false
+    const listeners = []
+    const finish = ready => {
+      if (finished) return
+      finished = true
+      clearTimeout(timer)
+      for (const [record, listener] of listeners) record.listeners.delete(listener)
+      waitCleanup = null
+      if (ready) callback()
+    }
+    for (const record of records) {
+      const listener = () => {
+        if (records.every(item => item.ready)) finish(true)
+      }
+      record.listeners.add(listener)
+      listeners.push([ record, listener ])
+    }
+    timer = setTimeout(finish, PREPARE_TIMEOUT, false)
+    waitCleanup = () => finish(false)
+  }
+
   // Hides the overlay and invalidates any frame loop still in flight.
   function cancel() {
     generation++
+    if (waitCleanup) waitCleanup()
+    waitCleanup = null
     if (frame) cancelAnimationFrame(frame)
     frame = 0
     if (canvas) canvas.style.display = "none"
@@ -1630,20 +1703,38 @@ const transitions = (() => {
     if (!from || !to) return
     const program = compile(transition.name)
     if (!program) return
+    const token = generation
+    whenReady([ from, to ], () => {
+      if (token === generation) animate(token, transition, program, from, to)
+    })
+  }
+
+  function animate(token, transition, program, from, to) {
     try {
-      upload(fromTex, from, 0)
-      upload(toTex, to, 1)
+      upload(fromTex, from.canvas, 0)
+      upload(toTex, to.canvas, 1)
       draw(program, 0)
     } catch {
       return
     }
-    const token = generation
+    // A repaint during the animation replaces pixels the texture is mixing, so
+    // the next frame uploads the canvas again before it draws.
+    let fromRevision = from.revision
+    let toRevision = to.revision
     canvas.style.display = "block"
     const start = performance.now()
     const span = transition.duration * 1000
     const step = now => {
       if (token !== generation) return
       try {
+        if (from.revision !== fromRevision) {
+          fromRevision = from.revision
+          upload(fromTex, from.canvas, 0)
+        }
+        if (to.revision !== toRevision) {
+          toRevision = to.revision
+          upload(toTex, to.canvas, 1)
+        }
         const progress = Math.min(1, (now - start) / span)
         draw(program, progress)
         if (progress < 1) frame = requestAnimationFrame(step)
@@ -1771,11 +1862,12 @@ window.addEventListener("hashchange", () => show(fromHash()))
 show(fromHash())
 
 // The rasterizer's contract, for both a rendered folder deck and a baked
-// one-file deck: which transition enters a slide, that slide as a texture, and
-// how many textures the cache is holding.
+// one-file deck: which transition enters a slide, that slide as a texture,
+// whether its media has painted, and how many textures the cache is holding.
 window.HypeDeck = {
   resolveTransition,
   slideTexture,
+  slideReady,
   get textureCount() {
     return slideTextures.size
   }

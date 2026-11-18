@@ -508,6 +508,124 @@ transition-duration: 0.1
 """
 
 
+# A picture that arrives after the transition asked for it. The overlay must not
+# upload an empty canvas: the transition waits for the repaint, or skips.
+READINESS_PAGE = """<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>deck media readiness</title>
+    <link rel="stylesheet" href="__STYLESHEET__">
+  </head>
+  <body>
+    <div class="stage" id="stage">
+      <button type="button" class="nav prev" aria-label="Previous">&#8249;</button>
+      <button type="button" class="nav next" aria-label="Next">&#8250;</button>
+      <div class="counter" id="counter"></div>
+    </div>
+    <script type="text/markdown" id="source">---
+transition: "crossfade"
+transition-duration: 0.2
+---
+
+# First
+
+---
+
+![late](__RED__)
+
+---
+
+![later](__BLUE__)</script>
+    <script type="application/json" id="palette">{"background": "#1a1b26", "foreground": "#a9b1d6", "accent": "#7aa2f7"}</script>
+    <script type="application/json" id="transitions">{"crossfade":"vec4 transition(vec2 uv) { return mix(texture2D(fromTex, uv), texture2D(toTex, uv), progress); }"}</script>
+    <script>
+      // Installed before deck.js so uploads and frames are counted from the
+      // first transition. The six-argument texImage2D form uploads a picture;
+      // the nine-argument form allocates the texture.
+      window.__transitionTrace = { draws: 0, uploads: 0 }
+      for (const name of ["WebGLRenderingContext", "WebGL2RenderingContext"]) {
+        const type = window[name]
+        if (!type) continue
+        const draw = type.prototype.drawArrays
+        if (typeof draw === "function")
+          type.prototype.drawArrays = function (...args) {
+            window.__transitionTrace.draws++
+            return draw.apply(this, args)
+          }
+        const upload = type.prototype.texImage2D
+        if (typeof upload === "function")
+          type.prototype.texImage2D = function (...args) {
+            if (args.length === 6) window.__transitionTrace.uploads++
+            return upload.apply(this, args)
+          }
+      }
+    </script>
+    <script src="__SCRIPT__"></script>
+    <script>
+      window.addEventListener("load", async () => {
+        const results = []
+        const add = (ok, name, detail) =>
+          results.push((ok ? "PASS " : "FAIL ") + name + (detail === undefined ? "" : " (" + detail + ")"))
+        const hook = window.HypeDeck
+        const hooked = !!hook && typeof hook.slideReady === "function"
+        add(hooked, "HypeDeck readiness hook")
+        if (hooked) {
+          const sections = [...document.querySelectorAll("section.slide")]
+          const first = sections[1].querySelector("img.media")
+          const second = sections[2].querySelector("img.media")
+          const red = first && first.getAttribute("src")
+          const blue = second && second.getAttribute("src")
+          add(!!first && !!second, "picture slides rendered")
+          const trace = window.__transitionTrace
+          const loaded = image => new Promise(resolve => {
+            if (image.complete && image.naturalWidth) resolve()
+            else image.addEventListener("load", resolve, { once: true })
+          })
+
+          // A picture with no source has no decoded frame, so the slide is not
+          // ready and a transition into it must not upload or draw.
+          first.removeAttribute("src")
+          add(hook.slideReady(0) === true, "text slide ready")
+          add(hook.slideReady(1) === false, "undecoded slide not ready")
+          const uploads = trace.uploads, draws = trace.draws
+          window.show(1)
+          await new Promise(resolve => setTimeout(resolve, 450))
+          add(trace.uploads === uploads, "no upload without ready media", trace.uploads - uploads)
+          add(trace.draws === draws, "no animation without ready media", trace.draws - draws)
+          const overlay = document.querySelector("canvas.transition")
+          add(!overlay || overlay.style.display === "none", "overlay stayed hidden")
+
+          // The data URI arrives after the transition gave up. The slide is
+          // ready now, but the skipped animation stays skipped.
+          first.src = red
+          await loaded(first)
+          add(hook.slideReady(1) === true, "late picture becomes ready")
+
+          // A picture that arrives while the transition is still waiting is
+          // painted and uploaded, so the deferred animation runs.
+          second.removeAttribute("src")
+          const deferred = trace.draws
+          window.show(2)
+          add(hook.slideReady(2) === false, "incoming slide not ready")
+          second.src = blue
+          await loaded(second)
+          await new Promise(resolve => setTimeout(resolve, 250))
+          if (trace.draws > deferred) add(true, "deferred transition drew frames", trace.draws - deferred)
+          else if (!document.querySelector("canvas.transition")) results.push("SKIP webgl unavailable in headless")
+          else add(false, "deferred transition drew frames", trace.draws - deferred)
+        }
+        const report = document.createElement("pre")
+        report.id = "results"
+        report.textContent = results.join("\\n")
+        document.body.appendChild(report)
+      })
+    </script>
+  </body>
+</html>
+"""
+
+
 @unittest.skipUnless(CHROMIUM, 'chromium is not installed')
 class DeckTransitionTests(unittest.TestCase):
     def render(self, page, files=None):
@@ -567,6 +685,20 @@ class DeckTransitionTests(unittest.TestCase):
         self.assertIn('PASS cache smaller than the deck', report)
         self.assertIn('PASS evicted slide repaints on demand', report)
         self.assertIn('PASS repaint stays within the limit', report)
+
+    def test_incomplete_media_waits_for_repaint(self):
+        page = (READINESS_PAGE
+                .replace('__RED__', png_data_uri((255, 0, 0)))
+                .replace('__BLUE__', png_data_uri((0, 0, 255))))
+        report = self.render(page)
+        self.assertNotIn('FAIL', report, report)
+        self.assertIn('PASS undecoded slide not ready', report)
+        self.assertIn('PASS no upload without ready media', report)
+        self.assertIn('PASS no animation without ready media', report)
+        self.assertIn('PASS late picture becomes ready', report)
+        self.assertIn('PASS incoming slide not ready', report)
+        self.assertTrue('PASS deferred transition drew frames' in report or 'SKIP webgl' in report,
+                        report)
 
 
 if __name__ == '__main__':
