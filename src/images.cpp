@@ -2,6 +2,7 @@
 #include <QBuffer>
 #include <QImageReader>
 #include <QImageWriter>
+#include <QSaveFile>
 
 QSize imageSizeForCanvas(QSize original, QSize canvas, bool span) {
     if (original.isEmpty() || canvas.isEmpty())
@@ -62,4 +63,25 @@ QByteArray compressedImage(const QImage &image, QString *extension) {
         }
     }
     return png;
+}
+
+QByteArray pictureFormat(const QString &name) {
+    const QString format = name.toLower();
+    return format == "png" || format == "webp"   ? format.toLatin1()
+           : format == "jpg" || format == "jpeg" ? QByteArray("jpg")
+                                                 : QByteArray();
+}
+
+bool savePicture(const QImage &image, const QString &path, const QByteArray &format, int quality) {
+    // Written beside and renamed over, so an existing file, or a hard link to the
+    // presentation, is replaced rather than overwritten in place.
+    QSaveFile file(path);
+    if (!file.open(QIODevice::WriteOnly))
+        return false;
+    QImageWriter writer(&file, format == "jpg" ? "jpeg" : format);
+    if (format != "png")
+        writer.setQuality(qBound(1, quality, 100));
+    // JPEG has no transparency; a slide's backdrop covers it anyway.
+    return writer.write(format == "jpg" ? image.convertToFormat(QImage::Format_RGB32) : image) &&
+           file.commit();
 }

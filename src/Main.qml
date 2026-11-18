@@ -51,8 +51,9 @@ ApplicationWindow {
     // Remember intentional focus changes; moving the window may briefly clear activeFocus.
     property string focusedEditor: ""
     property bool presenting: false
-    readonly property bool popupOpen: pasteDialog.visible || compressionDialog.visible ||
-        historyDialog.visible || closeDialog.visible || shortcutsOverlay.visible || themes.popup.visible || fonts.popup.visible ||
+    readonly property bool popupOpen: pasteDialog.visible || compressionDialog.visible || googleFonts.visible ||
+        historyDialog.visible || closeDialog.visible || shortcutsOverlay.visible || lookPicker.visible || fonts.popup.visible ||
+        templateSlidesDialog.visible || saveTemplateDialog.visible ||
         slideMenu.visible || fileMenu.visible || slideBar.menuOpen || sourceBar.menuOpen
     property var compressionReturnFocus: null
     property bool allowClose: false
@@ -692,6 +693,429 @@ ApplicationWindow {
             }
         }
     }
+    // Search Google Fonts; choosing one sets the presentation's font, and Hype downloads it.
+    Popup {
+        id: googleFonts; objectName: "googleFontsDialog"
+        parent: Overlay.overlay
+        popupType: Popup.Item
+        modal: true; focus: true; padding: 18
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        width: Math.min(420, parent.width - 48)
+        height: Math.min(520, parent.height - 80)
+        x: (parent.width - width) / 2; y: (parent.height - height) / 2
+        property int ready: 0
+        property var results: (ready, deck.googleFonts(googleQuery.text))
+        Connections { target: deck; function onGoogleFontsReady() { googleFonts.ready++ } }
+        onOpened: { deck.loadGoogleFonts(); googleQuery.text = ""; googleQuery.forceActiveFocus() }
+        function choose(name) { deck.chooseFont(name); close() }
+        background: Rectangle { color: win.ui.panel; border.color: win.ui.border; radius: win.rounding }
+        Overlay.modal: Rectangle { color: "#660b0d14" }
+        contentItem: ColumnLayout {
+            spacing: 12
+            Label { text: qsTr("Google Fonts"); color: win.ui.foreground; font.pixelSize: 20; font.bold: true }
+            Label {
+                Layout.fillWidth: true; wrapMode: Text.Wrap; color: win.ui.muted; font.pixelSize: 13
+                text: qsTr("Open-source fonts. Hype downloads the one you choose and keeps it for every presentation.")
+            }
+            TextField {
+                id: googleQuery; objectName: "googleFontsQuery"
+                Accessible.name: "Search Google Fonts"
+                Layout.fillWidth: true; implicitHeight: 40
+                placeholderText: qsTr("Search, e.g. Poppins or serif")
+                font.pixelSize: 15; color: win.ui.foreground; placeholderTextColor: win.ui.muted
+                selectionColor: win.ui.selection; selectedTextColor: win.ui.selectionText
+                leftPadding: 12; rightPadding: 12
+                background: Rectangle { color: win.ui.background; radius: Math.min(4, win.rounding); border.color: googleQuery.activeFocus ? win.ui.accent : win.ui.border }
+                Keys.onDownPressed: googleList.incrementCurrentIndex()
+                Keys.onUpPressed: googleList.decrementCurrentIndex()
+                onTextEdited: googleList.currentIndex = 0
+                onAccepted: if (googleFonts.results.length) googleFonts.choose(googleFonts.results[Math.max(0, googleList.currentIndex)])
+            }
+            ListView {
+                id: googleList; objectName: "googleFontsList"
+                Layout.fillWidth: true; Layout.fillHeight: true; clip: true
+                model: googleFonts.results
+                ScrollBar.vertical: ScrollBar {}
+                delegate: ItemDelegate {
+                    required property string modelData
+                    required property int index
+                    width: googleList.width; text: modelData
+                    highlighted: googleList.currentIndex === index
+                    contentItem: Text { text: modelData; color: win.ui.foreground; font.pixelSize: 15; elide: Text.ElideRight; verticalAlignment: Text.AlignVCenter }
+                    background: Rectangle { color: parent.highlighted || parent.hovered ? win.ui.hover : "transparent"; radius: Math.min(4, win.rounding) }
+                    onClicked: googleFonts.choose(modelData)
+                }
+                Label {
+                    anchors.centerIn: parent; visible: googleList.count === 0
+                    color: win.ui.muted; font.pixelSize: 14
+                    text: googleFonts.ready ? qsTr("No matching fonts") : qsTr("Loading Google Fonts…")
+                }
+            }
+        }
+    }
+    // The presentation's look in one place: a template, which brings colors, fonts, a frame
+    // and components of its own, or a theme, which brings colors alone.
+    Popup {
+        id: lookPicker; objectName: "lookPicker"
+        parent: Overlay.overlay
+        popupType: Popup.Item
+        modal: true; focus: true; padding: 20
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        width: Math.min(680, parent.width - 48)
+        height: Math.min(lookContent.implicitHeight + 2 * padding, parent.height - 100)
+        x: (parent.width - width) / 2; y: Math.min(72, Math.max(16, parent.height - height - 16))
+        property real closedAt: 0
+        property var templateList: []
+        property var themeList: []
+        onAboutToShow: { templateList = deck.templates(); themeList = deck.themeChoices() }
+        onClosed: closedAt = Date.now()
+        function chooseTemplate(name) { deck.chooseTemplate(name); close() }
+        function chooseTheme(name) { deck.chooseTheme(name); close() }
+        background: Rectangle { color: win.ui.panel; border.color: win.ui.border; radius: win.rounding }
+        Overlay.modal: Rectangle { color: "#660b0d14" }
+        contentItem: Flickable {
+            clip: true; contentHeight: lookContent.implicitHeight; boundsBehavior: Flickable.StopAtBounds
+            ScrollBar.vertical: ScrollBar {}
+            ColumnLayout {
+                id: lookContent; width: parent.width; spacing: 12
+                Label { text: qsTr("Templates"); color: win.ui.foreground; font.pixelSize: 18; font.bold: true }
+                Label {
+                    Layout.fillWidth: true; wrapMode: Text.Wrap; color: win.ui.muted; font.pixelSize: 13
+                    text: qsTr("Colors, fonts, a frame, and components of its own. Any presentation can be a template.")
+                }
+                GridLayout {
+                    Layout.fillWidth: true; columns: 3; columnSpacing: 10; rowSpacing: 10
+                    TemplateCard { name: ""; title: qsTr("None"); subtitle: qsTr("Hype on its own"); current: !deck.templateName }
+                    Repeater {
+                        model: lookPicker.templateList
+                        delegate: TemplateCard {
+                            required property var modelData
+                            name: modelData.name; title: modelData.title; preview: modelData.preview; current: modelData.current
+                            subtitle: modelData.where === "built-in" ? qsTr("Comes with Hype")
+                                : modelData.where === "library" ? (modelData.linked ? qsTr("Library · follows its file") : qsTr("Library · a copy"))
+                                : qsTr("In templates/ here")
+                        }
+                    }
+                }
+                Label { Layout.topMargin: 10; text: qsTr("Themes"); color: win.ui.foreground; font.pixelSize: 18; font.bold: true }
+                Label {
+                    Layout.fillWidth: true; wrapMode: Text.Wrap; color: win.ui.muted; font.pixelSize: 13
+                    text: deck.templateName ? qsTr("Colors alone. A theme recolors the template's slides.") : qsTr("Colors alone. The desktop theme follows Omarchy as it changes.")
+                }
+                Flow {
+                    Layout.fillWidth: true; spacing: 8
+                    Repeater {
+                        model: lookPicker.themeList
+                        delegate: ThemeChip { required property var modelData; theme: modelData }
+                    }
+                }
+                RowLayout {
+                    Layout.fillWidth: true; Layout.topMargin: 8
+                    Item { Layout.fillWidth: true }
+                    Button {
+                        id: lookSaveTemplate; objectName: "lookSaveTemplate"; text: qsTr("Save this presentation as a template…")
+                        implicitHeight: 36
+                        contentItem: Text { text: parent.text; color: win.ui.foreground; font.pixelSize: 13; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                        background: Rectangle { color: lookSaveTemplate.hovered ? win.ui.hover : win.ui.button; radius: Math.min(4, win.rounding) }
+                        onClicked: { lookPicker.close(); saveTemplateDialog.open() }
+                    }
+                }
+            }
+        }
+    }
+    component TemplateCard: Rectangle {
+        id: templateCard
+        property string name
+        property string title
+        property string subtitle
+        property string preview
+        property bool current: false
+        objectName: "template:" + name
+        Layout.fillWidth: true; Layout.preferredWidth: 100
+        implicitHeight: cardColumn.implicitHeight + 12
+        radius: win.rounding
+        color: cardHover.hovered ? win.ui.hover : "transparent"
+        border.color: current ? win.ui.accent : "transparent"; border.width: 2
+        Accessible.role: Accessible.Button; Accessible.name: "Template: " + title
+        Column {
+            id: cardColumn; x: 6; y: 6; width: parent.width - 12; spacing: 4
+            Rectangle {
+                width: parent.width; height: width * 9 / 16; color: deck.background; border.color: win.ui.border
+                Image {
+                    anchors.fill: parent; anchors.margins: 1; visible: templateCard.preview !== ""
+                    source: templateCard.preview ? "image://slides/" + templateCard.preview : ""
+                    asynchronous: true; cache: true; sourceSize: Qt.size(384, 216); fillMode: Image.PreserveAspectCrop
+                }
+                Label {
+                    visible: templateCard.preview === ""; anchors.centerIn: parent
+                    text: "Aa"; font.pixelSize: 28; font.bold: true; color: deck.foreground
+                }
+            }
+            Label { width: parent.width; text: templateCard.title; elide: Text.ElideRight; color: win.ui.foreground; font.pixelSize: 13; font.bold: true }
+            Label { width: parent.width; text: templateCard.subtitle; elide: Text.ElideRight; color: win.ui.muted; font.pixelSize: 11 }
+        }
+        HoverHandler { id: cardHover; cursorShape: Qt.PointingHandCursor }
+        TapHandler { onTapped: lookPicker.chooseTemplate(templateCard.name) }
+    }
+    component ThemeChip: Rectangle {
+        id: themeChip
+        property var theme: ({})
+        objectName: "theme:" + theme.name
+        implicitWidth: chipRow.implicitWidth + 20; implicitHeight: 32
+        radius: win.softRadius
+        color: chipHover.hovered ? win.ui.hover : win.ui.button
+        border.color: theme.current ? win.ui.accent : "transparent"; border.width: 2
+        Accessible.role: Accessible.Button; Accessible.name: "Theme: " + theme.label
+        Row {
+            id: chipRow; anchors.centerIn: parent; spacing: 8
+            Row {
+                anchors.verticalCenter: parent.verticalCenter; spacing: -5
+                Rectangle { width: 15; height: 15; radius: 8; color: themeChip.theme.background; border.color: win.ui.border }
+                Rectangle { width: 15; height: 15; radius: 8; color: themeChip.theme.accent; border.color: win.ui.border }
+            }
+            Label { anchors.verticalCenter: parent.verticalCenter; text: themeChip.theme.label; color: win.ui.foreground; font.pixelSize: 13 }
+        }
+        HoverHandler { id: chipHover; cursorShape: Qt.PointingHandCursor }
+        TapHandler { onTapped: lookPicker.chooseTheme(themeChip.theme.name) }
+    }
+    // A new slide that starts as one of the template's own, drawn in this presentation. A
+    // template groups its slides into sections; a section's header adds all of them.
+    Popup {
+        id: templateSlidesDialog; objectName: "templateSlidesDialog"
+        parent: Overlay.overlay
+        popupType: Popup.Item
+        modal: true; focus: true; padding: 20
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        width: Math.min(920, parent.width - 48); height: Math.min(760, parent.height - 80)
+        x: (parent.width - width) / 2; y: (parent.height - height) / 2
+        property var slides: []
+        property string query: ""
+        property int current: -1 // The highlighted slide's index in `slides`.
+        // The slides matching every word typed, in the template's order, and their sections.
+        readonly property var matches: {
+            const words = query.toLowerCase().split(/\s+/).filter(function(word) { return word.length > 0 })
+            return slides.filter(function(slide) {
+                const text = (slide.section + " " + slide.label).toLowerCase()
+                return words.every(function(word) { return text.indexOf(word) >= 0 })
+            })
+        }
+        readonly property var groups: {
+            const list = []
+            for (const slide of matches) {
+                if (!list.length || list[list.length - 1].section !== slide.section) list.push({ section: slide.section, items: [] })
+                list[list.length - 1].items.push(slide)
+            }
+            return list
+        }
+        onMatchesChanged: current = matches.length ? matches[0].index : -1
+        onAboutToShow: { query = ""; slideSearch.text = ""; slides = deck.templateSlides() }
+        onOpened: slideSearch.forceActiveFocus()
+        // Moves the highlight through the matches, a row of three at a time for up and down.
+        function move(step) {
+            if (!matches.length) return
+            let at = matches.findIndex(function(slide) { return slide.index === current })
+            at = Math.max(0, Math.min(matches.length - 1, at + step))
+            current = matches[at].index
+            const group = groups.findIndex(function(g) { return g.items.some(function(slide) { return slide.index === current }) })
+            if (group >= 0) sectionList.positionViewAtIndex(group, ListView.Contain)
+        }
+        function addMany(indices) {
+            if (!indices.length) return
+            deck.addTemplateSlides(indices)
+            close()
+            if (win.overview) return
+            if (win.markdown) win.alignSource()
+            else slideEditor.forceActiveFocus()
+        }
+        function add(index) { if (index >= 0 && index < slides.length) addMany([index]) }
+        function addSection(section) {
+            addMany(matches.filter(function(slide) { return slide.section === section }).map(function(slide) { return slide.index }))
+        }
+        background: Rectangle { color: win.ui.panel; border.color: win.ui.border; radius: win.rounding }
+        Overlay.modal: Rectangle { color: "#660b0d14" }
+        contentItem: ColumnLayout {
+            spacing: 12
+            Label { text: deck.templateName ? qsTr("New slide from %1").arg(deck.templateName) : qsTr("New slide from a template"); color: win.ui.foreground; font.pixelSize: 20; font.bold: true }
+            Label {
+                Layout.fillWidth: true; wrapMode: Text.Wrap; color: win.ui.muted; font.pixelSize: 13
+                text: qsTr("The template's slides, drawn in this presentation. Choose one, or a whole section, to add it after this slide, ready to edit.")
+            }
+            TextField {
+                id: slideSearch; objectName: "templateSlideSearch"
+                Accessible.name: "Search the template's slides"
+                Layout.fillWidth: true; implicitHeight: 40
+                placeholderText: qsTr("Search, e.g. case study, team, values")
+                font.pixelSize: 15; color: win.ui.foreground; placeholderTextColor: win.ui.muted
+                selectionColor: win.ui.selection; selectedTextColor: win.ui.selectionText
+                leftPadding: 12; rightPadding: 12
+                background: Rectangle { color: win.ui.background; radius: Math.min(4, win.rounding); border.color: slideSearch.activeFocus ? win.ui.accent : win.ui.border }
+                onTextEdited: templateSlidesDialog.query = text
+                Keys.onDownPressed: templateSlidesDialog.move(3)
+                Keys.onUpPressed: templateSlidesDialog.move(-3)
+                Keys.onTabPressed: templateSlidesDialog.move(1)
+                Keys.onBacktabPressed: templateSlidesDialog.move(-1)
+                onAccepted: templateSlidesDialog.add(templateSlidesDialog.current)
+            }
+            ListView {
+                id: sectionList; objectName: "templateSectionList"
+                Layout.fillWidth: true; Layout.fillHeight: true; clip: true; spacing: 18
+                model: templateSlidesDialog.groups
+                boundsBehavior: Flickable.StopAtBounds
+                ScrollBar.vertical: ScrollBar {}
+                readonly property real tileWidth: Math.floor((width - 12) / 3)
+                delegate: Column {
+                    id: group
+                    required property var modelData
+                    width: sectionList.width; spacing: 6
+                    RowLayout {
+                        width: parent.width - 12; height: 32
+                        Label {
+                            text: group.modelData.section || qsTr("Slides"); color: win.ui.foreground; font.pixelSize: 15; font.bold: true
+                            elide: Text.ElideRight; Layout.fillWidth: true
+                        }
+                        ToolButton {
+                            id: addAll; objectName: "addSection:" + group.modelData.section
+                            visible: group.modelData.items.length > 1
+                            Accessible.name: qsTr("Add all %1 slides of %2").arg(group.modelData.items.length).arg(group.modelData.section || qsTr("this section"))
+                            contentItem: Label {
+                                text: qsTr("Add all %1").arg(group.modelData.items.length); font.pixelSize: 12
+                                color: addAll.hovered ? win.ui.foreground : win.ui.accent; verticalAlignment: Text.AlignVCenter
+                            }
+                            background: Rectangle { color: addAll.hovered ? win.ui.hover : "transparent"; radius: win.softRadius }
+                            onClicked: templateSlidesDialog.addSection(group.modelData.section)
+                        }
+                    }
+                    Flow {
+                        width: parent.width
+                        Repeater {
+                            model: group.modelData.items
+                            delegate: Item {
+                                id: starter
+                                required property var modelData
+                                readonly property bool current: templateSlidesDialog.current === modelData.index
+                                width: sectionList.tileWidth; height: Math.round((width - 10) * 9 / 16) + 34
+                                Accessible.role: Accessible.Button; Accessible.name: "Add " + modelData.label
+                                Rectangle {
+                                    id: starterFrame; x: 5; y: 5; width: parent.width - 10; height: Math.round(width * 9 / 16)
+                                    color: deck.background; radius: win.rounding
+                                    Image {
+                                        anchors.fill: parent; anchors.margins: 1
+                                        source: "image://slides/" + starter.modelData.preview
+                                        asynchronous: true; cache: true; sourceSize: Qt.size(400, 225); fillMode: Image.PreserveAspectCrop
+                                    }
+                                    Rectangle {
+                                        anchors.fill: parent; color: "transparent"; radius: parent.radius
+                                        border.width: starter.current ? 3 : 1; border.color: starter.current ? win.ui.accent : win.ui.border
+                                    }
+                                }
+                                Label {
+                                    anchors.top: starterFrame.bottom; anchors.topMargin: 6; x: 6; width: parent.width - 12
+                                    text: starter.modelData.label; elide: Text.ElideRight; font.pixelSize: 12
+                                    color: starter.current ? win.ui.foreground : win.ui.muted
+                                }
+                                HoverHandler { cursorShape: Qt.PointingHandCursor; onHoveredChanged: if (hovered) templateSlidesDialog.current = starter.modelData.index }
+                                TapHandler { onTapped: templateSlidesDialog.add(starter.modelData.index) }
+                            }
+                        }
+                    }
+                }
+                Label {
+                    anchors.centerIn: parent; visible: sectionList.count === 0; width: parent.width - 40
+                    horizontalAlignment: Text.AlignHCenter; wrapMode: Text.Wrap; color: win.ui.muted; font.pixelSize: 14
+                    text: templateSlidesDialog.slides.length ? qsTr("No slides match “%1”.").arg(templateSlidesDialog.query)
+                        : deck.templateName ? qsTr("This template has no slides to start from.") : qsTr("Choose a template first, with the Look button.")
+                }
+            }
+        }
+    }
+    // Any saved presentation can join the template library, as a link that follows it or a copy.
+    Popup {
+        id: saveTemplateDialog; objectName: "saveTemplateDialog"
+        parent: Overlay.overlay
+        popupType: Popup.Item
+        modal: true; focus: true; padding: 24
+        closePolicy: Popup.CloseOnEscape
+        width: Math.min(460, parent.width - 48)
+        x: (parent.width - width) / 2; y: (parent.height - height) / 2
+        property string error: ""
+        property bool replacing: false
+        property bool copy: false
+        onAboutToShow: { error = ""; replacing = false; copy = false; templateNameField.text = deck.suggestedTemplateName() }
+        onOpened: { templateNameField.forceActiveFocus(); templateNameField.selectAll() }
+        function save() {
+            error = deck.saveAsTemplate(templateNameField.text.trim(), copy, replacing)
+            if (!error) { close(); return }
+            replacing = error.indexOf("already exists") >= 0
+            templateNameField.forceActiveFocus()
+        }
+        background: Rectangle { color: win.ui.panel; border.color: win.ui.border; radius: win.rounding }
+        Overlay.modal: Rectangle { color: "#660b0d14" }
+        contentItem: ColumnLayout {
+            spacing: 16
+            ColumnLayout {
+                spacing: 6
+                Label { text: qsTr("Save as template"); color: win.ui.foreground; font.pixelSize: 20; font.bold: true }
+                Label {
+                    Layout.fillWidth: true; wrapMode: Text.Wrap; color: win.ui.muted; font.pixelSize: 13
+                    text: qsTr("Other presentations build on it from the Look button, or with template: %1 in their front matter.").arg(templateNameField.text.trim() || qsTr("name"))
+                }
+            }
+            TextField {
+                id: templateNameField; objectName: "templateNameField"
+                Accessible.name: "Template name"
+                Layout.fillWidth: true; implicitHeight: 42
+                font.pixelSize: 16; color: win.ui.foreground
+                selectionColor: win.ui.selection; selectedTextColor: win.ui.selectionText
+                leftPadding: 12; rightPadding: 12
+                background: Rectangle { color: win.ui.background; radius: Math.min(4, win.rounding); border.color: templateNameField.activeFocus ? win.ui.accent : win.ui.border }
+                onTextEdited: { saveTemplateDialog.error = ""; saveTemplateDialog.replacing = false }
+                onAccepted: if (text.trim()) saveTemplateDialog.save()
+            }
+            ColumnLayout {
+                spacing: 2
+                RadioButton {
+                    id: linkOption; objectName: "templateLink"; Layout.fillWidth: true
+                    checked: !saveTemplateDialog.copy; onClicked: saveTemplateDialog.copy = false
+                    text: qsTr("Link: follows this presentation as you change it")
+                    contentItem: Text {
+                        leftPadding: linkOption.indicator.width + linkOption.spacing; verticalAlignment: Text.AlignVCenter; wrapMode: Text.Wrap
+                        text: linkOption.text; color: win.ui.foreground; font.pixelSize: 14
+                    }
+                }
+                RadioButton {
+                    id: copyOption; objectName: "templateCopy"; Layout.fillWidth: true
+                    checked: saveTemplateDialog.copy; onClicked: saveTemplateDialog.copy = true
+                    text: qsTr("Copy: keeps it as it is now, with its images and fonts")
+                    contentItem: Text {
+                        leftPadding: copyOption.indicator.width + copyOption.spacing; verticalAlignment: Text.AlignVCenter; wrapMode: Text.Wrap
+                        text: copyOption.text; color: win.ui.foreground; font.pixelSize: 14
+                    }
+                }
+            }
+            Label {
+                Layout.fillWidth: true; visible: text.length > 0
+                text: saveTemplateDialog.error; color: win.ui.error; font.pixelSize: 13; wrapMode: Text.Wrap
+            }
+            RowLayout {
+                Layout.fillWidth: true; spacing: 10
+                Item { Layout.fillWidth: true }
+                Button {
+                    id: cancelTemplateButton; text: qsTr("Cancel"); implicitHeight: 38; implicitWidth: 84
+                    contentItem: Text { text: parent.text; color: win.ui.foreground; font.pixelSize: 14; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                    background: Rectangle { color: cancelTemplateButton.hovered ? win.ui.hover : win.ui.button; radius: Math.min(4, win.rounding); border.color: cancelTemplateButton.activeFocus ? win.ui.accent : "transparent" }
+                    onClicked: saveTemplateDialog.close()
+                }
+                Button {
+                    id: saveTemplateButton; objectName: "saveTemplateButton"
+                    text: saveTemplateDialog.replacing ? qsTr("Replace") : qsTr("Save template")
+                    implicitHeight: 38; implicitWidth: 128; enabled: templateNameField.text.trim().length > 0
+                    contentItem: Text { text: parent.text; color: win.ui.accentText; font.pixelSize: 14; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                    background: Rectangle { color: !saveTemplateButton.enabled ? win.ui.border : saveTemplateButton.hovered ? win.ui.accentHover : win.ui.accent; radius: Math.min(4, win.rounding); border.color: saveTemplateButton.activeFocus ? win.ui.foreground : "transparent" }
+                    onClicked: saveTemplateDialog.save()
+                }
+            }
+        }
+    }
     Shortcut { sequences: ["Tab", "Shift+Tab"]; enabled: !win.popupOpen && !deck.compressingImage && !win.presenting && (stage.activeFocus || thumbnails.activeFocus); onActivated: win.switchEditingFocus() }
     Shortcut { enabled: !win.popupOpen && !deck.compressingImage; sequences: [StandardKey.Open]; onActivated: deck.openDialog() }
     Shortcut { enabled: !win.popupOpen && !deck.compressingImage; sequences: [StandardKey.Save]; onActivated: deck.save() }
@@ -718,6 +1142,7 @@ ApplicationWindow {
     Shortcut { sequence: "Ctrl+Shift+Z"; enabled: !win.popupOpen && !deck.compressingImage && (!slideEditor.activeFocus && !sourceEditor.activeFocus); onActivated: deck.redo() }
     Shortcut { sequence: "Ctrl+D"; enabled: !win.popupOpen && !deck.compressingImage && (!slideEditor.activeFocus && !sourceEditor.activeFocus); onActivated: deck.duplicateSlide() }
     Shortcut { enabled: !win.popupOpen && !deck.compressingImage; sequence: "Ctrl+Return"; onActivated: { win.addSlide() } }
+    Shortcut { enabled: !win.popupOpen && !deck.compressingImage && !win.presenting && deck.templateName !== ""; sequences: ["Ctrl+Shift+Return", "Ctrl+Shift+Enter"]; onActivated: templateSlidesDialog.open() }
     Shortcut { sequence: "Delete"; enabled: !win.popupOpen && !deck.compressingImage && (!slideEditor.activeFocus && !sourceEditor.activeFocus); onActivated: deck.deleteSlide() }
     Shortcut { sequence: "Right"; context: win.presenting ? Qt.ApplicationShortcut : Qt.WindowShortcut; enabled: !win.popupOpen && !deck.compressingImage && (win.presenting || (!slideEditor.activeFocus && !sourceEditor.activeFocus)); onActivated: deck.select(deck.selected + 1) }
     Shortcut { sequence: "Ctrl+Right"; enabled: !win.popupOpen && !deck.compressingImage && !win.presenting && !slideEditor.activeFocus && !sourceEditor.activeFocus; onActivated: win.moveSlides(1) }
@@ -913,7 +1338,7 @@ ApplicationWindow {
             EditorButton {
                 compact: editorBar.compact
                 objectName: editorBar.scope + "mediaOptionsButton"; iconName: "adjust"; label: qsTr("Layout"); description: qsTr("Image / video options"); menu: true
-                enabled: !!deck.media.url.toString()
+                enabled: !!deck.media.url.toString() && deck.media.layout !== "components"
                 dropdown: mediaMenu
                 AppMenu {
                     hasChecks: true
@@ -942,6 +1367,12 @@ ApplicationWindow {
                         AppMenuItem { text: qsTr("Medium (20%)"); checkable: true; checked: deck.media.size === 20; onTriggered: deck.setMediaSize(20) }
                         AppMenuItem { text: qsTr("Large (35%)"); checkable: true; checked: deck.media.size === 35; onTriggered: deck.setMediaSize(35) }
                     }
+                    AppMenuSeparator {}
+                    AppMenuItem { text: qsTr("Title above media"); enabled: !mediaMenu.placed; checkable: true; checked: deck.media.layout === "title"; onTriggered: deck.setMediaMode("title") }
+                    AppMenuItem { text: qsTr("Text beside media"); enabled: !mediaMenu.placed; checkable: true; checked: deck.media.layout === "split"; onTriggered: deck.setMediaMode("split") }
+                    AppMenuItem { text: qsTr("Caption below media"); enabled: !mediaMenu.placed; checkable: true; checked: deck.media.layout === "caption"; onTriggered: deck.setMediaMode("caption") }
+                    AppMenuItem { text: qsTr("Caption below right half"); enabled: !mediaMenu.placed; checkable: true; checked: deck.media.layout === "caption-right"; onTriggered: deck.setMediaMode("caption-right") }
+                    AppMenuItem { text: qsTr("All text over media"); enabled: !mediaMenu.placed; checkable: true; checked: !deck.media.layout || deck.media.layout === "overlay"; onTriggered: deck.setMediaMode("overlay") }
                     AppMenuSeparator {}
                     AppMenuItem { text: qsTr("Match image edges"); enabled: !mediaMenu.placed; checkable: true; checked: deck.media.background === "auto"; onTriggered: deck.matchImageBackground(true) }
                     AppMenuItem { text: deck.media.video ? qsTr("Blurred first frame") : qsTr("Blurred image"); enabled: !mediaMenu.placed; checkable: true; checked: deck.media.background === "blur"; onTriggered: deck.setMediaBackground("blur") }
@@ -1008,40 +1439,13 @@ ApplicationWindow {
                 background: Rectangle { color: cancelExport.hovered || cancelExport.down ? win.ui.hover : "transparent"; radius: win.softRadius }
                 onClicked: deck.cancelExport()
             }
-            ComboBox {
-                id: themes; objectName: "themePicker"
-                Layout.preferredWidth: 36; Layout.preferredHeight: 36
-                padding: 0; indicator: null
-                contentItem: Item {
-                    AppIcon { anchors.centerIn: parent; width: 18; height: 18; name: "theme"; color: themes.hovered || themes.popup.visible ? win.ui.foreground : win.ui.muted }
-                }
-                Accessible.name: qsTr("Theme: %1").arg(currentText)
-                ToolTip.visible: hovered; ToolTip.text: qsTr("Theme: %1").arg(currentText)
-                delegate: ItemDelegate {
-                    required property string modelData
-                    required property int index
-                    width: themes.popup.availableWidth
-                    text: modelData
-                    highlighted: themes.highlightedIndex === index
-                    contentItem: Text { text: modelData; color: win.ui.foreground; font: themes.font; verticalAlignment: Text.AlignVCenter }
-                    background: Rectangle { color: parent.highlighted ? win.ui.hover : win.ui.panel }
-                }
-                background: Rectangle { color: themes.hovered || themes.popup.visible ? win.ui.hover : "transparent"; radius: win.softRadius }
-                model: deck.themeNames
-                currentIndex: Math.max(0, deck.themeNames.indexOf(deck.themeName))
-                onActivated: deck.chooseTheme(currentText)
-                popup: Popup {
-                    y: themes.height + 4; width: 240; padding: 6
-                    height: Math.min(contentItem.implicitHeight + 12, 420, win.height - 100)
-                    background: Rectangle { color: win.ui.panel; border.color: win.ui.border; radius: win.rounding }
-                    contentItem: ListView {
-                        clip: true; implicitHeight: contentHeight
-                        model: themes.popup.visible ? themes.delegateModel : null
-                        currentIndex: themes.highlightedIndex
-                        ScrollBar.vertical: ScrollBar {}
-                    }
-                    onOpened: contentItem.positionViewAtIndex(themes.currentIndex, ListView.Contain)
-                }
+            ToolbarIconButton {
+                id: lookButton; objectName: "lookButton"; iconName: "theme"
+                ink: lookPicker.visible ? win.ui.foreground : win.ui.muted
+                description: qsTr("Look: %1").arg(deck.templateName ? qsTr("%1 template").arg(deck.templateName) : deck.themeName === "current" ? qsTr("Desktop theme") : deck.themeName)
+                property bool pickerWasOpen: false
+                onPressed: pickerWasOpen = lookPicker.visible || Date.now() - lookPicker.closedAt < 150
+                onClicked: if (pickerWasOpen) lookPicker.close(); else lookPicker.open()
             }
             ComboBox {
                 id: fonts; objectName: "fontPicker"
@@ -1050,7 +1454,7 @@ ApplicationWindow {
                     return showNotoVariants || !name.startsWith("Noto ") ||
                         ["Noto Sans", "Noto Serif", "Noto Sans Mono", deck.fontName].indexOf(name) >= 0
                 })
-                model: visibleFonts.concat([showNotoVariants ? qsTr("Fewer Noto fonts") : qsTr("More Noto fonts…")])
+                model: visibleFonts.concat([showNotoVariants ? qsTr("Fewer Noto fonts") : qsTr("More Noto fonts…"), qsTr("Google Fonts…")])
                 currentIndex: visibleFonts.indexOf(deck.fontName)
                 displayText: deck.fontName
                 onActivated: function(index) {
@@ -1058,6 +1462,9 @@ ApplicationWindow {
                         showNotoVariants = !showNotoVariants
                         currentIndex = Qt.binding(function() { return fonts.visibleFonts.indexOf(deck.fontName) })
                         Qt.callLater(function() { fonts.popup.open() })
+                    } else if (index === visibleFonts.length + 1) {
+                        currentIndex = Qt.binding(function() { return fonts.visibleFonts.indexOf(deck.fontName) })
+                        googleFonts.open()
                     } else deck.chooseFont(visibleFonts[index])
                 }
                 Layout.preferredWidth: 36; Layout.preferredHeight: 36
@@ -1115,6 +1522,7 @@ ApplicationWindow {
                     AppMenuSeparator {}
                     AppMenuItem { text: deck.dirty ? qsTr("Save changes") : qsTr("Save"); hint: "Ctrl+S"; onTriggered: deck.save() }
                     AppMenuItem { text: qsTr("Save as…"); hint: "Ctrl+Shift+S"; onTriggered: deck.saveAs() }
+                    AppMenuItem { text: qsTr("Save as template…"); onTriggered: saveTemplateDialog.open() }
                     AppMenuSeparator {}
                     AppMenuItem { text: qsTr("Export as PDF…"); hint: "Ctrl+E"; enabled: !deck.exporting; onTriggered: deck.exportDialog("pdf") }
                     AppMenuItem { text: qsTr("Export as PowerPoint…"); hint: "Ctrl+Shift+E"; enabled: !deck.exporting; onTriggered: deck.exportDialog("pptx") }
@@ -1148,7 +1556,7 @@ ApplicationWindow {
                 ["Arrows", qsTr("Previous or next slide, by row in Overview")], ["Page Up / Page Down", qsTr("Jump five slides, or five rows in Overview")],
                 ["Home / End", qsTr("First or last slide when focused in Slides list")], ["Shift+Arrows", qsTr("Extend the selection")],
                 ["Ctrl+Arrows", qsTr("Move selected slides")], ["Ctrl+Page Up / Page Down", qsTr("Move selected slides five places")],
-                ["Ctrl+Home / End", qsTr("Move selected slides to first or last")], ["Ctrl+Enter", qsTr("Add a slide")],
+                ["Ctrl+Home / End", qsTr("Move selected slides to first or last")], ["Ctrl+Enter", qsTr("Add a slide")], ["Ctrl+Shift+Enter", qsTr("Add a slide from the template")],
                 ["Ctrl+D", qsTr("Duplicate")], ["Delete", qsTr("Delete")] ] },
             { title: qsTr("Editing"), keys: [
                 ["Ctrl+B", qsTr("Bold")], ["Ctrl+I", qsTr("Italic")], ["Ctrl+U", qsTr("Underline")], ["Ctrl+H", qsTr("Headline")], ["Ctrl+K", qsTr("Code block")],
@@ -1188,6 +1596,7 @@ ApplicationWindow {
     // Shared by the sidebar and the overview, so it cannot live inside either.
     AppMenu { id: slideMenu
         AppMenuItem { text: qsTr("New slide after this"); hint: "Ctrl+Enter"; onTriggered: { win.addSlide() } }
+        AppMenuItem { text: qsTr("New slide from template…"); hint: "Ctrl+Shift+Enter"; enabled: deck.templateName !== ""; onTriggered: templateSlidesDialog.open() }
         AppMenuItem { text: deck.selectionCount > 1 ? qsTr("Duplicate slides") : qsTr("Duplicate slide"); hint: "Ctrl+D"; onTriggered: deck.duplicateSlide() }
         AppMenuSeparator {}
         AppMenuItem { text: deck.selectionCount > 1 ? qsTr("Delete slides") : qsTr("Delete slide"); hint: "Del"; destructive: true; onTriggered: deck.deleteSlide() }
@@ -1542,7 +1951,7 @@ ApplicationWindow {
                             horizontalAlignment: alignment & Qt.AlignHorizontal_Mask
                             verticalAlignment: alignment & Qt.AlignVertical_Mask
                             clip: true
-                            layer.enabled: !!deck.media.title && !deck.media.position
+                            layer.enabled: !!deck.media.title && !deck.media.position && deck.media.layout !== "split" && deck.media.layout !== "caption" && deck.media.layout !== "caption-right"
                             layer.effect: MultiEffect {
                                 blurEnabled: true
                                 blurMax: 4
@@ -1569,7 +1978,7 @@ ApplicationWindow {
                             MediaPlayer { id: player; objectName: "player"; videoOutput: video; audioOutput: AudioOutput { muted: deck.media.muted } loops: deck.media.loop ? MediaPlayer.Infinite : 1; onErrorOccurred: function(error,message) { deck.setStatus(message) } }
                         }
                     }
-                    Image { anchors.fill: parent; source: visible ? "image://slides/" + (deck.revision, deck.renderId(deck.selected)) + "/overlay" : ""; asynchronous: true; retainWhileLoading: true; sourceSize: Qt.size(1920,1080); visible: animation.active || (videoLoader.item && videoLoader.item.visible && deck.media.span) }
+                    Image { anchors.fill: parent; source: visible ? "image://slides/" + (deck.revision, deck.renderId(deck.selected)) + "/overlay" : ""; asynchronous: true; retainWhileLoading: true; sourceSize: Qt.size(1920,1080); visible: animation.active || (videoLoader.item && videoLoader.item.visible && (deck.media.span || deck.media.layout === "components" || deck.media.layout === "title" || deck.media.layout === "split" || deck.media.layout === "caption" || deck.media.layout === "caption-right")) }
                     Button { visible: deck.media.video && !win.presenting; anchors.centerIn: parent; text: player && player.playbackState === MediaPlayer.PlayingState ? qsTr("Pause") : "▶ " + qsTr("Play"); onClicked: win.toggleVideo() }
                     MouseArea {
                         anchors.fill: parent
