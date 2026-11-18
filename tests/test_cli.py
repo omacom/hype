@@ -343,8 +343,11 @@ class CliTests(unittest.TestCase):
     def fonts_server(self, manifest_files=True):
         """A stand-in for Google Fonts: its catalog, the download manifest, the CSS API and files."""
         import http.server, threading, urllib.parse
-        font = subprocess.run(['fc-match', '-f', '%{file}', 'Liberation Serif'], capture_output=True, text=True).stdout
-        if not font.endswith('.ttf'):
+        # fc-match answers with its nearest font when the family is missing, and a download
+        # that holds another family is no stand-in for this one.
+        match = subprocess.run(['fc-match', '-f', '%{family}\n%{file}', 'Liberation Serif'], capture_output=True, text=True).stdout
+        family, _, font = match.partition('\n')
+        if 'Liberation Serif' not in family.split(',') or not font.endswith('.ttf'):
             self.skipTest('Liberation Serif is not installed')
         data = Path(font).read_bytes()
         requests = []
