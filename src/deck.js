@@ -1455,6 +1455,9 @@ scaleCanvases()
 window.addEventListener("resize", scaleCanvases)
 
 let current = -1
+// The slide actually on screen. It lags `current` while a transition prepares,
+// so a second navigation still transitions from the frame the viewer sees.
+let shown = -1
 
 function fromHash() {
   const n = parseInt(location.hash.slice(1), 10)
@@ -1465,9 +1468,10 @@ function fromHash() {
 //
 // A transition draws the outgoing slide into one texture and the incoming slide
 // into another, then mixes them with the shader named by the directives. The
-// slides themselves swap instantly underneath; the overlay is the only thing
-// animating. Any failure (no WebGL, an image that will not decode, an unknown
-// shader) simply skips the animation and leaves the new slide in place.
+// slides swap underneath only once the overlay covers them with the outgoing
+// frame, so the incoming slide never flashes while the frames are prepared. Any
+// failure (no WebGL, an image that will not decode, an unknown shader) simply
+// skips the animation and leaves the new slide in place.
 
 const TRANSITION_VERTEX = `attribute vec2 position;
 varying vec2 vUv;
@@ -1652,9 +1656,10 @@ const transitions = (() => {
 
   // A transition cannot mix a frame that has no picture in it: the load handler
   // repaints the canvas after the texture was uploaded. Give the media its
-  // repaint callbacks a short chance to arrive, then leave the new slide as it
-  // is, as a native timeout would.
-  function whenReady(records, callback) {
+  // repaint callbacks a short chance to arrive; a timeout calls `giveUp` so the
+  // caller can show the new slide without an animation, as a native timeout
+  // would.
+  function whenReady(records, callback, giveUp) {
     if (records.every(record => record.ready)) {
       callback()
       return
@@ -1677,7 +1682,13 @@ const transitions = (() => {
       record.listeners.add(listener)
       listeners.push([ record, listener ])
     }
-    timer = setTimeout(finish, PREPARE_TIMEOUT, false)
+    timer = setTimeout(() => {
+      if (finished) return
+      finish(false)
+      giveUp()
+    }, PREPARE_TIMEOUT)
+    // A cancelled wait must not reveal anything: the caller already has a new
+    // slide to prepare.
     waitCleanup = () => finish(false)
   }
 
@@ -1691,30 +1702,36 @@ const transitions = (() => {
     if (canvas) canvas.style.display = "none"
   }
 
-  function run(fromIndex, toIndex) {
-    // Asking for the slide already showing leaves any transition in progress
-    // alone; a different slide cancels it and gets its own animation.
-    if (fromIndex < 0 || fromIndex === toIndex) return
+  // Returns true when the overlay has taken over the slide change, so the
+  // caller leaves the outgoing slide on screen until `reveal` runs.
+  function run(fromIndex, toIndex, reveal) {
+    // A different slide cancels any transition in flight and gets its own
+    // animation, even when the requested slide is the one already showing.
     cancel()
+    if (fromIndex < 0 || fromIndex === toIndex) return false
     const transition = resolveTransition(toIndex)
-    if (transition.name === "none" || !setUp()) return
+    if (transition.name === "none" || !setUp()) return false
     const from = textureFor(fromIndex, true)
     const to = textureFor(toIndex, true)
-    if (!from || !to) return
+    if (!from || !to) return false
     const program = compile(transition.name)
-    if (!program) return
+    if (!program) return false
     const token = generation
     whenReady([ from, to ], () => {
-      if (token === generation) animate(token, transition, program, from, to)
+      if (token === generation) animate(token, transition, program, from, to, reveal, toIndex)
+    }, () => {
+      if (token === generation) reveal(toIndex)
     })
+    return true
   }
 
-  function animate(token, transition, program, from, to) {
+  function animate(token, transition, program, from, to, reveal, toIndex) {
     try {
       upload(fromTex, from.canvas, 0)
       upload(toTex, to.canvas, 1)
       draw(program, 0)
     } catch {
+      reveal(toIndex)
       return
     }
     // A repaint during the animation replaces pixels the texture is mixing, so
@@ -1722,6 +1739,9 @@ const transitions = (() => {
     let fromRevision = from.revision
     let toRevision = to.revision
     canvas.style.display = "block"
+    // The overlay now covers the stage with the outgoing frame at progress
+    // zero, so the new slide can replace the old one underneath unseen.
+    reveal(toIndex)
     const start = performance.now()
     const span = transition.duration * 1000
     const step = now => {
@@ -1754,14 +1774,15 @@ const transitions = (() => {
   return { run }
 })()
 
-function show(index) {
-  const previous = current
-  current = Math.max(0, Math.min(slides.length - 1, index))
+// Puts a slide on screen: pauses every other slide's media and starts this
+// one's. A transition defers this until its overlay covers the stage.
+function reveal(index) {
+  shown = index
   slides.forEach((slide, i) => {
-    slide.classList.toggle("active", i === current)
+    slide.classList.toggle("active", i === index)
     for (const video of slide.querySelectorAll("video")) {
       video.pause()
-      if (i === current && video.dataset.autoplay === "true") {
+      if (i === index && video.dataset.autoplay === "true") {
         video.currentTime = 0
         video.play().catch(() => {
           video.muted = true // Browsers refuse sound without a gesture.
@@ -1770,9 +1791,15 @@ function show(index) {
       }
     }
   })
+}
+
+function show(index) {
+  current = Math.max(0, Math.min(slides.length - 1, index))
+  // While a transition prepares, the outgoing slide stays on screen. Showing
+  // the new one first would flash it, then fade back out of the old one.
+  if (!transitions.run(shown, current, reveal)) reveal(current)
   counter.textContent = `${current + 1} / ${slides.length}`
   history.replaceState(null, "", `#${current + 1}`)
-  transitions.run(previous, current)
 }
 
 function go(step) {

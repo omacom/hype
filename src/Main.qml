@@ -1732,8 +1732,11 @@ ApplicationWindow {
                         property ShaderEffectSource fromTex: transitionFromTexture
                         property ShaderEffectSource toTex: transitionToTexture
                         property real progress: win.transitionProgress
-                        fragmentShader: win.transitionShaderName
-                            ? "qrc:/transitions/" + win.transitionShaderName + ".frag.qsb" : ""
+                        // Keep a shader installed even while no transition runs:
+                        // Qt's shaderless default samples a "source" texture this
+                        // effect does not have, and warns about it on every reset.
+                        fragmentShader: "qrc:/transitions/"
+                            + (win.transitionShaderName || "crossfade") + ".frag.qsb"
                     }
                     MouseArea {
                         anchors.fill: parent

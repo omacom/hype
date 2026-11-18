@@ -4,21 +4,6 @@ font: JetBrains Mono
 theme: tokyo-night
 ---
 
-# Your next idea
-
-Markdown in. A presentation out.
-
----
-
-# Keep it simple
-
-- Write in Markdown
-- Drag slides to reorder
-- Duplicate the good ones
-- Pick an Omarchy theme
-
----
-
 > A presentation is a sequence of ideas.
 > Give each one room to breathe.
 
@@ -33,6 +18,15 @@ Sovereign
 
 ---
 
+# Keep it simple
+
+- Write in Markdown
+- Drag slides to reorder
+- Duplicate the good ones
+- Pick an Omarchy theme
+
+---
+
 # The source is the document
 
 ```ruby
@@ -42,6 +36,12 @@ class Presentation
   end
 end
 ```
+
+---
+
+# Your next idea
+
+Markdown in. A presentation out.
 
 ---
 

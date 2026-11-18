@@ -578,6 +578,9 @@ transition-duration: 0.2
           const blue = second && second.getAttribute("src")
           add(!!first && !!second, "picture slides rendered")
           const trace = window.__transitionTrace
+          const slideActive = index => sections[index].classList.contains("active")
+          const webgl = !!document.createElement("canvas")
+            .getContext("webgl", { alpha: false, antialias: false })
           const loaded = image => new Promise(resolve => {
             if (image.complete && image.naturalWidth) resolve()
             else image.addEventListener("load", resolve, { once: true })
@@ -590,7 +593,12 @@ transition-duration: 0.2
           add(hook.slideReady(1) === false, "undecoded slide not ready")
           const uploads = trace.uploads, draws = trace.draws
           window.show(1)
+          // Its picture is missing, so the overlay is still preparing: the
+          // outgoing slide stays on screen instead of the new one flashing.
+          if (webgl) add(!slideActive(1) && slideActive(0), "outgoing slide held while preparing")
+          else results.push("SKIP webgl unavailable in headless")
           await new Promise(resolve => setTimeout(resolve, 450))
+          add(slideActive(1) && !slideActive(0), "new slide shown when the wait ends")
           add(trace.uploads === uploads, "no upload without ready media", trace.uploads - uploads)
           add(trace.draws === draws, "no animation without ready media", trace.draws - draws)
           const overlay = document.querySelector("canvas.transition")
@@ -608,9 +616,11 @@ transition-duration: 0.2
           const deferred = trace.draws
           window.show(2)
           add(hook.slideReady(2) === false, "incoming slide not ready")
+          if (webgl) add(!slideActive(2) && slideActive(1), "second slide held while preparing")
           second.src = blue
           await loaded(second)
           await new Promise(resolve => setTimeout(resolve, 250))
+          add(slideActive(2) && !slideActive(1), "new slide shown when the transition starts")
           if (trace.draws > deferred) add(true, "deferred transition drew frames", trace.draws - deferred)
           else if (!document.querySelector("canvas.transition")) results.push("SKIP webgl unavailable in headless")
           else add(false, "deferred transition drew frames", trace.draws - deferred)
@@ -693,10 +703,16 @@ class DeckTransitionTests(unittest.TestCase):
         report = self.render(page)
         self.assertNotIn('FAIL', report, report)
         self.assertIn('PASS undecoded slide not ready', report)
+        self.assertTrue('PASS outgoing slide held while preparing' in report
+                        or 'SKIP webgl' in report, report)
+        self.assertIn('PASS new slide shown when the wait ends', report)
         self.assertIn('PASS no upload without ready media', report)
         self.assertIn('PASS no animation without ready media', report)
         self.assertIn('PASS late picture becomes ready', report)
         self.assertIn('PASS incoming slide not ready', report)
+        self.assertTrue('PASS second slide held while preparing' in report
+                        or 'SKIP webgl' in report, report)
+        self.assertIn('PASS new slide shown when the transition starts', report)
         self.assertTrue('PASS deferred transition drew frames' in report or 'SKIP webgl' in report,
                         report)
 

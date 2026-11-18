@@ -4421,6 +4421,30 @@ static void write(const QString &path, const QString &content) {
                                                   stageCapture->image().height() / 2),
                  QColor::fromRgb(QColor::fromHsv(17 * 19, 230, 210).rgb()));
     }
+    // Qt's shaderless default samples a texture named "source", which the slide
+    // effect does not declare, so Qt warns about it while no transition runs.
+    void idleTransitionKeepsItsShader() {
+        if (qEnvironmentVariable("HYPE_GUI_TESTS") == "0")
+            QSKIP("HYPE_GUI_TESTS=0 skips the window-level tests");
+        Deck deck;
+        deck.editSource("---\ntransition: liquid\n---\n\n# One\n\n---\n\n# Two\n");
+        QQuickStyle::setStyle("Basic");
+        qmlRegisterType<SlideItem>("Hype", 1, 0, "SlideCanvas");
+        qmlRegisterType<AppTheme>("Hype", 1, 0, "AppTheme");
+        QQmlApplicationEngine engine;
+        engine.rootContext()->setContextProperty("deck", &deck);
+        engine.addImageProvider("slides", new Thumbnails(&deck));
+        engine.load(QUrl("qrc:/Main.qml"));
+        QVERIFY(!engine.rootObjects().isEmpty());
+        auto window = qobject_cast<QQuickWindow *>(engine.rootObjects()[0]);
+        auto effect = window ? window->findChild<QObject *>("slideTransition") : nullptr;
+        QVERIFY(effect);
+        QVERIFY(!effect->property("fragmentShader").toString().isEmpty());
+        QVERIFY(QMetaObject::invokeMethod(window, "endSlideTransition"));
+        QVERIFY(!effect->property("fragmentShader").toString().isEmpty());
+        window->setProperty("allowClose", true);
+        window->close();
+    }
     void outgoingSlideStaysVisibleWhileTransitionPrepares() {
         if (qEnvironmentVariable("HYPE_GUI_TESTS") == "0")
             QSKIP("HYPE_GUI_TESTS=0 skips the window-level tests");
