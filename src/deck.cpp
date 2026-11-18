@@ -603,7 +603,8 @@ QStringList Deck::fontNames() const { return QFontDatabase::families(); }
 QStringList Deck::googleFonts(const QString &query) const {
     if (fonts::catalog(false).isEmpty())
         return {};
-    return fonts::search(query, 80);
+    // From the list already here: the window never waits on the network.
+    return fonts::search(query, 80, false);
 }
 void Deck::loadGoogleFonts() {
     if (!fonts::catalog(false).isEmpty() || m_loadingCatalog || !fonts::downloadsAllowed()) {
@@ -1782,6 +1783,8 @@ bool Deck::loadExportSnapshot(const QString &path) {
     m_paletteCache = snapshot["palette"].toObject().toVariantMap();
     m_templatePath = snapshot["template"].toString();
     rememberTemplate(snapshot["template_text"].toString());
+    restoreVocabulary(m_paletteCache.value("vocabulary_id").toString(),
+                      snapshot["vocabulary"].toObject());
     m_paletteStamp = templateStamp(true);
     fonts::loadDirectory(baseDir() + "/fonts");
     for (const QString &directory :
@@ -1816,6 +1819,8 @@ void Deck::startExport(const QString &format, const QString &path) {
                                   {"palette", QJsonObject::fromVariantMap(palette())},
                                   {"template", m_templatePath},
                                   {"template_text", m_templateText},
+                                  {"vocabulary",
+                                   vocabularyWords(palette().value("vocabulary_id").toString())},
                                   {"fonts", QJsonArray::fromStringList(requestedFonts())}})
             .toJson();
     if (!temporary->isValid() || !staged->isValid() || !snapshot.open(QIODevice::WriteOnly) || snapshot.write(data) != data.size()) {

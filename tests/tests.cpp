@@ -2154,6 +2154,15 @@ static void write(const QString &path, const QString &content) {
         // Nothing half-made is left in the library either way.
         QCOMPARE(QDir(library).entryList(QDir::AllEntries | QDir::Hidden | QDir::NoDotAndDotDot),
                  QStringList{"brand"});
+        // A save that stopped half-way, with the old template set aside and a new one half
+        // made, is put right by the next save of that name, whatever comes of it.
+        QVERIFY(QDir().rename(library + "/brand", library + "/.brand.replaced"));
+        QVERIFY(QDir(library).mkpath(".brand.saving-abc123/images"));
+        QVERIFY(templates::save(dir.filePath("pitch/presentation.md"), "brand", true, true, &saved)
+                    .contains("build on itself"));
+        QCOMPARE(QDir(library).entryList(QDir::AllEntries | QDir::Hidden | QDir::NoDotAndDotDot),
+                 QStringList{"brand"});
+        QVERIFY(QFileInfo::exists(library + "/brand/images/mark.png"));
         // A picture that cannot be copied fails the save rather than making a template without it.
         QVERIFY(QDir(dir.path()).mkpath("locked/images"));
         write(dir.filePath("locked/presentation.md"), "# Locked\n");
@@ -2168,6 +2177,45 @@ static void write(const QString &path, const QString &content) {
                 QDir(library).entryList(QDir::AllEntries | QDir::Hidden | QDir::NoDotAndDotDot),
                 QStringList{"brand"});
         }
+    }
+    void exportWorkersKeepTheSnapshotTheyAreGiven() {
+        QTemporaryDir dir;
+        write(dir.filePath("kit.md"), "<Define name=\"Stamp\" tone=\"\">\n{children}\n</Define>\n");
+        // What other templates define travels as words, and is taken up under the same id.
+        const QString id = rememberVocabulary({dir.filePath("kit.md")});
+        const QJsonObject words = vocabularyWords(id);
+        QVERIFY(words.value("Stamp").toArray().contains("tone"));
+        // In the process that exports, nothing has been read: here, as if long forgotten.
+        for (int i = 0; i < 80; ++i)
+            rememberVocabulary({dir.filePath(QString("none-%1.md").arg(i))});
+        QVERIFY(!remembers(QVariantMap{{"vocabulary_id", id}}));
+        const QString source = "<Stamp tone=\"red\">\nHello\n</Stamp>\n";
+        Deck editor;
+        editor.editSource(source);
+        QVariantMap palette = editor.palette();
+        palette["vocabulary_id"] = id;
+        palette["background"] = "#123456"; // Not what the files on disk would give.
+        write(dir.filePath("snapshot.json"),
+              QString::fromUtf8(
+                  QJsonDocument(QJsonObject{{"source", source},
+                                            {"path", dir.filePath("talk.md")},
+                                            {"palette", QJsonObject::fromVariantMap(palette)},
+                                            {"template", ""},
+                                            {"template_text", ""},
+                                            {"vocabulary", words},
+                                            {"fonts", QJsonArray()}})
+                      .toJson()));
+        Deck worker;
+        QVERIFY2(worker.loadExportSnapshot(dir.filePath("snapshot.json")),
+                 qPrintable(worker.status()));
+        // The worker draws with the palette it was handed, and through what the editor knew.
+        QCOMPARE(worker.palette().value("background").toString(), QString("#123456"));
+        QVERIFY(remembers(worker.palette()));
+        QCOMPARE(slideProblems(worker.slide(0), worker.baseDir(), worker.slidePalette(0)),
+                 QStringList());
+        QVERIFY(slideWarnings(worker.slide(0), worker.baseDir(), worker.slidePalette(0))
+                    .join("\n")
+                    .contains("belongs to another template"));
     }
     void presentationsAreTemplatesAndDefineComponents() {
         QTemporaryDir dir;

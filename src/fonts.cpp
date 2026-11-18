@@ -85,6 +85,7 @@ int editDistance(const QString &a, const QString &b) {
 
 struct Catalog {
     QMutex mutex;
+    QMutex fetching; // Held across the request, so a second asker waits for its answer.
     QVector<Family> families;
     QHash<QString, int> index; // Compact name to position.
     bool loaded = false, fetched = false;
@@ -245,6 +246,9 @@ bool downloadsAllowed() { return qEnvironmentVariable("HYPE_FONT_DOWNLOADS") != 
 
 QVector<Family> catalog(bool fetch) {
     Catalog &catalog = shared();
+    // One request at a time. A download that needs the list while it is being fetched
+    // waits here for it, rather than going on with none.
+    QMutexLocker waiting(fetch ? &catalog.fetching : nullptr);
     const QFileInfo cache(catalogFile());
     {
         QMutexLocker lock(&catalog.mutex);
@@ -266,7 +270,7 @@ QVector<Family> catalog(bool fetch) {
             return catalog.families;
         catalog.fetched = true; // Once a process, whether or not it works.
     }
-    // Asked for without the lock: the window reads the list it has while this waits.
+    // Asked for without the list's own lock: the window reads the list it has meanwhile.
     const QJsonDocument metadata =
         json(get(server("https://fonts.google.com/metadata/fonts"), nullptr));
     const QJsonArray list = metadata.object()["familyMetadataList"].toArray();
@@ -304,8 +308,8 @@ QVector<Family> catalog(bool fetch) {
     return catalog.families;
 }
 
-QStringList search(const QString &query, int limit) {
-    const QVector<Family> list = catalog();
+QStringList search(const QString &query, int limit, bool fetch) {
+    const QVector<Family> list = catalog(fetch);
     const QString wanted = query.trimmed().toLower();
     QVector<QPair<int, QString>> scored;
     for (int i = 0; i < list.size(); ++i) {

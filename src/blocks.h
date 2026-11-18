@@ -1,4 +1,5 @@
 #pragma once
+#include <QJsonObject>
 #include <QMap>
 #include <QRectF>
 #include <QString>
@@ -57,6 +58,10 @@ QString rememberTemplate(const QString &text);
 // Registers what the templates in these files call their components, props and slots, and
 // returns the id palettes refer to it by, as vocabulary_id.
 QString rememberVocabulary(const QStringList &files);
+// A vocabulary's words, to hand to another process with the palette that names it, and
+// to take them up there under the same id.
+QJsonObject vocabularyWords(const QString &id);
+void restoreVocabulary(const QString &id, const QJsonObject &words);
 // Whether the definitions and vocabulary a palette names are still held. Only recent ones
 // are kept, so a palette cached for a long while checks before it is used again.
 bool remembers(const QVariantMap &palette);

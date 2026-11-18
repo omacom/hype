@@ -11,6 +11,7 @@
 #include <QFontDatabase>
 #include <QHash>
 #include <QImageReader>
+#include <QJsonArray>
 #include <QMutex>
 #include <QPainter>
 #include <QRegularExpression>
@@ -2207,6 +2208,33 @@ QString rememberTemplate(const QString &text) {
         registryOrder.move(registryOrder.indexOf(id), registryOrder.size() - 1);
     }
     return id;
+}
+
+QJsonObject vocabularyWords(const QString &id) {
+    const Vocabulary all = vocabulary(id);
+    QJsonObject words;
+    for (auto it = all.components.cbegin(); it != all.components.cend(); ++it) {
+        QStringList names(it->cbegin(), it->cend());
+        names.sort();
+        words[it.key()] = QJsonArray::fromStringList(names);
+    }
+    return words;
+}
+
+void restoreVocabulary(const QString &id, const QJsonObject &words) {
+    if (id.isEmpty())
+        return;
+    Vocabulary all;
+    for (auto it = words.constBegin(); it != words.constEnd(); ++it)
+        for (const QJsonValue &name : it->toArray())
+            all.components[it.key()].insert(name.toString());
+    // A component with no props or slots is still one the other templates have.
+    for (auto it = words.constBegin(); it != words.constEnd(); ++it)
+        all.components[it.key()];
+    QMutexLocker lock(&registryMutex);
+    if (!vocabularies.contains(id))
+        vocabularyOrder << id;
+    vocabularies.insert(id, all);
 }
 
 bool remembers(const QVariantMap &palette) {

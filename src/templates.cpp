@@ -6,9 +6,11 @@
 #include <QDirIterator>
 #include <QFile>
 #include <QFileInfo>
+#include <QLockFile>
 #include <QRegularExpression>
 #include <QSaveFile>
 #include <QStandardPaths>
+#include <QTemporaryDir>
 
 namespace templates {
 
@@ -251,9 +253,33 @@ QString save(const QString &presentation, const QString &requested, bool copy, b
     const QString library = libraryDirectory();
     if (library.isEmpty())
         return "There is no folder for the template library";
-    const QString target = library + "/" + name;
+    const QString target = library + "/" + name, replaced = library + "/." + name + ".replaced";
+    auto there = [](const QString &entry) {
+        return QFileInfo(entry).exists() || QFileInfo(entry).isSymLink();
+    };
+    // One save of a name at a time, in this process or another. The lock goes stale only
+    // with the process that holds it, however long its pictures take to copy.
+    if (!QDir().mkpath(library))
+        return "Could not create " + library;
+    QLockFile saving(library + "/." + name + ".lock");
+    saving.setStaleLockTime(0);
+    if (!saving.tryLock(15000))
+        return "The template " + name +
+               " is being saved by another Hype; try again when it is done";
+    // A save that stopped half-way left the old template under its other name: it takes
+    // its own back, unless the new one made it into place. Names that start with a dot are
+    // never listed as templates.
+    if (there(replaced)) {
+        if (there(target))
+            removeEntry(replaced);
+        else
+            QDir().rename(replaced, target);
+    }
+    for (const QString &leftover :
+         QDir(library).entryList({"." + name + ".saving-*"}, QDir::Dirs | QDir::Hidden))
+        QDir(library + "/" + leftover).removeRecursively();
     const QFileInfo existing(target);
-    const bool replacing = existing.exists() || existing.isSymLink();
+    const bool replacing = there(target);
     if (replacing) {
         // A copy saved over itself would delete what it is copied from.
         const QString held = existing.canonicalFilePath();
@@ -263,16 +289,13 @@ QString save(const QString &presentation, const QString &requested, bool copy, b
             return "A template named " + name +
                    " already exists; replace it or choose another name";
     }
-    // The new entry is made under another name and takes this one only when it is whole,
-    // so a replacement that fails leaves the template it would have replaced. Names that
-    // start with a dot are never listed as templates.
-    const QString staging = library + "/." + name + ".saving",
-                  replaced = library + "/." + name + ".replaced";
-    for (const QString &leftover : {staging, replaced})
-        if (QFileInfo(leftover).exists() || QFileInfo(leftover).isSymLink())
-            removeEntry(leftover);
-    if (!QDir().mkpath(staging))
+    // The new entry is made under a name of its own and takes this one only when it is
+    // whole, so a replacement that fails leaves the template it would have replaced.
+    QTemporaryDir made(library + "/." + name + ".saving-XXXXXX");
+    made.setAutoRemove(false);
+    if (!made.isValid())
         return "Could not create " + target;
+    const QString staging = made.path();
     auto abandon = [&](const QString &error) {
         QDir(staging).removeRecursively();
         return error;

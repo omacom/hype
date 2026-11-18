@@ -38,7 +38,7 @@ struct Family {
 };
 // The Google Fonts catalog: cached for a week, fetched when `fetch` allows. Empty offline.
 QVector<Family> catalog(bool fetch = true);
-QStringList search(const QString &query, int limit = 40);
+QStringList search(const QString &query, int limit = 40, bool fetch = true);
 // The closest catalog names, for a misspelled family.
 QStringList suggestions(const QString &family);
 
