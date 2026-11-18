@@ -241,7 +241,7 @@ class Deck : public QAbstractListModel {
     QVector<State> m_undo, m_redo;
     QMap<QString, QString> m_themes;
     QFileSystemWatcher m_watcher, m_mediaWatcher;
-    QTimer m_reloadTimer, m_mediaTimer;
+    QTimer m_reloadTimer, m_mediaTimer, m_watchTimer;
     QString m_notifiedFont;
     bool m_externalChange = false;
     QString m_recoveryDirectory, m_checkpointSource, m_checkpointPath;

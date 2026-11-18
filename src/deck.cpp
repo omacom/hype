@@ -198,6 +198,12 @@ Deck::Deck(QObject *parent, const QString &exportProgram) : QAbstractListModel(p
     m_mediaTimer.setInterval(100);
     connect(&m_mediaWatcher, &QFileSystemWatcher::fileChanged, &m_mediaTimer, qOverload<>(&QTimer::start));
     connect(&m_mediaWatcher, &QFileSystemWatcher::directoryChanged, &m_mediaTimer, qOverload<>(&QTimer::start));
+    // An edit may name a picture kept deep in the template's folders, which is watched
+    // only once a slide names it; the watches catch up when the typing pauses.
+    m_watchTimer.setSingleShot(true);
+    m_watchTimer.setInterval(500);
+    connect(&m_watchTimer, &QTimer::timeout, this, &Deck::watchMedia);
+    connect(this, &Deck::changed, &m_watchTimer, qOverload<>(&QTimer::start));
     connect(&m_mediaTimer, &QTimer::timeout, this, [this] {
         watchMedia();
         m_renderIds.clear();
@@ -896,8 +902,10 @@ static QString withAddedMedia(const QString &source, const QString &name) {
 QStringList Deck::mediaPositions() const { return ::mediaPositions(); }
 QVariantMap Deck::media() const {
     const QString source = slideSource(), base = baseDir();
-    // A template can move a component video, so its stamp is part of the key.
-    const QString stamp = m_parsed.header + templateStamp();
+    // A template can move a component video, so its stamp is part of the key; and where
+    // slides know their page, two that read alike may still play different videos.
+    const QString stamp = m_parsed.header + templateStamp() + QChar(0) +
+                          slidePalette(m_selected).value("page").toString();
     if (!m_mediaCache.isEmpty() && m_mediaSource == source && m_mediaBase == base &&
         m_mediaStamp == stamp)
         return m_mediaCache;

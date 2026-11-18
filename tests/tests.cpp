@@ -2239,6 +2239,11 @@ static void write(const QString &path, const QString &content) {
                  QString("clip2.mp4"));
         QCOMPARE(parseMedia(paged.slide(2), paged.baseDir(), paged.slidePalette(2)).file,
                  QString("clip3.mp4"));
+        // The window plays each slide's own clip as the selection moves between them.
+        paged.select(1);
+        QVERIFY(paged.media().value("url").toUrl().path().endsWith("clip2.mp4"));
+        paged.select(2);
+        QVERIFY(paged.media().value("url").toUrl().path().endsWith("clip3.mp4"));
         // So the window plays it, in the place its layout gives it.
         deck.select(1);
         const QVariantMap shown = deck.media();
@@ -5519,6 +5524,16 @@ static void write(const QString &path, const QString &content) {
         before = d.renderId(1);
         changes.clear();
         picture("kit/images/cases/logo.png", Qt::blue, 80);
+        QTRY_VERIFY(changes.count() > 0);
+        QVERIFY(d.renderId(1) != before);
+        // And one a slide comes to name only later, once the typing has paused.
+        picture("kit/images/cases/late.png", Qt::red, 40);
+        d.select(1);
+        d.editSlide("![](cases/late.png)\n");
+        QTest::qWait(1700); // The watches catch up; render ids are reused for a second.
+        before = d.renderId(1);
+        changes.clear();
+        picture("kit/images/cases/late.png", Qt::blue, 80);
         QTRY_VERIFY(changes.count() > 0);
         QVERIFY(d.renderId(1) != before);
     }
