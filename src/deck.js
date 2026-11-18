@@ -122,7 +122,7 @@ function withoutComments(source) {
 }
 
 function slideProperty(source, key) {
-  const match = new RegExp("<!--\\s*hype:[\\s\\S]*?\\b" + key + '="([^"]*)"').exec(source)
+  const match = new RegExp("<!--\\s*hype:[\\s\\S]*?\\b" + key + '="([^"]*)"').exec(outsideCode(source))
   return match ? match[1] : ""
 }
 

@@ -1303,6 +1303,25 @@ static void write(const QString &path, const QString &content) {
         QCOMPARE(withSlideProperty(fenced, "transition", "liquid"),
                  fenced + "<!-- hype: transition=\"liquid\" -->\n");
     }
+    void slidePropertyReadsOutsideCode() {
+        // A directive in a fence is code, not a property. The reader agrees with
+        // the writer, so a slide's own choice is still the one that applies.
+        const QString fenced = "```html\n<!-- hype: transition=\"glitch\" -->\n```\n# Title\n";
+        QVERIFY(slideProperty(fenced, "transition").isEmpty());
+        QVERIFY(slideProperty("`<!-- hype: transition=\"glitch\" -->`\n", "transition").isEmpty());
+        // A real directive elsewhere in the slide still wins.
+        QCOMPARE(slideProperty(fenced + "<!-- hype: transition=\"liquid\" -->\n", "transition"),
+                 QString("liquid"));
+
+        Deck deck;
+        deck.editSource("---\ntransition: crossfade\n---\n\n# One\n\n---\n\n" + fenced +
+                        "\n---\n\n<!-- hype: transition=\"none\" -->\n# Three\n");
+        deck.select(1);
+        QVERIFY(deck.slideTransitionOverride().isEmpty());
+        QCOMPARE(deck.slideTransition(), QString("crossfade"));
+        deck.select(2);
+        QCOMPARE(deck.slideTransitionOverride(), QString("none"));
+    }
     void newDeckTitleFollowsFileName() {
         QTemporaryDir tmp;
         Deck d;

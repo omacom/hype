@@ -68,7 +68,14 @@ A line of text for the rasterizer to paint.
 ---
 
 <!-- hype: transition="bogus" -->
-![span](__RED__)</script>
+![span](__RED__)
+
+---
+
+```html
+<!-- hype: transition="glitch" -->
+```
+# Fenced example</script>
     <script type="application/json" id="palette">{"background": "#1a1b26", "foreground": "#a9b1d6", "accent": "#7aa2f7"}</script>
     <script type="application/json" id="transitions">{"liquid":"vec4 transition(vec2 uv) { return texture2D(toTex, uv); }","glitch":"vec4 transition(vec2 uv) { return texture2D(toTex, uv); }"}</script>
     <script src="__SCRIPT__"></script>
@@ -84,7 +91,7 @@ A line of text for the rasterizer to paint.
         if (hooked) {
           const resolved = index => hook.resolveTransition(index) || {}
           const first = resolved(0), override = resolved(1), silent = resolved(2)
-          const bogus = resolved(3)
+          const bogus = resolved(3), example = resolved(4)
           add(first.name === "liquid", "resolver slide 0 name", first.name)
           add(Math.abs(first.duration - 0.25) < 1e-9, "resolver slide 0 duration", first.duration)
           add(override.name === "glitch", "resolver slide 1 name", override.name)
@@ -92,6 +99,7 @@ A line of text for the rasterizer to paint.
           add(silent.name === "none", "resolver slide 2 name", silent.name)
           add(Math.abs(silent.duration - 0.25) < 1e-9, "resolver slide 2 duration", silent.duration)
           add(bogus.name === "liquid", "unknown slide override falls back", bogus.name)
+          add(example.name === "liquid", "fenced directive is not an override", example.name)
 
           const content = document.querySelector("section.slide .text .content")
           const fitted = content ? content.style.fontSize : ""

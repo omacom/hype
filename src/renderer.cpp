@@ -774,7 +774,7 @@ QImage softenedImage(const QImage &image, const QSizeF &slideSize) {
 }
 QString slideProperty(const QString &source, const QString &key) {
     QRegularExpression re("<!--\\s*hype:[\\s\\S]*?\\b" + key + "=\"([^\"]*)\"[\\s\\S]*?-->");
-    return re.match(source).captured(1);
+    return re.match(outsideCode(source)).captured(1);
 }
 static QString preserveLineBreaks(QString markdown) {
     markdown.replace("\r\n", "\n").replace('\r', '\n');
