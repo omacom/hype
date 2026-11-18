@@ -37,6 +37,18 @@ ApplicationWindow {
         if (text) flashTimer.restart()
     }
     Timer { id: flashTimer; onTriggered: win.flash = "" }
+    // Linear: the shaders shape their own timing, and a deck's duration is the
+    // span from the first frame to the last.
+    NumberAnimation {
+        id: transitionAnimation
+        target: win; property: "transitionProgress"
+        from: 0; to: 1; easing.type: Easing.Linear
+        duration: Math.max(1, Math.round(deck.transitionDuration * 1000))
+        onFinished: win.finishSlideTransition()
+    }
+    // A frame that never finishes decoding must not leave the sources rendering
+    // forever; the slide itself has already swapped, so skipping is invisible.
+    Timer { id: transitionTimeout; interval: 2000; running: win.transitionPreparing; onTriggered: win.endSlideTransition() }
     Connections {
         target: deck
         function onStatusChanged() { if (!deck.exporting) win.flashStatus(deck.status, false) }
@@ -57,6 +69,14 @@ ApplicationWindow {
     property var compressionReturnFocus: null
     property bool allowClose: false
     property int lastSelected: -1
+    // A slide change plays a shader transition over the stage. The two frames are
+    // the outgoing and incoming renders; progress is the only animated value.
+    property string transitionFrom: ""
+    property string transitionTo: ""
+    property string transitionShaderName: ""
+    property real transitionProgress: 0
+    // Both frames have to be decoded before the shader has anything to mix.
+    property bool transitionPreparing: false
     // Qt Multimedia probes the GPU's video decoders when first used, which takes seconds on some
     // machines, so the player loads with the first video slide rather than with every window.
     property bool videoUsed: false
@@ -282,6 +302,11 @@ ApplicationWindow {
                   "left": qsTr("Left"), "center": qsTr("Center"), "right": qsTr("Right"),
                   "bottom-left": qsTr("Bottom left"), "bottom": qsTr("Bottom"), "bottom-right": qsTr("Bottom right") })[id] || id
     }
+    // A slide transition's name, by the id the deck and its Markdown use.
+    function transitionName(id) {
+        return ({ "none": qsTr("None"), "crossfade": qsTr("Crossfade"), "dissolve": qsTr("Dissolve"),
+                  "liquid": qsTr("Liquid"), "glitch": qsTr("Glitch") })[id] || id
+    }
     function changeMode(name, preserveEditing) {
         const switchingEditors = preserveEditing && !overview && name !== "overview"
         const editorFocused = sourceEditor.activeFocus || slideEditor.activeFocus
@@ -405,6 +430,53 @@ ApplicationWindow {
         player.source = nextVideo
         if (presenting && deck.media.video && deck.media.autoplay) player.play()
     }
+    // What a slide change animates: the incoming slide's own directive, then the
+    // deck default. Its property reads the slide that is selected now.
+    function startSlideTransition(from, to) {
+        const name = deck.slideTransition
+        if (from < 0 || from >= deck.count || from === to ||
+            to < 0 || to >= deck.count ||
+            name === "" || name === "none" || !workspace.visible) {
+            endSlideTransition()
+            return
+        }
+        transitionAnimation.stop()
+        transitionPreparing = true
+        transitionProgress = 0
+        transitionFrom = deck.renderId(from)
+        transitionTo = deck.renderId(to)
+        transitionShaderName = name
+        // The frames may still be in the pixmap cache, but a new decode starts
+        // asynchronously; the Images' status handlers start the animation once
+        // both are ready, whichever finishes last.
+        Qt.callLater(startSlideTransitionIfReady)
+    }
+    function startSlideTransitionIfReady() {
+        if (!transitionPreparing) return
+        if (transitionFromFrame.status === Image.Error || transitionToFrame.status === Image.Error) {
+            endSlideTransition()
+            return
+        }
+        if (transitionFromFrame.status !== Image.Ready || transitionToFrame.status !== Image.Ready) return
+        transitionPreparing = false
+        transitionAnimation.restart()
+    }
+    function endSlideTransition() {
+        transitionAnimation.stop()
+        transitionPreparing = false
+        transitionProgress = 0
+        transitionFrom = ""
+        transitionTo = ""
+        transitionShaderName = ""
+    }
+    function finishSlideTransition() {
+        // At progress 1 the shader shows exactly the incoming slide, so dropping
+        // the frames here is invisible and returns their memory.
+        transitionProgress = 1
+        transitionFrom = ""
+        transitionTo = ""
+        transitionShaderName = ""
+    }
     Component.onCompleted: { syncSourceEditor(); syncEditors(); syncVideo(true); lastSelected = deck.selected; Qt.callLater(thumbnails.revealSelection); if (deck.path !== "") focusForDeck(true) }
     Connections {
         target: deck
@@ -426,6 +498,7 @@ ApplicationWindow {
             win.syncEditors()
             if (win.dragIndex < 0 && win.lastSelected !== deck.selected) Qt.callLater(thumbnails.revealSelection)
             win.syncVideo(win.lastSelected !== deck.selected)
+            if (win.lastSelected !== deck.selected) win.startSlideTransition(win.lastSelected, deck.selected)
             win.lastSelected = deck.selected
         }
         function onModelAboutToBeReset() {
@@ -434,7 +507,7 @@ ApplicationWindow {
             thumbnails.scrollBeforeReset = thumbnails.contentY - thumbnails.originY
         }
         function onModelReset() { Qt.callLater(thumbnails.revealSelection) }
-        function onOpened(existing) { win.sourceOnlyCursor = -1; Qt.callLater(function() { win.focusForDeck(existing) }) }
+        function onOpened(existing) { win.sourceOnlyCursor = -1; win.endSlideTransition(); Qt.callLater(function() { win.focusForDeck(existing) }) }
     }
     onPresentingChanged: { if (player && presenting && deck.media.video && deck.media.autoplay) player.play() }
     onClosing: function(close) {
@@ -950,6 +1023,46 @@ ApplicationWindow {
                     AppMenuItem { objectName: editorBar.scope + "whiteBackgroundItem"; text: qsTr("White"); enabled: !mediaMenu.placed; checkable: true; checked: deck.media.background === "white"; onTriggered: deck.setMediaBackground("white") }
                     AppMenuItem { text: qsTr("Black"); enabled: !mediaMenu.placed; checkable: true; checked: deck.media.background === "black"; onTriggered: deck.setMediaBackground("black") }
                     AppMenuItem { text: qsTr("Use theme color"); enabled: !mediaMenu.placed; checkable: true; checked: deck.media.background === "theme"; onTriggered: deck.matchImageBackground(false) }
+                }
+            }
+            EditorButton {
+                compact: editorBar.compact
+                objectName: editorBar.scope + "transitionButton"; iconName: "transition"; label: qsTr("Transition"); description: qsTr("Slide transition"); menu: true
+                dropdown: transitionMenu
+                AppMenu {
+                    hasChecks: true
+                    id: transitionMenu; objectName: editorBar.scope + "transitionMenu"; y: parent.height + 4
+                    AppMenuItem {
+                        objectName: editorBar.scope + "useDeckTransitionItem"
+                        text: qsTr("Use deck default"); checkable: true; checked: deck.slideTransitionOverride === ""
+                        onTriggered: deck.setSlideTransition("")
+                    }
+                    Instantiator {
+                        model: deck.transitionNames
+                        delegate: AppMenuItem {
+                            text: win.transitionName(modelData)
+                            checkable: true; checked: deck.slideTransition === modelData
+                            onTriggered: deck.setSlideTransition(modelData)
+                        }
+                        onObjectAdded: (index, item) => transitionMenu.insertItem(index + 1, item)
+                        onObjectRemoved: (index, item) => transitionMenu.removeItem(item)
+                    }
+                    AppMenuSeparator {}
+                    AppMenu {
+                        id: deckTransitionMenu
+                        objectName: editorBar.scope + "deckTransitionMenu"
+                        title: qsTr("Deck default"); hasChecks: true
+                        Instantiator {
+                            model: deck.transitionNames
+                            delegate: AppMenuItem {
+                                text: win.transitionName(modelData)
+                                checkable: true; checked: deck.transitionName === modelData
+                                onTriggered: deck.chooseTransition(modelData)
+                            }
+                            onObjectAdded: (index, item) => deckTransitionMenu.insertItem(index, item)
+                            onObjectRemoved: (index, item) => deckTransitionMenu.removeItem(item)
+                        }
+                    }
                 }
             }
         }
@@ -1575,6 +1688,35 @@ ApplicationWindow {
                     }
                     Image { anchors.fill: parent; source: visible ? "image://slides/" + (deck.revision, deck.renderId(deck.selected)) + "/overlay" : ""; asynchronous: true; retainWhileLoading: true; sourceSize: Qt.size(1920,1080); visible: animation.active || (videoLoader.item && videoLoader.item.visible && deck.media.span) }
                     Button { visible: deck.media.video && !win.presenting; anchors.centerIn: parent; text: player && player.playbackState === MediaPlayer.PlayingState ? qsTr("Pause") : "▶ " + qsTr("Play"); onClicked: win.toggleVideo() }
+                    // The transition draws last, over the slide and its media. Its two
+                    // frames are full renders kept hidden: ShaderEffectSource turns
+                    // them into the fromTex and toTex the shared shader samples.
+                    Image {
+                        id: transitionFromFrame; objectName: "transitionFromFrame"
+                        anchors.fill: parent; visible: false
+                        source: win.transitionFrom ? "image://slides/" + win.transitionFrom : ""
+                        asynchronous: true; cache: true; sourceSize: Qt.size(1920, 1080)
+                        onStatusChanged: win.startSlideTransitionIfReady()
+                    }
+                    Image {
+                        id: transitionToFrame; objectName: "transitionToFrame"
+                        anchors.fill: parent; visible: false
+                        source: win.transitionTo ? "image://slides/" + win.transitionTo : ""
+                        asynchronous: true; cache: true; sourceSize: Qt.size(1920, 1080)
+                        onStatusChanged: win.startSlideTransitionIfReady()
+                    }
+                    ShaderEffectSource { id: transitionFromTexture; sourceItem: transitionFromFrame; hideSource: true; live: win.transitionPreparing || win.transitionShaderName !== "" }
+                    ShaderEffectSource { id: transitionToTexture; sourceItem: transitionToFrame; hideSource: true; live: win.transitionPreparing || win.transitionShaderName !== "" }
+                    ShaderEffect {
+                        objectName: "slideTransition"
+                        anchors.fill: parent
+                        visible: win.transitionProgress > 0 && win.transitionProgress < 1
+                        property ShaderEffectSource fromTex: transitionFromTexture
+                        property ShaderEffectSource toTex: transitionToTexture
+                        property real progress: win.transitionProgress
+                        fragmentShader: win.transitionShaderName
+                            ? "qrc:/transitions/" + win.transitionShaderName + ".frag.qsb" : ""
+                    }
                     MouseArea {
                         anchors.fill: parent
                         enabled: win.presenting

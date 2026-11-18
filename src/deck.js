@@ -30,6 +30,10 @@ const PLACEMENTS = {
   left: ["left", "center"], center: ["center", "center"], right: ["right", "center"],
   "bottom-left": ["left", "bottom"], bottom: ["center", "bottom"], "bottom-right": ["right", "bottom"],
 }
+// What each rendered slide needs to be drawn a second time, onto a canvas: the
+// parsed media and palette, the text area, and the neutral block list. The DOM
+// stays the fitting authority; the map only saves a reparse.
+const slideStates = new WeakMap()
 
 // --- Parsing ---------------------------------------------------------------
 
@@ -241,17 +245,26 @@ function parseFlags(media, flags) {
 
 // --- Deck rendering --------------------------------------------------------
 
-function renderMarkdownDeck() {
+// The Markdown travels with both exports. The folder export renders it into
+// slides; the one-file export carries it beside slide pictures as the editable
+// source. Its directives still steer navigation there, so read it once for both.
+function readSourceDeck() {
   const sourceBlock = document.getElementById("source")
-  if (!sourceBlock) return
+  if (!sourceBlock) return null
+  const source = sourceBlock.textContent.replace(/<\\\//g, "</").trim() + "\n"
+  const paletteTag = document.getElementById("palette")
+  const palette = paletteTag ? JSON.parse(paletteTag.textContent) : {}
+  return { source, palette, parsed: parseDeck(source) }
+}
+
+function renderMarkdownDeck(deck) {
+  if (!deck) return
   // The one-file export embeds its Markdown the same way, beside slides that are
   // already pictures. There the block is the editable source for anyone who
   // receives the file, not a second deck to render on top of the first.
   if (stage.querySelector("section.slide")) return
-  const source = sourceBlock.textContent.replace(/<\\\//g, "</").trim() + "\n"
-  const paletteTag = document.getElementById("palette")
-  const palette = paletteTag ? JSON.parse(paletteTag.textContent) : {}
-  const parsed = parseDeck(source)
+  const palette = deck.palette
+  const parsed = deck.parsed
   for (const key of ["background", "foreground", "accent", "green", "red", "yellow", "magenta", "cyan", "dark_foreground"]) {
     const value = scalar(parsed.header, "color_" + key)
     if (value && COLOR_RE.test(value)) palette[key] = value
@@ -306,13 +319,17 @@ function renderSlide(section, source, palette, fits) {
   const media = parseMedia(source)
   const text = media.text.trim()
   let area = TEXT_AREA
-  if (media.svg && !media.file) {
-    drawSvg(canvas, text ? BELOW_AREA : FILL_AREA, media.svg, palette)
+  const svgRect = media.svg && !media.file ? (text ? BELOW_AREA : FILL_AREA) : null
+  if (svgRect) {
+    drawSvg(canvas, svgRect, media.svg, palette)
     if (text) area = BAND_AREA
   }
   if (media.file && drawMedia(canvas, media, text, palette, COLOR_RE.test(fgProperty)))
     area = BAND_AREA
-  if (text) drawText(canvas, area, source, media, palette, fits)
+  const layout = text ? drawText(canvas, area, source, media, palette, fits) : null
+  // Keep what a later canvas pass needs, after media adjusted the palette and
+  // after the DOM fitted the type. paintSlideToCanvas never changes either.
+  slideStates.set(section, { media, text, area, svgRect, layout, palette: { ...palette } })
 }
 
 function drawSvg(canvas, rect, svg, palette) {
@@ -349,9 +366,7 @@ function themedSvg(svg, palette) {
 function drawMedia(canvas, media, text, palette, foregroundSet) {
   // Returns true when the slide's text moves to the band above the media.
   const placed = !!media.position
-  const rect = media.span ? { left: 0, top: 0, width: SLIDE_W, height: SLIDE_H }
-    : placed ? placedRect(media)
-    : !media.video || !text ? FILL_AREA : BELOW_AREA
+  const rect = mediaRect(media, text)
   const src = assetPath(media.file, media.video)
   const poster = media.poster ? assetPath(media.poster, false) : ""
   // A blurred copy of the picture fills the space around it.
@@ -467,6 +482,14 @@ async function edgeColor(image) {
   }
 }
 
+// The picture's rectangle on the slide. drawMedia and the rasterizer share it,
+// so a painted slide contains the same picture in the same place.
+function mediaRect(media, text) {
+  if (media.span) return { left: 0, top: 0, width: SLIDE_W, height: SLIDE_H }
+  if (media.position) return placedRect(media)
+  return !media.video || !text ? FILL_AREA : BELOW_AREA
+}
+
 function placedRect(media) {
   const width = SLIDE_W * media.size / 100, height = SLIDE_H * media.size / 100
   // The margin shrinks as the box grows, so large images stay on the slide.
@@ -519,8 +542,9 @@ function drawText(canvas, area, source, media, palette, fits) {
   const stack = media.text.includes("\n") && !media.text.trimStart().startsWith("#") && !quote && !list && !code
   let high = code ? 56 : quote ? 64 : list || table ? 72 : stack ? 128 : 76
   if (media.video && !media.span) high = 48
+  const blocks = parseBlocks(media.text)
   content.style.color = palette.foreground
-  buildBlocks(content, media.text)
+  renderBlocks(content, blocks)
   let ceiling = high
   const slide = canvas.closest(".slide")
   const fit = () => {
@@ -549,6 +573,9 @@ function drawText(canvas, area, source, media, palette, fits) {
   canvas.appendChild(container)
   fit()
   fits.push(fit)
+  // The fitted size is now in content's inline style; the rasterizer reads it
+  // from there rather than fitting again.
+  return { blocks, centered }
 }
 
 // Ordinary line breaks stay visible on the slide, as Hype shows them. Markdown's
@@ -556,12 +583,19 @@ function drawText(canvas, area, source, media, palette, fits) {
 // every other newline becomes a <br>: HTML alone would fold it into a space.
 function appendLines(parent, lines) {
   // One pass over the whole paragraph, so inline markup can span its lines.
-  const text = lines.map(line => line.replace(/ +$/, "").replace(/\\$/, "")).join("\n")
-  inline(parent, text)
+  inline(parent, paragraphText(lines))
 }
 
-function buildBlocks(content, text) {
+function paragraphText(lines) {
+  return lines.map(line => line.replace(/ +$/, "").replace(/\\$/, "")).join("\n")
+}
+
+// Markdown becomes a neutral block list—styled runs with no DOM in them—so the
+// page can draw the same text twice: as HTML for fitting and presentation, and
+// onto a canvas for the folder export's rasterizer.
+function parseBlocks(text) {
   const lines = text.split("\n")
+  const blocks = []
   let i = 0
   while (i < lines.length) {
     const line = lines[i]
@@ -575,101 +609,153 @@ function buildBlocks(content, text) {
       }
       const body = (j >= lines.length ? lines.slice(i + 1) : lines.slice(i + 1, j)).join("\n")
       const language = fence[2].trim().split(/\s+/)[0] || ""
-      if (language.toLowerCase() !== "svg") {
-        const pre = document.createElement("pre")
-        const codeElement = document.createElement("code")
-        codeElement.innerHTML = highlight(body, language)
-        pre.appendChild(codeElement)
-        content.appendChild(pre)
-      }
+      if (language.toLowerCase() !== "svg")
+        blocks.push({ kind: "code", language, text: body })
       i = j >= lines.length ? lines.length : j + 1
       continue
     }
     const heading = /^ {0,3}(#{1,6}) +(.*)$/.exec(line)
     if (heading) {
-      const element = document.createElement("h" + heading[1].length)
-      inline(element, heading[2])
-      content.appendChild(element)
+      blocks.push({ kind: "heading", level: heading[1].length, runs: parseInline(heading[2]) })
       i++
       continue
     }
     if (line.trimStart().startsWith(">")) {
-      const quoteElement = document.createElement("blockquote")
+      const paragraphs = []
       while (i < lines.length && lines[i].trimStart().startsWith(">")) {
         const body = lines[i].trimStart().replace(/^>\s?/, "")
-        const paragraph = document.createElement("p")
-        if (body.startsWith("—")) paragraph.className = "attribution"
-        inline(paragraph, body)
-        quoteElement.appendChild(paragraph)
+        paragraphs.push({ attribution: body.startsWith("—"), runs: parseInline(body) })
         i++
       }
-      content.appendChild(quoteElement)
+      blocks.push({ kind: "quote", paragraphs })
       continue
     }
     const item = /^ {0,3}([-*+]|\d+[.)]) +(.*)$/.exec(line)
     if (item) {
       // The marker decides the list kind, never the text after it.
       const ordered = /\d/.test(item[1])
-      const listElement = document.createElement(ordered ? "ol" : "ul")
+      const items = []
       while (i < lines.length) {
         const entry = /^ {0,3}([-*+]|\d+[.)]) +(.*)$/.exec(lines[i])
         if (!entry) break
-        const li = document.createElement("li")
-        inline(li, entry[2])
-        listElement.appendChild(li)
+        items.push(parseInline(entry[2]))
         i++
       }
-      content.appendChild(listElement)
+      blocks.push({ kind: "list", ordered, items })
       continue
     }
     if (startsTable(lines, i)) {
-      content.appendChild(buildTable(lines, i))
+      blocks.push(parseTable(lines, i))
       while (i < lines.length && lines[i].includes("|") && lines[i].trim()) i++
       continue
     }
-    const paragraph = document.createElement("p")
     const body = []
     while (i < lines.length && lines[i].trim() && !lineIsFence(lines[i]) &&
            !/^ {0,3}#{1,6} /.test(lines[i]) && !lines[i].trimStart().startsWith(">") &&
            !/^ {0,3}([-*+]|\d+[.)]) /.test(lines[i]) && !startsTable(lines, i))
       body.push(lines[i++])
-    appendLines(paragraph, body)
-    content.appendChild(paragraph)
+    blocks.push({ kind: "paragraph", runs: parseInline(paragraphText(body)) })
+  }
+  return blocks
+}
+
+// The DOM backend. It keeps the exact structure and classes the stylesheet
+// was written for; tests and the fit depend on both.
+function renderBlocks(content, blocks) {
+  for (const block of blocks) {
+    switch (block.kind) {
+      case "code": {
+        const pre = document.createElement("pre")
+        const codeElement = document.createElement("code")
+        codeElement.innerHTML = highlight(block.text, block.language)
+        pre.appendChild(codeElement)
+        content.appendChild(pre)
+        break
+      }
+      case "heading": {
+        const element = document.createElement("h" + block.level)
+        appendRuns(element, block.runs)
+        content.appendChild(element)
+        break
+      }
+      case "quote": {
+        const quoteElement = document.createElement("blockquote")
+        for (const paragraph of block.paragraphs) {
+          const element = document.createElement("p")
+          if (paragraph.attribution) element.className = "attribution"
+          appendRuns(element, paragraph.runs)
+          quoteElement.appendChild(element)
+        }
+        content.appendChild(quoteElement)
+        break
+      }
+      case "list": {
+        const listElement = document.createElement(block.ordered ? "ol" : "ul")
+        for (const runs of block.items) {
+          const li = document.createElement("li")
+          appendRuns(li, runs)
+          listElement.appendChild(li)
+        }
+        content.appendChild(listElement)
+        break
+      }
+      case "table":
+        content.appendChild(renderTable(block))
+        break
+      case "paragraph": {
+        const paragraph = document.createElement("p")
+        appendRuns(paragraph, block.runs)
+        content.appendChild(paragraph)
+        break
+      }
+    }
   }
 }
 
-function buildTable(lines, start) {
+function buildBlocks(content, text) {
+  renderBlocks(content, parseBlocks(text))
+}
+
+function parseTable(lines, start) {
   const cells = line => {
     let text = line.trim()
     if (text.startsWith("|")) text = text.slice(1)
     if (text.endsWith("|")) text = text.slice(0, -1)
     return text.split(/(?<!\\)\|/)
   }
-  const alignment = cells(lines[start + 1]).map(cell => {
+  const alignments = cells(lines[start + 1]).map(cell => {
     const marker = cell.trim()
     return marker.startsWith(":") && marker.endsWith(":") ? "center" : marker.endsWith(":") ? "right" : "left"
   })
+  const head = cells(lines[start]).map(cell => parseInline(padCell(cell)))
+  const rows = []
+  for (let i = start + 2; i < lines.length && lines[i].includes("|") && lines[i].trim(); i++)
+    rows.push(cells(lines[i]).map(cell => parseInline(padCell(cell))))
+  return { kind: "table", alignments, head, rows }
+}
+
+function renderTable(block) {
   const table = document.createElement("table")
   const head = document.createElement("thead")
   const headRow = document.createElement("tr")
-  cells(lines[start]).forEach((cell, column) => {
+  block.head.forEach((runs, column) => {
     const th = document.createElement("th")
-    th.style.textAlign = alignment[column] || "left"
-    inline(th, padCell(cell))
+    th.style.textAlign = block.alignments[column] || "left"
+    appendRuns(th, runs)
     headRow.appendChild(th)
   })
   head.appendChild(headRow)
   table.appendChild(head)
   const body = document.createElement("tbody")
-  for (let i = start + 2; i < lines.length && lines[i].includes("|") && lines[i].trim(); i++) {
-    const row = document.createElement("tr")
-    cells(lines[i]).forEach((cell, column) => {
+  for (const row of block.rows) {
+    const tr = document.createElement("tr")
+    row.forEach((runs, column) => {
       const td = document.createElement("td")
-      td.style.textAlign = alignment[column] || "left"
-      inline(td, padCell(cell))
-      row.appendChild(td)
+      td.style.textAlign = block.alignments[column] || "left"
+      appendRuns(td, runs)
+      tr.appendChild(td)
     })
-    body.appendChild(row)
+    body.appendChild(tr)
   }
   table.appendChild(body)
   return table
@@ -685,13 +771,14 @@ function padCell(cell) {
 const INLINE_SOURCE =
   "(`+)([^`]|`(?!`))*?\\1|\\*\\*(.+?)\\*\\*|__(.+?)__|\\*(.+?)\\*|_([^_]+)_|\\[([^\\]]*)\\]\\(([^)\\s]+)\\)"
 
-function inline(parent, text) {
+function parseInline(text) {
   const pattern = new RegExp(INLINE_SOURCE, "g")
+  const nodes = []
   // Text between constructs carries the paragraph's newlines: on the slide they are
   // breaks, which HTML would otherwise fold into spaces.
   const literal = value => value.split("\n").forEach((part, index) => {
-    if (index) parent.appendChild(document.createElement("br"))
-    if (part) parent.appendChild(document.createTextNode(part))
+    if (index) nodes.push({ kind: "br" })
+    if (part) nodes.push({ kind: "text", text: part })
   })
   let last = 0
   let match
@@ -699,30 +786,60 @@ function inline(parent, text) {
     if (match.index > last) literal(text.slice(last, match.index))
     const [, ticks, , bold, boldUnderscore, italic, underline, linkText, linkTarget] = match
     if (ticks) {
-      const element = document.createElement("code")
-      element.textContent = match[0].slice(ticks.length, -ticks.length)
-      parent.appendChild(element)
+      nodes.push({ kind: "code", text: match[0].slice(ticks.length, -ticks.length) })
     } else if (bold !== undefined || boldUnderscore !== undefined) {
-      const element = document.createElement("strong")
-      inline(element, bold ?? boldUnderscore)
-      parent.appendChild(element)
+      nodes.push({ kind: "strong", children: parseInline(bold ?? boldUnderscore) })
     } else if (italic !== undefined) {
-      const element = document.createElement("em")
-      inline(element, italic)
-      parent.appendChild(element)
+      nodes.push({ kind: "em", children: parseInline(italic) })
     } else if (underline !== undefined) {
-      const element = document.createElement("u")
-      inline(element, underline)
-      parent.appendChild(element)
+      nodes.push({ kind: "u", children: parseInline(underline) })
     } else if (linkText !== undefined) {
-      const element = document.createElement("a")
-      if (/^(https?:|mailto:|#|\.{0,2}\/|[a-z0-9._-]+\.md$)/i.test(linkTarget)) element.href = linkTarget
-      element.textContent = linkText
-      parent.appendChild(element)
+      const href = /^(https?:|mailto:|#|\.{0,2}\/|[a-z0-9._-]+\.md$)/i.test(linkTarget)
+        ? linkTarget : ""
+      nodes.push({ kind: "link", href, text: linkText })
     }
     last = match.index + match[0].length
   }
   if (last < text.length) literal(text.slice(last))
+  return nodes
+}
+
+function appendRuns(parent, nodes) {
+  for (const node of nodes) {
+    switch (node.kind) {
+      case "text":
+        parent.appendChild(document.createTextNode(node.text))
+        break
+      case "br":
+        parent.appendChild(document.createElement("br"))
+        break
+      case "code": {
+        const element = document.createElement("code")
+        element.textContent = node.text
+        parent.appendChild(element)
+        break
+      }
+      case "strong":
+      case "em":
+      case "u": {
+        const element = document.createElement(node.kind)
+        appendRuns(element, node.children)
+        parent.appendChild(element)
+        break
+      }
+      case "link": {
+        const element = document.createElement("a")
+        if (node.href) element.href = node.href
+        element.textContent = node.text
+        parent.appendChild(element)
+        break
+      }
+    }
+  }
+}
+
+function inline(parent, text) {
+  appendRuns(parent, parseInline(text))
 }
 
 // --- Code highlighting -----------------------------------------------------
@@ -740,7 +857,9 @@ const KEYWORDS = {
   sql: "asc by create desc drop from group having index insert into join left null on order primary select set table top union update values view where",
 }
 
-function highlight(code, language) {
+// Tokens carry their color class to both backends: the DOM wraps them in spans,
+// the canvas picks a fill color per class.
+function highlightRuns(code, language) {
   language = (language || "").toLowerCase().split(" ")[0]
   const hash = ["sh", "bash", "shell", "zsh", "python", "py", "ruby", "rb", "yaml", "yml", "toml", "ini", "conf", "r", "perl", "makefile", "dockerfile"].includes(language)
   const dash = ["sql", "lua", "haskell", "hs", "elm", "ada"].includes(language)
@@ -749,7 +868,6 @@ function highlight(code, language) {
                                    [["rust", "rs"], "rust"], [["go", "golang"], "go"],
                                    [["sh", "bash", "shell", "zsh"], "shell"], [["sql"], "sql"]])
     if (languages.includes(language)) KEYWORDS[list].split(" ").forEach(word => words.add(word))
-  const span = (cls, text) => `<span class="${cls}">${escapeHtml(text)}</span>`
   const patterns = []
   if (hash) patterns.push([/#[^\n]*/y, "c"])
   if (dash) patterns.push([/--[^\n]*/y, "c"])
@@ -758,8 +876,10 @@ function highlight(code, language) {
   patterns.push([/"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'|`(?:\\.|[^`\\])*`/y, "s"])
   patterns.push([/\b\d[\w.]*\b/y, "n"])
   patterns.push([/[A-Za-z_$][\w$]*/y, null])
-  let result = "", plain = ""
-  const flush = () => { if (plain) { result += escapeHtml(plain); plain = "" } }
+  const runs = []
+  const push = (text, cls) => { if (text) runs.push(cls ? { text, cls } : { text }) }
+  let plain = ""
+  const flush = () => { if (plain) { push(plain); plain = "" } }
   let i = 0
   while (i < code.length) {
     let matched = false
@@ -771,29 +891,463 @@ function highlight(code, language) {
       flush()
       if (!cls) {
         const word = match[0]
-        if (words.has(word)) result += span("k", word)
-        else if (/^[A-Z]/.test(word)) result += span("t", word)
-        else if (/^\s*\(/.test(code.slice(i + word.length))) result += span("f", word)
-        else result += escapeHtml(word)
-      } else result += span(cls, match[0])
+        if (words.has(word)) push(word, "k")
+        else if (/^[A-Z]/.test(word)) push(word, "t")
+        else if (/^\s*\(/.test(code.slice(i + word.length))) push(word, "f")
+        else push(word)
+      } else push(match[0], cls)
       i += match[0].length
       break
     }
     if (!matched) plain += code[i++]
   }
   flush()
-  return result
+  return runs
+}
+
+function highlight(code, language) {
+  return highlightRuns(code, language).map(run =>
+    run.cls ? `<span class="${run.cls}">${escapeHtml(run.text)}</span>` : escapeHtml(run.text)
+  ).join("")
 }
 
 function escapeHtml(text) {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
 }
 
+// --- Canvas rasterizer -----------------------------------------------------
+//
+// The folder export can also draw each slide as a 1920 × 1080 bitmap. The DOM
+// above has already laid out and fitted the text, so this pass never changes a
+// font size: it reads the fitted metrics and draws them with fillText and
+// measureText. Media uses the same rectangles drawMedia placed in the DOM.
+
+// The stylesheet's defaults, for palettes that omit a token color.
+const DEFAULT_COLORS = {
+  background: "#1a1b26", foreground: "#c0caf5", accent: "#7aa2f7", green: "#9ece6a",
+  red: "#f7768e", yellow: "#e0af68", magenta: "#bb9af7", cyan: "#7dcfff",
+  dark_foreground: "#787c99",
+}
+
+// Paints into `output` when one is supplied, so a cached texture can be
+// repainted in place once a picture or font arrives without changing identity.
+function paintSlideToCanvas(section, output = document.createElement("canvas")) {
+  output.width = SLIDE_W
+  output.height = SLIDE_H
+  const context = output.getContext("2d")
+  const state = slideStates.get(section)
+  const box = section.querySelector(".canvas") || section
+  const computed = getComputedStyle(box).backgroundColor
+  context.fillStyle = computed && computed !== "rgba(0, 0, 0, 0)" && computed !== "transparent"
+    ? computed : colorOf(state, "background")
+  context.fillRect(0, 0, SLIDE_W, SLIDE_H)
+  // A baked deck's section is one picture already; draw it as one.
+  if (!state) {
+    const image = section.querySelector("img")
+    if (image) paintImage(context, image, { left: 0, top: 0, width: SLIDE_W, height: SLIDE_H }, "cover")
+    return output
+  }
+  const { media, text, layout, svgRect } = state
+  const placed = !!media.position
+  // drawMedia's order: blurred backdrop, picture, darkening, text last.
+  if (media.background === "blur" && !media.span && !placed) {
+    const backdrop = section.querySelector(".backdrop img, .backdrop video")
+    if (backdrop) {
+      const width = SLIDE_W * 1.1, height = SLIDE_H * 1.1
+      paintImage(context, backdrop,
+                 { left: (SLIDE_W - width) / 2, top: (SLIDE_H - height) / 2, width, height },
+                 "cover", 48)
+    }
+  }
+  if (media.file) {
+    const element = section.querySelector(".media")
+    const rect = mediaRect(media, text)
+    if (element)
+      paintImage(context, element, rect, media.span ? "cover" : "contain",
+                 element.classList.contains("soft") ? 2 : 0)
+    else
+      paintMissing(context, rect, media.file, state)
+  }
+  if (!placed && media.overlay > 0) {
+    context.fillStyle = `rgba(0, 0, 0, ${media.overlay})`
+    context.fillRect(0, 0, SLIDE_W, SLIDE_H)
+  }
+  if (svgRect) {
+    const drawing = section.querySelector(".svg-box img")
+    if (drawing) paintImage(context, drawing, svgRect, "contain")
+  }
+  if (text && layout) paintText(context, section, layout, state)
+  return output
+}
+
+function colorOf(state, key) {
+  return (state && state.palette[key]) || DEFAULT_COLORS[key] || "#000"
+}
+
+function paintImage(context, element, rect, fit, blur = 0) {
+  const video = element.tagName === "VIDEO"
+  if (video ? element.readyState < 2 : !element.complete) return false
+  const width = video ? element.videoWidth : element.naturalWidth
+  const height = video ? element.videoHeight : element.naturalHeight
+  if (!width || !height) return false
+  const scale = fit === "cover"
+    ? Math.max(rect.width / width, rect.height / height)
+    : Math.min(rect.width / width, rect.height / height)
+  const drawnWidth = width * scale, drawnHeight = height * scale
+  context.save()
+  if (blur > 0 && "filter" in context) context.filter = `blur(${blur}px)`
+  context.drawImage(element, rect.left + (rect.width - drawnWidth) / 2,
+                    rect.top + (rect.height - drawnHeight) / 2, drawnWidth, drawnHeight)
+  context.restore()
+  return true
+}
+
+function paintMissing(context, rect, file, state) {
+  context.save()
+  context.fillStyle = colorOf(state, "accent")
+  context.font = "32px system-ui, sans-serif"
+  context.textAlign = "center"
+  context.textBaseline = "middle"
+  const lines = ["Missing media", file]
+  lines.forEach((line, index) =>
+    context.fillText(line, rect.left + rect.width / 2,
+                    rect.top + rect.height / 2 + (index - (lines.length - 1) / 2) * 40))
+  context.restore()
+}
+
+function paintText(context, section, layout, state) {
+  const textElement = section.querySelector(".text")
+  const content = textElement && textElement.querySelector(".content")
+  if (!textElement || !content) return
+  const elements = [...content.children]
+  // A hidden slide has no layout boxes, so lay it out invisibly for this read,
+  // as the fit does. Nothing is painted while measuring, and the class is gone
+  // before paintText returns.
+  const hidden = getComputedStyle(section).display === "none"
+  if (hidden) section.classList.add("measuring")
+  try {
+    const palette = state.palette
+    const accent = colorOf(state, "accent")
+    const originX = textElement.offsetLeft, originY = textElement.offsetTop
+    // The fitted size lives on .content; every child inherits it, so the DOM
+    // stays the authority and this pass only scales from it (headings, quotes).
+    const fitted = parseFloat(getComputedStyle(content).fontSize) || 76
+    const codeElement = content.querySelector("code")
+    const codeFamily = codeElement
+      ? getComputedStyle(codeElement).fontFamily : getComputedStyle(content).fontFamily
+    const tokenColors = {
+      k: colorOf(state, "magenta"), s: colorOf(state, "green"), n: colorOf(state, "red"),
+      c: colorOf(state, "dark_foreground"), f: colorOf(state, "accent"),
+      t: colorOf(state, "yellow"), p: colorOf(state, "cyan"),
+    }
+    layout.blocks.forEach((block, index) => {
+      const element = elements[index]
+      if (!element) return
+      switch (block.kind) {
+        case "code":
+          paintCode(context, element, block, originX, originY, fitted, codeFamily, tokenColors)
+          break
+        case "table":
+          paintTable(context, element, block, originX, originY, fitted, accent, codeFamily)
+          break
+        case "list":
+          paintList(context, element, block, originX, originY, fitted, accent, codeFamily)
+          break
+        case "quote":
+          paintQuote(context, element, block, originX, originY, fitted, accent, codeFamily)
+          break
+        default:
+          paintLines(context, element, block.runs, originX, originY, fitted, accent,
+                     codeFamily, block.kind === "heading")
+      }
+    })
+    // Keep the compiler honest: the fitted size is read above even when no
+    // block needs it, because that is the metric this pass is required to use.
+    void fitted
+    void palette
+  } finally {
+    if (hidden) section.classList.remove("measuring")
+  }
+}
+
+function canvasMetrics(element, fitted) {
+  const style = getComputedStyle(element)
+  const size = parseFloat(style.fontSize) || fitted
+  const lineHeight = parseFloat(style.lineHeight)
+  return {
+    size,
+    lineHeight: Number.isFinite(lineHeight) && lineHeight > 0 ? lineHeight : size * 1.15,
+    family: style.fontFamily || "monospace",
+    weight: style.fontWeight || "400",
+    italic: style.fontStyle === "italic",
+    align: style.textAlign === "center" ? "center"
+      : style.textAlign === "right" || style.textAlign === "end" ? "right" : "left",
+    color: style.color || "#fff",
+  }
+}
+
+function canvasTokens(nodes, style, tokens) {
+  for (const node of nodes) {
+    switch (node.kind) {
+      case "text":
+        splitTokens(node.text, style, tokens)
+        break
+      case "br":
+        tokens.push({ br: true })
+        break
+      case "code":
+        splitTokens(node.text, { ...style, code: true }, tokens)
+        break
+      case "strong":
+        canvasTokens(node.children, { ...style, bold: true }, tokens)
+        break
+      case "em":
+        canvasTokens(node.children, { ...style, italic: true }, tokens)
+        break
+      case "u":
+        canvasTokens(node.children, { ...style, underline: true }, tokens)
+        break
+      case "link":
+        splitTokens(node.text, { ...style, link: true }, tokens)
+        break
+    }
+  }
+}
+
+function splitTokens(text, style, tokens) {
+  for (const part of text.split(/(\s+)/)) {
+    if (!part) continue
+    if (/^\s+$/.test(part)) tokens.push({ text: " ", space: true, style })
+    else tokens.push({ text: part, style })
+  }
+}
+
+function setRunFont(context, metrics, style, codeFamily) {
+  const weight = style.bold ? "700" : metrics.weight
+  const italic = style.italic || metrics.italic ? "italic " : ""
+  const family = style.code ? codeFamily : metrics.family
+  context.font = `${italic}${weight} ${metrics.size}px ${family}`
+}
+
+function measureToken(context, metrics, token, codeFamily) {
+  setRunFont(context, metrics, token.style, codeFamily)
+  return context.measureText(token.text).width
+}
+
+function wrapTokens(context, tokens, metrics, maxWidth, codeFamily) {
+  const lines = []
+  let line = [], width = 0
+  const finish = () => {
+    // Trailing spaces neither occupy the line nor shift centered text.
+    while (line.length && line[line.length - 1].space) line.pop()
+    lines.push(line)
+    line = []
+    width = 0
+  }
+  for (const token of tokens) {
+    if (token.br) { finish(); continue }
+    const measured = { ...token, width: measureToken(context, metrics, token, codeFamily) }
+    if (token.space) {
+      if (line.length) { line.push(measured); width += measured.width }
+      continue
+    }
+    if (line.length && width + measured.width > maxWidth) finish()
+    line.push(measured)
+    width += measured.width
+  }
+  finish()
+  return lines
+}
+
+function canvasColor(style, metrics, accent) {
+  if (style.color) return style.color
+  if (style.link) return accent
+  if (style.bold && !metrics.heading) return accent
+  return metrics.color
+}
+
+function paintRunLines(context, metrics, lines, x, top, width, colorFor, codeFamily) {
+  let y = top
+  for (const line of lines) {
+    const lineWidth = line.reduce((sum, token) => sum + token.width, 0)
+    let cursor = metrics.align === "center" ? x + (width - lineWidth) / 2
+      : metrics.align === "right" ? x + width - lineWidth : x
+    for (const token of line) {
+      if (token.space) { cursor += token.width; continue }
+      setRunFont(context, metrics, token.style, codeFamily)
+      context.fillStyle = colorFor(token.style)
+      context.textAlign = "left"
+      context.textBaseline = "middle"
+      context.fillText(token.text, cursor, y + metrics.lineHeight / 2)
+      if (token.style.underline)
+        context.fillRect(cursor, y + metrics.lineHeight / 2 + metrics.size * 0.12,
+                         token.width, Math.max(1, metrics.size * 0.06))
+      cursor += token.width
+    }
+    y += metrics.lineHeight
+  }
+}
+
+function paintLines(context, element, runs, originX, originY, fitted, accent, codeFamily, heading) {
+  const metrics = canvasMetrics(element, fitted)
+  metrics.heading = !!heading
+  const style = getComputedStyle(element)
+  const paddingLeft = parseFloat(style.paddingLeft) || 0
+  const paddingRight = parseFloat(style.paddingRight) || 0
+  const width = Math.max(0, element.clientWidth - paddingLeft - paddingRight)
+  const tokens = []
+  canvasTokens(runs, {}, tokens)
+  const lines = wrapTokens(context, tokens, metrics, width, codeFamily)
+  paintRunLines(context, metrics, lines, originX + element.offsetLeft + paddingLeft,
+                originY + element.offsetTop + (parseFloat(style.paddingTop) || 0), width,
+                token => canvasColor(token, metrics, accent), codeFamily)
+}
+
+function paintQuote(context, element, block, originX, originY, fitted, accent, codeFamily) {
+  const paragraphs = [...element.children]
+  block.paragraphs.forEach((paragraph, index) => {
+    const p = paragraphs[index]
+    if (p) paintLines(context, p, paragraph.runs, originX, originY, fitted, accent,
+                     codeFamily, false)
+  })
+}
+
+function paintList(context, element, block, originX, originY, fitted, accent, codeFamily) {
+  const items = [...element.children]
+  block.items.forEach((runs, index) => {
+    const li = items[index]
+    if (!li) return
+    const metrics = canvasMetrics(li, fitted)
+    const style = getComputedStyle(li)
+    const paddingLeft = parseFloat(style.paddingLeft) || 0
+    const width = Math.max(0, li.clientWidth - paddingLeft - (parseFloat(style.paddingRight) || 0))
+    const tokens = []
+    canvasTokens(runs, {}, tokens)
+    const lines = wrapTokens(context, tokens, metrics, width, codeFamily)
+    paintRunLines(context, metrics, lines, originX + li.offsetLeft + paddingLeft,
+                  originY + li.offsetTop, width,
+                  token => canvasColor(token, metrics, accent), codeFamily)
+    // Markers sit outside the content box, as the stylesheet's list padding does.
+    const marker = block.ordered ? `${index + 1}.` : "•"
+    setRunFont(context, metrics, {}, codeFamily)
+    context.fillStyle = metrics.color
+    context.textAlign = "right"
+    context.textBaseline = "middle"
+    context.fillText(marker, originX + li.offsetLeft - metrics.size * 0.35,
+                     originY + li.offsetTop + metrics.lineHeight / 2)
+  })
+}
+
+function paintTable(context, element, block, originX, originY, fitted, accent, codeFamily) {
+  const rowElements = [...element.querySelectorAll("tr")]
+  const rows = [block.head, ...block.rows]
+  rows.forEach((cells, rowIndex) => {
+    const row = rowElements[rowIndex]
+    if (!row) return
+    ;[...row.children].forEach((cell, column) => {
+      const runs = cells[column]
+      if (!runs) return
+      const metrics = canvasMetrics(cell, fitted)
+      const style = getComputedStyle(cell)
+      const paddingLeft = parseFloat(style.paddingLeft) || 0
+      const paddingRight = parseFloat(style.paddingRight) || 0
+      const paddingTop = parseFloat(style.paddingTop) || 0
+      const width = Math.max(0, cell.clientWidth - paddingLeft - paddingRight)
+      const tokens = []
+      canvasTokens(runs, {}, tokens)
+      const lines = wrapTokens(context, tokens, metrics, width, codeFamily)
+      paintRunLines(context, metrics, lines, originX + cell.offsetLeft + paddingLeft,
+                    originY + cell.offsetTop + paddingTop, width,
+                    token => canvasColor(token, metrics, accent), codeFamily)
+    })
+    const style = getComputedStyle(row)
+    const border = parseFloat(style.borderBottomWidth) || 0
+    if (border > 0 && style.borderBottomStyle !== "none") {
+      context.fillStyle = style.borderBottomColor
+      context.fillRect(originX + row.offsetLeft,
+                       originY + row.offsetTop + row.offsetHeight - border / 2,
+                       row.offsetWidth, border)
+    }
+  })
+}
+
+function paintCode(context, element, block, originX, originY, fitted, codeFamily, tokenColors) {
+  const style = getComputedStyle(element)
+  const metrics = {
+    size: parseFloat(style.fontSize) || fitted,
+    lineHeight: parseFloat(style.lineHeight) || (parseFloat(style.fontSize) || fitted) * 1.2,
+    family: style.fontFamily || codeFamily,
+    weight: style.fontWeight || "400",
+    italic: style.fontStyle === "italic",
+    color: style.color || "#fff",
+  }
+  context.textAlign = "left"
+  context.textBaseline = "middle"
+  // Highlighting is a token stream; a newline splits it into drawable lines.
+  const lines = [[]]
+  for (const run of highlightRuns(block.text, block.language)) {
+    run.text.split("\n").forEach((part, index) => {
+      if (index) lines.push([])
+      if (part) lines[lines.length - 1].push({ text: part, cls: run.cls })
+    })
+  }
+  const x = originX + element.offsetLeft, top = originY + element.offsetTop
+  lines.forEach((line, index) => {
+    let cursor = x
+    for (const part of line) {
+      context.font = `${metrics.italic ? "italic " : ""}${metrics.weight} ${metrics.size}px ${metrics.family}`
+      context.fillStyle = part.cls ? tokenColors[part.cls] : metrics.color
+      context.fillText(part.text, cursor, top + index * metrics.lineHeight + metrics.lineHeight / 2)
+      cursor += context.measureText(part.text).width
+    }
+  })
+}
+
 // --- Wiring ----------------------------------------------------------------
 
-renderMarkdownDeck()
+const sourceDeck = readSourceDeck()
+renderMarkdownDeck(sourceDeck)
 
 const slides = [...stage.querySelectorAll(".slide")]
+
+// --- Slide textures --------------------------------------------------------
+//
+// The rasterizer's output, kept per slide for this load. A folder export's
+// slides do not change while the page is open—editing the Markdown means
+// reloading it—so one canvas per index is enough. A picture or font that
+// arrives after the first paint repaints the same canvas in place, which keeps
+// the identity a caller already holds and lets a transition upload it late.
+
+const slideTextures = new Map()
+
+function slideTexture(index) {
+  if (!Number.isInteger(index) || index < 0 || index >= slides.length)
+    return null
+  const cached = slideTextures.get(index)
+  if (cached)
+    return cached
+  const section = slides[index]
+  const texture = paintSlideToCanvas(section)
+  slideTextures.set(index, texture)
+  // A texture painted before its pictures decoded is repainted, not replaced.
+  const repaint = () => paintSlideToCanvas(section, texture)
+  for (const element of section.querySelectorAll("img, video")) {
+    if (element.tagName === "VIDEO") {
+      if (element.readyState < 2)
+        element.addEventListener("loadeddata", repaint, { once: true })
+    } else if (!element.complete) {
+      element.addEventListener("load", repaint, { once: true })
+    }
+  }
+  return texture
+}
+
+// Text fitted with a fallback face is refitted once the real font loads, so a
+// texture painted before that would carry the old metrics.
+document.fonts.ready.then(() => {
+  for (const [index, texture] of slideTextures)
+    paintSlideToCanvas(slides[index], texture)
+})
 
 function scaleCanvases() {
   const scale = stage.clientWidth / SLIDE_W
@@ -810,7 +1364,244 @@ function fromHash() {
   return Number.isInteger(n) ? n - 1 : 0
 }
 
+// --- Transitions -----------------------------------------------------------
+//
+// A transition draws the outgoing slide into one texture and the incoming slide
+// into another, then mixes them with the shader named by the directives. The
+// slides themselves swap instantly underneath; the overlay is the only thing
+// animating. Any failure (no WebGL, an image that will not decode, an unknown
+// shader) simply skips the animation and leaves the new slide in place.
+
+const TRANSITION_VERTEX = `attribute vec2 position;
+varying vec2 vUv;
+void main() {
+  vUv = position * 0.5 + 0.5;
+  gl_Position = vec4(position, 0.0, 1.0);
+}`
+
+const TRANSITION_FRAGMENT_HEADER = `#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
+precision mediump float;
+#endif
+uniform sampler2D fromTex;
+uniform sampler2D toTex;
+uniform float progress;
+varying vec2 vUv;
+`
+
+const TRANSITION_FRAGMENT_FOOTER = `
+void main() {
+  gl_FragColor = transition(vUv);
+}
+`
+
+// The shader source registry rides with the page, compiled by transitions.cpp.
+function transitionShaders() {
+  const block = document.getElementById("transitions")
+  if (!block) return {}
+  try {
+    return JSON.parse(block.textContent)
+  } catch {
+    return {}
+  }
+}
+
+// The names the editor knows. A deck may be opened without a shader block (a
+// page with no transitions at all), but its header still resolves to a name;
+// whether that name has a body to compile is the engine's problem, not the
+// resolver's. Keep this list beside transitions.cpp's transitionNames().
+const TRANSITION_NAMES = ["none", "crossfade", "dissolve", "liquid", "glitch"]
+
+// A slide's directive wins over the deck's header, and "none" wins over both.
+// An unknown name is ignored, as in the editor: the slide falls back to the
+// deck's choice, and the deck to no animation.
+function resolveTransition(index) {
+  if (!sourceDeck) return { name: "none", duration: 0.6 }
+  const known = name => TRANSITION_NAMES.includes(name)
+  const slide = sourceDeck.parsed.slides[index] || ""
+  const override = slideProperty(slide, "transition")
+  const fallback = scalar(sourceDeck.parsed.header, "transition")
+  const name = known(override) ? override : known(fallback) ? fallback : "none"
+  const raw = scalar(sourceDeck.parsed.header, "transition-duration")
+  const seconds = raw === null || raw === "" ? NaN : Number(raw)
+  const duration = Number.isFinite(seconds) ? Math.min(4, Math.max(0.1, seconds)) : 0.6
+  return { name, duration }
+}
+
+const transitions = (() => {
+  let canvas = null, gl = null, quad = null, fromTex = null, toTex = null
+  const programs = new Map()
+  let frame = 0
+  let generation = 0
+
+  function setUp() {
+    if (canvas) return gl !== null
+    canvas = document.createElement("canvas")
+    canvas.className = "transition"
+    canvas.width = SLIDE_W
+    canvas.height = SLIDE_H
+    canvas.style.display = "none"
+    gl = canvas.getContext("webgl", { alpha: false, antialias: false })
+    if (!gl) return false
+    // Source pictures have their origin at the top left; this flips them into
+    // the texture coordinates the shaders use.
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true)
+    gl.disable(gl.DEPTH_TEST)
+    quad = gl.createBuffer()
+    gl.bindBuffer(gl.ARRAY_BUFFER, quad)
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]),
+                  gl.STATIC_DRAW)
+    fromTex = texture()
+    toTex = texture()
+    stage.insertBefore(canvas, prev)
+    return true
+  }
+
+  function texture() {
+    const id = gl.createTexture()
+    gl.bindTexture(gl.TEXTURE_2D, id)
+    // 1080p is not a power of two: clamp and filter linearly, with no mipmaps.
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, SLIDE_W, SLIDE_H, 0,
+                  gl.RGBA, gl.UNSIGNED_BYTE, null)
+    return id
+  }
+
+  function compile(name) {
+    if (programs.has(name)) return programs.get(name)
+    const body = transitionShaders()[name]
+    const program = body ? link(TRANSITION_VERTEX, TRANSITION_FRAGMENT_HEADER + body +
+                                TRANSITION_FRAGMENT_FOOTER) : null
+    programs.set(name, program)
+    return program
+  }
+
+  function shader(type, source) {
+    const id = gl.createShader(type)
+    gl.shaderSource(id, source)
+    gl.compileShader(id)
+    if (gl.getShaderParameter(id, gl.COMPILE_STATUS)) return id
+    gl.deleteShader(id)
+    return null
+  }
+
+  function link(vertexSource, fragmentSource) {
+    const vertex = shader(gl.VERTEX_SHADER, vertexSource)
+    const fragment = shader(gl.FRAGMENT_SHADER, fragmentSource)
+    if (!vertex || !fragment) return null
+    const program = gl.createProgram()
+    gl.attachShader(program, vertex)
+    gl.attachShader(program, fragment)
+    gl.linkProgram(program)
+    gl.deleteShader(vertex)
+    gl.deleteShader(fragment)
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+      gl.deleteProgram(program)
+      return null
+    }
+    program.position = gl.getAttribLocation(program, "position")
+    program.from = gl.getUniformLocation(program, "fromTex")
+    program.to = gl.getUniformLocation(program, "toTex")
+    program.progress = gl.getUniformLocation(program, "progress")
+    return program
+  }
+
+  function upload(id, image, unit) {
+    gl.activeTexture(gl.TEXTURE0 + unit)
+    gl.bindTexture(gl.TEXTURE_2D, id)
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image)
+  }
+
+  // The browser test counts frames: a headless page cannot inspect the pixels,
+  // but it can tell that the loop ran.
+  const trace = window.__transitionTrace || (window.__transitionTrace = { draws: 0 })
+
+  function draw(program, progress) {
+    trace.draws++
+    gl.viewport(0, 0, SLIDE_W, SLIDE_H)
+    gl.clearColor(0, 0, 0, 1)
+    gl.clear(gl.COLOR_BUFFER_BIT)
+    gl.useProgram(program)
+    gl.bindBuffer(gl.ARRAY_BUFFER, quad)
+    gl.enableVertexAttribArray(program.position)
+    gl.vertexAttribPointer(program.position, 2, gl.FLOAT, false, 0, 0)
+    gl.activeTexture(gl.TEXTURE0)
+    gl.bindTexture(gl.TEXTURE_2D, fromTex)
+    gl.activeTexture(gl.TEXTURE1)
+    gl.bindTexture(gl.TEXTURE_2D, toTex)
+    gl.uniform1i(program.from, 0)
+    gl.uniform1i(program.to, 1)
+    gl.uniform1f(program.progress, progress)
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4)
+  }
+
+  // A 1920 × 1080 canvas painted from the slide, as the rasterizer supplies it.
+  function textureFor(index) {
+    try {
+      return slideTexture(index)
+    } catch {
+      return null
+    }
+  }
+
+  // Hides the overlay and invalidates any frame loop still in flight.
+  function cancel() {
+    generation++
+    if (frame) cancelAnimationFrame(frame)
+    frame = 0
+    if (canvas) canvas.style.display = "none"
+  }
+
+  function run(fromIndex, toIndex) {
+    // Asking for the slide already showing leaves any transition in progress
+    // alone; a different slide cancels it and gets its own animation.
+    if (fromIndex < 0 || fromIndex === toIndex) return
+    cancel()
+    const transition = resolveTransition(toIndex)
+    if (transition.name === "none" || !setUp()) return
+    const from = textureFor(fromIndex), to = textureFor(toIndex)
+    if (!from || !to) return
+    const program = compile(transition.name)
+    if (!program) return
+    try {
+      upload(fromTex, from, 0)
+      upload(toTex, to, 1)
+      draw(program, 0)
+    } catch {
+      return
+    }
+    const token = generation
+    canvas.style.display = "block"
+    const start = performance.now()
+    const span = transition.duration * 1000
+    const step = now => {
+      if (token !== generation) return
+      try {
+        const progress = Math.min(1, (now - start) / span)
+        draw(program, progress)
+        if (progress < 1) frame = requestAnimationFrame(step)
+        else {
+          frame = 0
+          canvas.style.display = "none"
+        }
+      } catch {
+        // A lost context ends the animation; the new slide is already showing.
+        frame = 0
+        canvas.style.display = "none"
+      }
+    }
+    frame = requestAnimationFrame(step)
+  }
+
+  return { run }
+})()
+
 function show(index) {
+  const previous = current
   current = Math.max(0, Math.min(slides.length - 1, index))
   slides.forEach((slide, i) => {
     slide.classList.toggle("active", i === current)
@@ -827,6 +1618,7 @@ function show(index) {
   })
   counter.textContent = `${current + 1} / ${slides.length}`
   history.replaceState(null, "", `#${current + 1}`)
+  transitions.run(previous, current)
 }
 
 function go(step) {
@@ -914,3 +1706,7 @@ stage.addEventListener("pointerup", (event) => {
 window.addEventListener("hashchange", () => show(fromHash()))
 
 show(fromHash())
+
+// The rasterizer's contract, for both a rendered folder deck and a baked
+// one-file deck: which transition enters a slide, and that slide as a texture.
+window.HypeDeck = { resolveTransition, slideTexture }

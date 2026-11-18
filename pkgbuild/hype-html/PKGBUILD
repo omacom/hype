@@ -24,7 +24,7 @@ depends=(
   'xdg-desktop-portal'
   'qt6-wayland'
 )
-makedepends=('cmake' 'gcc' 'make' 'pkgconf' 'git')
+makedepends=('cmake' 'gcc' 'make' 'pkgconf' 'git' 'qt6-shadertools')
 
 # This PKGBUILD sits at <checkout>/pkgbuild/hype-html, so the checkout root is
 # two levels up. Cloning from there lets any checkout build itself; git source

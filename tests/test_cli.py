@@ -1,6 +1,7 @@
 """Exercise the headless commands as an agent would: no display, only files and JSON."""
 import json
 import os
+import re
 import shutil
 from pathlib import Path
 import struct
@@ -167,6 +168,22 @@ class CliTests(unittest.TestCase):
         self.write('# One\n\n---\n\n```ruby\na = 1\n')
         self.assertIn('Unclosed code fence', self.hype('export', self.deck, 'talk.html', code=1).stderr)
         self.assertEqual((self.root / 'talk.html').read_text(), page)
+
+    def test_export_html_carries_transition_shaders(self):
+        self.write('---\ntransition: liquid\n---\n\n# One\n\n---\n\n# Two\n\n'
+                   '<!-- hype: transition="glitch" -->\n')
+        self.hype(self.deck, '--html', 'transitions.html')
+        self.hype(self.deck, '--html-folder', 'transitions-folder')
+        for page in (self.root / 'transitions.html', self.root / 'transitions-folder/index.html'):
+            text = page.read_text()
+            self.assertIn('transition: liquid', text)
+            self.assertIn('hype: transition="glitch"', text)
+            block = re.search(r'<script type="application/json" id="transitions">(.*?)</script>',
+                              text, re.DOTALL)
+            self.assertIsNotNone(block, page)
+            shaders = json.loads(block.group(1))
+            self.assertIn('float mask = clamp(field * 0.62', shaders['liquid'])
+            self.assertIn('float band = floor(uv.y * 15.0)', shaders['glitch'])
 
     def test_flags_export_without_a_display_and_need_a_presentation(self):
         self.write(DECK)

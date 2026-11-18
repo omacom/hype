@@ -1803,13 +1803,14 @@ QString Deck::htmlPage(const QString &stylesheet, const QString &script, const Q
     return filled + page.sliced(end);
 }
 
-// The deck's Markdown and resolved theme as inert script blocks, for both HTML
-// exports. The Markdown is the deck's source of truth: anyone who receives an
-// export can edit the block in any text editor and refresh the page (the folder
-// export) or copy it back into a presentation. The folder export embeds the
-// source as written; the one-file export strips speaker notes, since that file
-// travels to readers. A </script inside the Markdown would close the block
-// early, so it is escaped here and unescaped when read.
+// The deck's Markdown, resolved theme and transition shaders as inert script
+// blocks, for both HTML exports. The Markdown is the deck's source of truth:
+// anyone who receives an export can edit the block in any text editor and
+// refresh the page (the folder export) or copy it back into a presentation. The
+// folder export embeds the source as written; the one-file export strips
+// speaker notes, since that file travels to readers. A </script inside the
+// Markdown would close the block early, so it is escaped here and unescaped
+// when read.
 QString Deck::sourceBlock(const QString &markdownSource) const {
     QString markdown = markdownSource;
     markdown.replace("</script", "<\\/script", Qt::CaseInsensitive);
@@ -1819,9 +1820,15 @@ QString Deck::sourceBlock(const QString &markdownSource) const {
     // font of </script><script>... would close this block and run. Spell '<' as JSON's own
     // < escape: the page's JSON.parse reads back the same value.
     colors.replace('<', "\\u003c");
+    // The shader bodies travel beside the palette so the exported page can animate
+    // slide changes. transitionsJson() already spells '<' as JSON's own escape, so
+    // no body can close this block from the inside.
+    const QByteArray transitions = transitionsJson();
     return "<script type=\"text/markdown\" id=\"source\">\n" + markdown + "\n</script>\n"
            "<script type=\"application/json\" id=\"palette\">" + QString::fromUtf8(colors)
-        + "</script>";
+        + "</script>\n"
+           "<script type=\"application/json\" id=\"transitions\">"
+        + QString::fromUtf8(transitions) + "</script>";
 }
 
 // Encodes one rendered slide as WebP, named for a screen reader, and for search, as PDF bookmarks do.

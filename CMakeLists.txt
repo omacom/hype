@@ -24,6 +24,8 @@ endif()
 
 find_package(Qt6 6.9 REQUIRED COMPONENTS
   Core Gui Qml Quick QuickControls2 Multimedia Concurrent DBus Svg Widgets Test)
+# qsb is a build-time tool: Qt Quick loads only baked shader packages.
+find_package(Qt6 6.9 REQUIRED COMPONENTS ShaderToolsTools)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(WEBP REQUIRED IMPORTED_TARGET libwebp libwebpdemux)
 find_package(ZLIB REQUIRED)
@@ -54,7 +56,37 @@ else()
   endif()
 endif()
 
+# Slide transitions are one ES 1.00 body each, shared with the HTML exports. Qt
+# Quick's ShaderEffect only loads baked shader packages in Qt 6, so every body is
+# wrapped in modern GLSL and compiled by qsb here, then embedded as
+# :/transitions/<name>.frag.qsb for the QML to load. A new .glsl file is enough:
+# the glob picks it up, as the registry picks up its name.
+file(GLOB transition_bodies CONFIGURE_DEPENDS src/transitions/*.glsl)
+list(REMOVE_ITEM transition_bodies "${CMAKE_SOURCE_DIR}/src/transitions/common.glsl")
+set(transition_shaders "")
+foreach(body IN LISTS transition_bodies)
+  get_filename_component(transition_name "${body}" NAME_WE)
+  set(transition_frag "${CMAKE_CURRENT_BINARY_DIR}/transitions/${transition_name}.frag")
+  set(transition_qsb "${transition_frag}.qsb")
+  add_custom_command(OUTPUT "${transition_frag}"
+    COMMAND ${CMAKE_COMMAND}
+      "-DCOMMON=${CMAKE_SOURCE_DIR}/src/transitions/common.glsl"
+      "-DBODY=${body}"
+      "-DOUTPUT=${transition_frag}"
+      -P "${CMAKE_SOURCE_DIR}/cmake/wrap-transition.cmake"
+    DEPENDS "${body}" "${CMAKE_SOURCE_DIR}/src/transitions/common.glsl"
+            "${CMAKE_SOURCE_DIR}/cmake/wrap-transition.cmake"
+    VERBATIM)
+  add_custom_command(OUTPUT "${transition_qsb}"
+    COMMAND $<TARGET_FILE:Qt6::qsb> --qt6 -o "${transition_qsb}" "${transition_frag}"
+    DEPENDS "${transition_frag}"
+    VERBATIM)
+  list(APPEND transition_shaders "${transition_qsb}")
+endforeach()
+
 add_executable(hype src/main.cpp src/resources.qrc)
+qt_add_resources(hype "transition_shaders" PREFIX "/transitions"
+  BASE "${CMAKE_CURRENT_BINARY_DIR}/transitions" FILES ${transition_shaders})
 target_link_libraries(hype PRIVATE hype_core)
 target_compile_definitions(hype PRIVATE HYPE_VERSION="${HYPE_VERSION}")
 set_target_properties(hype PROPERTIES INTERPROCEDURAL_OPTIMIZATION ON)
@@ -67,6 +99,8 @@ find_package(Qt6 6.9 COMPONENTS Pdf)
 if(TARGET Qt6::Pdf)
   # The window-level tests load the same QML as the app, so they embed it too.
   add_executable(hype_tests tests/tests.cpp src/resources.qrc)
+  qt_add_resources(hype_tests "transition_shaders" PREFIX "/transitions"
+    BASE "${CMAKE_CURRENT_BINARY_DIR}/transitions" FILES ${transition_shaders})
   target_link_libraries(hype_tests PRIVATE hype_core Qt6::Widgets Qt6::Pdf Qt6::Test)
   set_target_properties(hype_tests PROPERTIES INTERPROCEDURAL_OPTIMIZATION ON)
   add_test(NAME hype_tests COMMAND hype_tests)
