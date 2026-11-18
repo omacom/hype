@@ -644,7 +644,8 @@ struct Definition {
 struct Definitions {
     QHash<QString, Definition> byName;
     QStringList errors;
-    bool pages = false; // Some definition shows page numbers.
+    bool pages = false;  // Some definition shows page numbers.
+    bool videos = false; // Some definition holds a <Video>.
 };
 
 const QRegularExpression &placeholder() {
@@ -1969,13 +1970,32 @@ const Node *findType(const QVector<Node> &nodes, const QString &type) {
 } // namespace
 
 void paintComposed(QPainter *p, const QString &source, const QString &base,
-                   const QVariantMap &palette, QString *warning, QStringList *problems) {
+                   const QVariantMap &palette, QString *warning, QStringList *problems,
+                   bool overVideo) {
     Ctx c = context(base, palette);
     c.p = p;
     Composition slide = compose(source, palette, c);
     if (problems)
         *problems = pick(slide.errors, false);
     const qreal scale = fitSlide(slide, c, source, base, palette);
+    if (overVideo) {
+        // What lies over the slide's video, for a player to show beneath: the slide is drawn
+        // with the video cut out of it, and all that is kept is the video's own box.
+        c.live = findType(slide.flow, "Video");
+        if (!c.live)
+            c.live = findType(slide.overlays, "Video");
+        if (!c.live)
+            return;
+        paintComposition(slide, c);
+        QPainterPath around;
+        around.addRect(QRectF(0, 0, 1920, 1080));
+        around.addRect(c.live->rect);
+        p->save();
+        p->setCompositionMode(QPainter::CompositionMode_Clear);
+        p->fillPath(around, Qt::black);
+        p->restore();
+        return;
+    }
     paintComposition(slide, c);
     if (warning) {
         if (c.smallest < 16)
@@ -2035,6 +2055,26 @@ QMap<QString, QString> componentVideo(const QString &source) {
         return inner(nodes);
     };
     return source.contains("<Video") ? search(source, 0) : QMap<QString, QString>();
+}
+
+QMap<QString, QString> definedVideo(const QString &source, const QString &base,
+                                    const QVariantMap &palette) {
+    const QString id = palette.value("template_id").toString();
+    // Only where some definition holds a video is the slide laid out to look for one.
+    if (!definitions(id).videos)
+        return {};
+    static thread_local QCache<QString, QMap<QString, QString>> cache(256);
+    const QString key = id + QChar(0) + base + QChar(0) + source;
+    if (const auto found = cache.object(key))
+        return *found;
+    Ctx c = context(base, palette);
+    Composition slide = compose(source, palette, c);
+    const Node *video = findType(slide.flow, "Video");
+    if (!video)
+        video = findType(slide.overlays, "Video");
+    const QMap<QString, QString> props = video ? video->props : QMap<QString, QString>();
+    cache.insert(key, new QMap<QString, QString>(props));
+    return props;
 }
 
 QRectF componentMediaBox(const QString &source, const QString &base, const QVariantMap &palette) {
@@ -2145,6 +2185,18 @@ QString definitionsIn(const QString &text) {
     return blocks.join("\n\n");
 }
 
+// What something still draws with: a presentation's own look, a preview the window holds.
+static QHash<QString, int> held;
+// Keeps the 64 most recent of a registry, and whatever is held however old it is.
+template <typename Store> static void forgetOld(QStringList &order, Store &store) {
+    for (int i = 0; order.size() > 64 && i < order.size();) {
+        if (held.value(order[i]) > 0)
+            ++i;
+        else
+            store.remove(order.takeAt(i));
+    }
+}
+
 QString rememberVocabulary(const QStringList &files) {
     // Each file is read once per version of it: a library template can run to hundreds of slides.
     static QHash<QString, QHash<QString, QSet<QString>>> read;
@@ -2186,8 +2238,7 @@ QString rememberVocabulary(const QStringList &files) {
     }
     vocabularies.insert(id, all);
     vocabularyOrder << id;
-    while (vocabularyOrder.size() > 64)
-        vocabularies.remove(vocabularyOrder.takeFirst());
+    forgetOld(vocabularyOrder, vocabularies);
     return id;
 }
 
@@ -2198,11 +2249,11 @@ QString rememberTemplate(const QString &text) {
     if (!registry.contains(id)) {
         Definitions defs = readDefinitions(text);
         defs.pages = text.contains("{page");
+        defs.videos = text.contains("<Video");
         registry.insert(id, defs);
         registryOrder << id;
         // Each edit of a template registers it anew; keep the recent ones.
-        while (registryOrder.size() > 64)
-            registry.remove(registryOrder.takeFirst());
+        forgetOld(registryOrder, registry);
     } else {
         // Asked for again, so still in use.
         registryOrder.move(registryOrder.indexOf(id), registryOrder.size() - 1);
@@ -2243,6 +2294,20 @@ bool remembers(const QVariantMap &palette) {
     QMutexLocker lock(&registryMutex);
     return (definitionsId.isEmpty() || registry.contains(definitionsId)) &&
            (vocabularyId.isEmpty() || vocabularies.contains(vocabularyId));
+}
+
+void holdLook(const QVariantMap &palette) {
+    QMutexLocker lock(&registryMutex);
+    for (const char *key : {"template_id", "vocabulary_id"})
+        if (const QString id = palette.value(key).toString(); !id.isEmpty())
+            ++held[id];
+}
+
+void releaseLook(const QVariantMap &palette) {
+    QMutexLocker lock(&registryMutex);
+    for (const char *key : {"template_id", "vocabulary_id"})
+        if (const QString id = palette.value(key).toString(); held.value(id) > 0 && --held[id] == 0)
+            held.remove(id);
 }
 
 bool templateShowsPages(const QString &id) { return definitions(id).pages; }

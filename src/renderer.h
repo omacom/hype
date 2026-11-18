@@ -38,6 +38,10 @@ QString withMediaDirectives(const QString &source, const QStringList &remove,
                             const QStringList &add);
 QString speakerNotes(const QString &source);
 Media parseMedia(const QString &source, const QString &base);
+// The slide's media as its presentation draws it. With the palette, a picture the
+// presentation does not hold is found in its template's images, and a <Video> that a
+// template's component brings is the slide's video.
+Media parseMedia(const QString &source, const QString &base, const QVariantMap &palette);
 // Parse errors are cached in the language they were made in; a language switch moves to a new generation.
 int translationGeneration();
 void retranslateSlides();

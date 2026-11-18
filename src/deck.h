@@ -227,6 +227,9 @@ class Deck : public QAbstractListModel {
     mutable bool m_followsDesktop = false; // Its theme is the desktop's, which may change.
     mutable QHash<QString, QPair<QString, QString>>
         m_templatePreviews; // Path: file stamp, render id.
+    // What this presentation and its template previews draw with, kept from being forgotten.
+    mutable QVariantMap m_heldLook;
+    mutable QHash<QString, QVariantMap> m_heldPreviews;
     QString templatePreview(const QString &path, const QString &title) const;
     mutable QElapsedTimer m_stampClock;
     QString templateStamp(bool force = false) const;

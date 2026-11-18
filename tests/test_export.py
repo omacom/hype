@@ -118,6 +118,53 @@ class ExportTests(unittest.TestCase):
             self.assertLess(int(offset.get('x')) + int(extent.get('cx')), width * 0.55)
             self.assertGreater(int(extent.get('cx')), width * 0.3)
 
+    def movie_box(self, archive):
+        slide = ET.fromstring(archive.read('ppt/slides/slide1.xml'))
+        pictures = list(slide.iter('{http://schemas.openxmlformats.org/presentationml/2006/main}pic'))
+        movie = next(pic for pic in pictures if pic.find('.//a:hlinkClick', NS) is not None)
+        offset, extent = movie.find('.//a:off', NS), movie.find('.//a:ext', NS)
+        return pictures, movie, int(offset.get('x')), int(offset.get('y')), int(extent.get('cx')), int(extent.get('cy'))
+
+    def test_split_video_plays_beside_its_text(self):
+        self.movie(size='640x360')
+        self.export('# Beside the video\n\nWords on the left.\n\n![layout=split](demo.mp4)\n')
+        with zipfile.ZipFile(self.output) as archive:
+            _, _, x, _, cx, _ = self.movie_box(archive)
+            width = 12192000
+            # The right half, where the layout draws it, not across the text.
+            self.assertGreater(x, width * 0.5)
+            self.assertLess(x + cx, width)
+
+    def test_title_video_plays_below_its_title(self):
+        self.movie(size='640x360')
+        self.export('# Above the video\n\n![layout=title](demo.mp4)\n')
+        with zipfile.ZipFile(self.output) as archive:
+            _, _, _, y, _, _ = self.movie_box(archive)
+            # Right below the room the title takes, 200 of the slide's 1080, where the layout
+            # draws it; a video with words over it starts lower.
+            self.assertAlmostEqual(y / 6858000 * 1080, 200, delta=2)
+
+    def test_video_in_a_definition_plays_where_its_component_puts_it(self):
+        self.movie(size='640x360')
+        self.export('<Define name="Demo" src="">\n<Row>\n<Video src="{src}" aspect="16:9"/>\n'
+                    '<Text>Beside the video</Text>\n</Row>\n</Define>\n\n<Demo src="demo.mp4"/>\n')
+        with zipfile.ZipFile(self.output) as archive:
+            self.assertEqual(len([name for name in archive.namelist() if name.endswith('.mp4')]), 1)
+            _, _, x, _, cx, _ = self.movie_box(archive)
+            width = 12192000
+            self.assertLess(x + cx, width * 0.55)
+            self.assertGreater(cx, width * 0.3)
+
+    def test_what_lies_over_a_component_video_is_laid_over_the_movie(self):
+        self.movie(size='640x360')
+        self.export('<Video src="demo.mp4" aspect="16:9"/>\n<Place at="center">\n# Over the video\n</Place>\n')
+        with zipfile.ZipFile(self.output) as archive:
+            pictures, movie, _, _, _, _ = self.movie_box(archive)
+            self.assertTrue(any('overlay' in name for name in archive.namelist()), archive.namelist())
+            # The still, the movie, then the picture of what lies over it.
+            self.assertEqual(len(pictures), 3)
+            self.assertEqual(pictures.index(movie), 1)
+
     def test_repeated_movie_is_embedded_once(self):
         self.movie(codec='mpeg4')
         self.export('![fit](demo.mp4)\n---\n![span muted](demo.mp4)\n')

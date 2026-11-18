@@ -2480,6 +2480,15 @@ void paintVideo(Node &n, Ctx &c) {
         n.prop("radius") == "theme" ? c.px(c.radius()) : c.px(n.prop("radius").toDouble());
     const QRectF r = n.rect;
     const QPainterPath clip = roundedPath(r, radius, radius, radius, radius);
+    if (c.live == &n) {
+        // The player shows through here: what was drawn beneath is cleared away, its
+        // corners are kept, and whatever is drawn after this stays over the video.
+        p->save();
+        p->setCompositionMode(QPainter::CompositionMode_Clear);
+        p->fillPath(clip, Qt::black);
+        p->restore();
+        return;
+    }
     if (n.flag("shadow"))
         paintShadow(p, r, radius, c);
     p->fillPath(clip, Qt::black);

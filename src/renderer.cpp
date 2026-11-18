@@ -247,27 +247,29 @@ QString withMediaDirectives(const QString &source, const QStringList &remove,
     reference.replace(2, end - 2, kept.join(' '));
     return withMedia(source, reference);
 }
+// A <Video> on a component slide plays in place, wherever the layout puts it.
+static void takeVideo(Media &result, const QMap<QString, QString> &video, const QString &base) {
+    if (video.value("src").isEmpty())
+        return;
+    auto flag = [&](const QString &key, bool fallback) {
+        return video.contains(key) ? video.value(key) != "false" : fallback;
+    };
+    result.file = video.value("src");
+    result.video = true;
+    result.path = assetPath(base, result.file, true);
+    result.loop = flag("loop", false);
+    result.muted = flag("muted", false);
+    result.autoplay = flag("autoplay", true);
+    if (!video.value("poster").isEmpty())
+        result.poster = assetPath(base, video.value("poster"), false);
+}
 static Media readMedia(const QString &source, const QString &base) {
     Media result;
     result.text = withoutComments(source);
     if (hasComponents(source)) {
         result.layout = "components";
         result.text = withoutDefinitions(result.text);
-        // A <Video> on a component slide plays in place, wherever the layout puts it.
-        const auto video = componentVideo(source);
-        if (!video.value("src").isEmpty()) {
-            auto flag = [&](const QString &key, bool fallback) {
-                return video.contains(key) ? video.value(key) != "false" : fallback;
-            };
-            result.file = video.value("src");
-            result.video = true;
-            result.path = assetPath(base, result.file, true);
-            result.loop = flag("loop", false);
-            result.muted = flag("muted", false);
-            result.autoplay = flag("autoplay", true);
-            if (!video.value("poster").isEmpty())
-                result.poster = assetPath(base, video.value("poster"), false);
-        }
+        takeVideo(result, componentVideo(source), base);
         return result;
     }
     auto m = mediaRe.match(outsideCode(result.text));
@@ -568,6 +570,38 @@ Media parseMedia(const QString &source, const QString &base) {
     cache.insert(key, new Media(result), qMax(1, int((key.size() + result.text.size()) * 2)));
     return result;
 }
+Media parseMedia(const QString &source, const QString &base, const QVariantMap &palette) {
+    Media media = parseMedia(source, base);
+    if (media.layout == "components") {
+        if (!media.video)
+            takeVideo(media, definedVideo(source, base, palette), base);
+        return media;
+    }
+    const QStringList folders =
+        palette.value("template_dirs").toString().split('\n', Qt::SkipEmptyParts);
+    // A slide copied from the template keeps the template's picture, as components do.
+    // Videos play from the presentation's own folder alone.
+    auto shared = [&](QString &path) {
+        if (path.isEmpty() || QFileInfo::exists(path))
+            return;
+        const QString relative = QDir(base).relativeFilePath(path);
+        if (!relative.startsWith("images/"))
+            return;
+        for (const QString &folder : folders)
+            if (const QString theirs = QDir(folder).filePath(relative); QFileInfo::exists(theirs)) {
+                path = theirs;
+                return;
+            }
+    };
+    if (folders.isEmpty())
+        return media;
+    if (!media.video)
+        shared(media.path);
+    shared(media.poster);
+    for (GalleryItem &item : media.gallery)
+        shared(item.path);
+    return media;
+}
 static QString createPoster(const QString &video, const QString &base) {
     QFileInfo info(video);
     if (!info.exists())
@@ -633,7 +667,7 @@ QStringList slideProblems(const QString &source, const QString &base, const QVar
     if (isComposedSlide(source, palette))
         return composedProblems(source, base, palette);
     QStringList errors;
-    auto media = parseMedia(source, base);
+    auto media = parseMedia(source, base, palette);
     if (!media.error.isEmpty())
         errors << media.error;
     for (const auto &item : media.gallery) {
@@ -1087,8 +1121,11 @@ void paintSlide(QPainter *p, const QRectF &target, const QString &source, const 
         palette["foreground"] = fg;
     const QVariantMap headingPalette = palette;
     if (isComposedSlide(source, palette)) {
-        // Components paint their own backdrop; there is no media to place under them.
-        if (!overlayOnly) {
+        // Components paint their own backdrop. Over a playing <Video>, only what lies over
+        // it is painted.
+        if (overlayOnly) {
+            paintComposed(p, source, base, palette, nullptr, nullptr, true);
+        } else {
             QStringList problems;
             paintComposed(p, source, base, palette, warning, &problems);
             if (!problems.isEmpty()) {
@@ -1108,7 +1145,7 @@ void paintSlide(QPainter *p, const QRectF &target, const QString &source, const 
     }
     if (!overlayOnly)
         p->fillRect(QRectF(0, 0, 1920, 1080), QColor(palette["background"].toString()));
-    auto media = parseMedia(source, base);
+    auto media = parseMedia(source, base, palette);
     const bool split = media.layout == "split";
     const bool fullCaption = media.layout == "caption";
     const bool caption = fullCaption || media.layout == "caption-right";
@@ -1536,7 +1573,8 @@ Thumbnails::Thumbnails(Deck *deck) {
             if (index < 0 || index >= deck->count())
                 continue;
             // Do not start video decoding or animation playback speculatively.
-            const auto media = parseMedia(deck->slide(index), deck->baseDir());
+            const auto media =
+                parseMedia(deck->slide(index), deck->baseDir(), deck->slidePalette(index));
             QImageReader reader(media.path);
             if (media.video || (!media.path.isEmpty() && reader.supportsAnimation() && reader.imageCount() > 1))
                 continue;
@@ -1593,9 +1631,10 @@ QQuickImageResponse *Thumbnails::requestImageResponse(const QString &id, const Q
         QByteArray::fromBase64(id.section('/', 0, 0).toLatin1(), QByteArray::Base64UrlEncoding);
     QDataStream stream(bytes);
     QString source, base;
-    stream >> source >> base;
+    QVariantMap colors;
+    stream >> source >> base >> colors;
     // Video poster decoding cannot occupy the workers needed for ordinary slides.
-    const bool video = parseMedia(source, base).video;
+    const bool video = parseMedia(source, base, colors).video;
     const bool stage = stageSized(dimensions);
     if (stage) {
         stageWidth.store(dimensions.width());

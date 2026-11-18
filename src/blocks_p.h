@@ -63,6 +63,8 @@ struct Ctx {
     QPainter *p = nullptr;
     QStringList *problems = nullptr;
     mutable qreal smallest = 1e9; // Smallest text size used, in 1080p pixels.
+    // The <Video> a player shows through, when only what lies over it is being drawn.
+    const Node *live = nullptr;
     bool overflow = false;
     bool lightSlide = false;
     QVector<QPair<QRectF, QColor>> bands; // Background bands and their average colors.

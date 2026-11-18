@@ -274,7 +274,8 @@ wrapping row of pills (`tone`, `variant`, `size`).
   embedded where it sits in PowerPoint. Thumbnails, PDF, and previews show its
   first frame, or `poster`, with a play button (`play="false"` hides it).
   Also `aspect`, `radius`, `shadow`, `autoplay`, `loop`, and `muted`. A slide
-  plays its first video.
+  plays its first video, one that a `<Define>` brings included, and whatever
+  the layout sets over a video stays over it while it plays.
 - `Collage`: photos cropped into tidy rows that fill the space, each keeping
   roughly its proportions. `rows="2"` balances them over two rows, and
   `rows="1,2"` sets each row's count. Also `gap`, `radius`, and `grayscale`.
@@ -495,8 +496,10 @@ templates/acme/
 ```
 
 A presentation built on a template takes its front matter (all but `title`),
-every `<Define>` on its slides, its fonts, and its images. The template's
-slides stay behind, as slides a new one can start from. If the template names
+every `<Define>` on its slides, its fonts, and its images: components and plain
+`![](picture.png)` slides both find them, so a slide copied from the template
+keeps its picture. Videos play only from the presentation's own `videos/`. The
+template's slides stay behind, as slides a new one can start from. If the template names
 a `theme:`, its colors come too. A `theme:` the presentation names itself
 recolors the template instead. A template can name a `template:` of its own:
 Hype follows the chain, and the nearer template wins each setting and

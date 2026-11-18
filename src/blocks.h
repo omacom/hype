@@ -24,10 +24,17 @@ QStringList composedWarnings(const QString &source, const QString &base,
                              const QVariantMap &palette);
 // Paints in 1920×1080 slide units; the caller has already scaled the painter.
 // `warning` receives fit and readability warnings.
+// With `overVideo`, only what lies over the slide's video is painted, on a clear ground,
+// for a player to show beneath it.
 void paintComposed(QPainter *painter, const QString &source, const QString &base,
-                   const QVariantMap &palette, QString *warning, QStringList *problems = nullptr);
+                   const QVariantMap &palette, QString *warning, QStringList *problems = nullptr,
+                   bool overVideo = false);
 // The first <Video> written on the slide: its props, and where the layout puts it.
 QMap<QString, QString> componentVideo(const QString &source);
+// The <Video> a template's component brings to the slide, which the slide's own text does
+// not show: found by laying the slide out.
+QMap<QString, QString> definedVideo(const QString &source, const QString &base,
+                                    const QVariantMap &palette);
 QRectF componentMediaBox(const QString &source, const QString &base, const QVariantMap &palette);
 // Every picture and video file a composed slide shows, so caches can notice when one changes.
 QStringList componentAssets(const QString &source, const QString &base, const QVariantMap &palette);
@@ -65,6 +72,10 @@ void restoreVocabulary(const QString &id, const QJsonObject &words);
 // Whether the definitions and vocabulary a palette names are still held. Only recent ones
 // are kept, so a palette cached for a long while checks before it is used again.
 bool remembers(const QVariantMap &palette);
+// Keeps what a palette names past the registries' limit, for as long as something draws
+// with it; every hold is given back with a release.
+void holdLook(const QVariantMap &palette);
+void releaseLook(const QVariantMap &palette);
 bool templateShowsPages(const QString &id);
 
 // True for a component Hype itself provides, under any of its names.

@@ -1978,7 +1978,7 @@ ApplicationWindow {
                             MediaPlayer { id: player; objectName: "player"; videoOutput: video; audioOutput: AudioOutput { muted: deck.media.muted } loops: deck.media.loop ? MediaPlayer.Infinite : 1; onErrorOccurred: function(error,message) { deck.setStatus(message) } }
                         }
                     }
-                    Image { anchors.fill: parent; source: visible ? "image://slides/" + (deck.revision, deck.renderId(deck.selected)) + "/overlay" : ""; asynchronous: true; retainWhileLoading: true; sourceSize: Qt.size(1920,1080); visible: animation.active || (videoLoader.item && videoLoader.item.visible && (deck.media.span || deck.media.layout === "title" || deck.media.layout === "split" || deck.media.layout === "caption" || deck.media.layout === "caption-right")) }
+                    Image { anchors.fill: parent; source: visible ? "image://slides/" + (deck.revision, deck.renderId(deck.selected)) + "/overlay" : ""; asynchronous: true; retainWhileLoading: true; sourceSize: Qt.size(1920,1080); visible: animation.active || (videoLoader.item && videoLoader.item.visible && (deck.media.span || deck.media.layout === "components" || deck.media.layout === "title" || deck.media.layout === "split" || deck.media.layout === "caption" || deck.media.layout === "caption-right")) }
                     Button { visible: deck.media.video && !win.presenting; anchors.centerIn: parent; text: player && player.playbackState === MediaPlayer.PlayingState ? qsTr("Pause") : "▶ " + qsTr("Play"); onClicked: win.toggleVideo() }
                     MouseArea {
                         anchors.fill: parent

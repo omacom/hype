@@ -855,6 +855,12 @@ QVariantMap Deck::palette() const {
     m_paletteDefinitions = m_parsed.definitions;
     m_paletteCache = colors;
     m_paletteStamp = templateStamp();
+    // Held for as long as this presentation draws with them.
+    const QVariantMap held{{"template_id", colors.value("template_id")},
+                           {"vocabulary_id", colors.value("vocabulary_id")}};
+    holdLook(held);
+    releaseLook(m_heldLook);
+    m_heldLook = held;
     return colors;
 }
 QVariantMap Deck::slidePalette(int index) const {
@@ -898,7 +904,7 @@ QVariantMap Deck::media() const {
     m_mediaSource = source;
     m_mediaBase = base;
     m_mediaStamp = stamp;
-    auto m = parseMedia(source, base);
+    auto m = parseMedia(source, base, slidePalette(m_selected));
     if (m.video && m.layout == "components")
         m.box = componentMediaBox(source, base, slidePalette(m_selected));
     const bool title = !m.text.trimmed().isEmpty();
@@ -1549,7 +1555,7 @@ static QString encodeRender(const QString &source, const QString &base, const QV
     QDataStream stream(&bytes, QIODevice::WriteOnly);
     // A slide with problems shows them on a banner, in the window's language.
     stream << source << base << colors << translationGeneration();
-    auto media = parseMedia(source, base);
+    auto media = parseMedia(source, base, colors);
     QStringList files{media.path, media.poster};
     for (const GalleryItem &item : media.gallery)
         files << item.path;
@@ -1612,8 +1618,16 @@ QString Deck::templatePreview(const QString &path, const QString &title) const {
             .chopped(1) +
         "\n---\n\n" +
         (starters.isEmpty() ? "# " + title + "\n\nYour next idea\n" : starters.first().source));
-    const QString id = encodeRender(sample.slide(0), sample.baseDir(), sample.slidePalette(0));
+    const QVariantMap look = sample.slidePalette(0);
+    const QString id = encodeRender(sample.slide(0), sample.baseDir(), look);
     m_templatePreviews[path] = {stamp, id};
+    // The window draws the preview later, from its id alone: what it names is kept until
+    // the preview is made again or this presentation closes.
+    const QVariantMap held{{"template_id", look.value("template_id")},
+                           {"vocabulary_id", look.value("vocabulary_id")}};
+    holdLook(held);
+    releaseLook(m_heldPreviews.value(path));
+    m_heldPreviews[path] = held;
     return id;
 }
 void Deck::chooseTemplate(const QString &name) {
@@ -1751,6 +1765,9 @@ static void stopExport(QProcess *process) {
     }
 }
 Deck::~Deck() {
+    releaseLook(m_heldLook);
+    for (const QVariantMap &held : std::as_const(m_heldPreviews))
+        releaseLook(held);
     if (m_exportProcess) {
         disconnect(m_exportProcess, nullptr, this, nullptr);
         if (m_exportProcess->state() == QProcess::Starting)
@@ -1983,7 +2000,7 @@ bool Deck::renderImages(const QString &directory, int width, bool powerPoint,
     // so the two peaks never add up.
     bool converts = false;
     for (int i = 0; powerPoint && !converts && i < count(); ++i)
-        converts = !parseMedia(slide(i), baseDir()).path.isEmpty();
+        converts = !parseMedia(slide(i), baseDir(), slidePalette(i)).path.isEmpty();
     const bool overlap = !converts || budget::availableBytes() < 0 || budget::availableBytes() > (6LL << 30);
     stills.setMaxThreadCount(budget::workers(200LL << 20, 16, overlap ? 0.4 : 0.6));
     std::atomic_bool stopped = false;
@@ -2050,10 +2067,16 @@ bool Deck::renderImages(const QString &directory, int width, bool powerPoint,
             setStatus(tr("Could not save rendered slide"));
             return false;
         }
-        auto media = parseMedia(slide(i), baseDir());
+        auto media = parseMedia(slide(i), baseDir(), slidePalette(i));
         QJsonObject entry{{"image", name}, {"warning", warning}};
-        if (media.video && media.layout == "components") {
-            const QRectF box = componentMediaBox(slide(i), baseDir(), slidePalette(i));
+        // Where the video sits, unless it fills the slide or takes the room a plain slide
+        // gives it: a component layout puts it anywhere, and the title, split and caption
+        // layouts each have a place of their own.
+        static const QStringList placing{"title", "split", "caption", "caption-right"};
+        const bool composed = media.video && media.layout == "components";
+        if (composed || (media.video && !media.span && placing.contains(media.layout))) {
+            const QRectF box = composed ? componentMediaBox(slide(i), baseDir(), slidePalette(i))
+                                        : mediaRect(media);
             entry["box"] = QJsonArray{box.x(), box.y(), box.width(), box.height()};
         }
         if (media.video) {
@@ -2105,7 +2128,9 @@ bool Deck::renderImages(const QString &directory, int width, bool powerPoint,
                 entry["muted"] = true;
             }
         }
-        if (media.video && media.span) {
+        // What lies over the video is drawn again on top of the player: the text of a
+        // slide the video fills, and whatever a component layout sets over its video.
+        if (media.video && (media.span || composed)) {
             QImage overlay(width, width * 9 / 16, QImage::Format_ARGB32_Premultiplied);
             overlay.fill(Qt::transparent);
             QPainter op(&overlay);

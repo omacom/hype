@@ -2217,6 +2217,102 @@ static void write(const QString &path, const QString &content) {
                     .join("\n")
                     .contains("belongs to another template"));
     }
+    void videosInsideDefinitionsAreTheSlidesVideo() {
+        Deck deck;
+        deck.editSource("<Define name=\"Demo\" src=\"\">\n<Row>\n<Video src=\"{src}\" "
+                        "aspect=\"16:9\" loop/>\n<Text>Beside it</Text>\n</Row>\n</Define>\n\n"
+                        "---\n\n<Demo src=\"demo.mp4\"/>\n\n---\n\n<Text>No video here</Text>\n");
+        QCOMPARE(deck.count(), 3);
+        // The slide's own words name no video; its component brings one.
+        QVERIFY(!parseMedia(deck.slide(1), deck.baseDir()).video);
+        const Media media = parseMedia(deck.slide(1), deck.baseDir(), deck.slidePalette(1));
+        QVERIFY(media.video);
+        QCOMPARE(media.file, QString("demo.mp4"));
+        QVERIFY(media.loop);
+        QVERIFY(media.path.endsWith("/videos/demo.mp4"));
+        QVERIFY(!parseMedia(deck.slide(2), deck.baseDir(), deck.slidePalette(2)).video);
+        // So the window plays it, in the place its layout gives it.
+        deck.select(1);
+        const QVariantMap shown = deck.media();
+        QVERIFY(shown.value("video").toBool());
+        const QRectF where = shown.value("rect").toRectF();
+        QVERIFY2(where.width() > 400 && where.right() < 1100,
+                 qPrintable(QString::number(where.right())));
+    }
+    void plainPicturesComeFromTheTemplateToo() {
+        QTemporaryDir dir;
+        QVERIFY(QDir(dir.path()).mkpath("kit/images") && QDir(dir.path()).mkpath("talk/images"));
+        QImage picture(400, 400, QImage::Format_RGB32);
+        picture.fill(QColor("#00ff00"));
+        QVERIFY(picture.save(dir.filePath("kit/images/photo.png")));
+        QVERIFY(picture.save(dir.filePath("kit/images/both.png")));
+        picture.fill(QColor("#0000ff"));
+        QVERIFY(picture.save(dir.filePath("talk/images/both.png")));
+        write(dir.filePath("kit/presentation.md"), "# The kit\n\n---\n\n![](photo.png)\n");
+        // A slide copied from the template names the template's picture.
+        write(dir.filePath("talk/presentation.md"),
+              "---\ntemplate: \"../kit/presentation.md\"\ncolor_background: \"#ffffff\"\n---\n\n"
+              "![](photo.png)\n\n---\n\n![](both.png)\n\n---\n\n![](nowhere.png)\n");
+        Deck deck;
+        QVERIFY(deck.loadPath(dir.filePath("talk/presentation.md"), false));
+        auto problems = [&](int i) {
+            return slideProblems(deck.slide(i), deck.baseDir(), deck.slidePalette(i)).join("\n");
+        };
+        QCOMPARE(problems(0), QString());
+        QCOMPARE(parseMedia(deck.slide(0), deck.baseDir(), deck.slidePalette(0)).path,
+                 dir.filePath("kit/images/photo.png"));
+        QVERIFY(nearColor(renderSlide(deck, 0).pixelColor(960, 540), QColor("#00ff00"), 2));
+        // The presentation's own picture of that name comes first.
+        QVERIFY(nearColor(renderSlide(deck, 1).pixelColor(960, 540), QColor("#0000ff"), 2));
+        QVERIFY2(problems(2).contains("nowhere.png"), qPrintable(problems(2)));
+    }
+    void whatLiesOverAComponentVideoIsDrawnOverThePlayer() {
+        Deck deck;
+        deck.editSource(
+            "---\ncolor_background: \"#ffffff\"\ncolor_foreground: \"#111111\"\n---\n\n"
+            "<Card fill=\"#00ff00\" pad=\"40\">\n<Video src=\"demo.mp4\" aspect=\"16:9\" "
+            "width=\"900\"/>\n</Card>\n"
+            "<Place at=\"center\" fill=\"#ff0000\" width=\"200\" height=\"60\"/>\n");
+        const QRectF video = componentMediaBox(deck.slide(0), deck.baseDir(), deck.slidePalette(0));
+        QVERIFY(video.width() > 600);
+        QImage over(1920, 1080, QImage::Format_ARGB32_Premultiplied);
+        over.fill(Qt::transparent);
+        QPainter painter(&over);
+        paintSlide(&painter, over.rect(), deck.slide(0), deck.baseDir(), deck.slidePalette(0),
+                   nullptr, true);
+        painter.end();
+        // Nothing outside the video's box: the still beneath already shows it.
+        QCOMPARE(over.pixelColor(5, 5).alpha(), 0);
+        QCOMPARE(over.pixelColor(int(video.left()) - 20, int(video.center().y())).alpha(), 0);
+        // The card behind the video is cut away, so the player shows through...
+        QCOMPARE(over.pixelColor(int(video.left()) + 30, int(video.top()) + 30).alpha(), 0);
+        // ...and what was placed over it stays on top.
+        QVERIFY(video.contains(QPointF(960, 540)));
+        QVERIFY(nearColor(over.pixelColor(960, 540), QColor("#ff0000"), 2));
+        QCOMPARE(over.pixelColor(960, 540).alpha(), 255);
+        // A slide with no video has nothing to lay over one.
+        deck.editSource("<Card fill=\"#00ff00\">\nWords\n</Card>\n");
+        over.fill(Qt::transparent);
+        QPainter again(&over);
+        paintSlide(&again, over.rect(), deck.slide(0), deck.baseDir(), deck.slidePalette(0),
+                   nullptr, true);
+        again.end();
+        QCOMPARE(over.pixelColor(960, 540).alpha(), 0);
+    }
+    void heldDefinitionsAreNotForgotten() {
+        const QVariantMap look{
+            {"template_id", rememberTemplate("<Define name=\"Held\">\n{children}\n</Define>\n")}};
+        // A preview the window still shows keeps what it draws with, however many
+        // templates are looked at after it; once given back, it goes like any other.
+        holdLook(look);
+        for (int i = 0; i < 80; ++i)
+            rememberTemplate(QString("<Define name=\"Later%1\">\n{children}\n</Define>\n").arg(i));
+        QVERIFY(remembers(look));
+        releaseLook(look);
+        for (int i = 0; i < 80; ++i)
+            rememberTemplate(QString("<Define name=\"Last%1\">\n{children}\n</Define>\n").arg(i));
+        QVERIFY(!remembers(look));
+    }
     void presentationsAreTemplatesAndDefineComponents() {
         QTemporaryDir dir;
         QVERIFY(QDir(dir.path()).mkpath("base/images") && QDir(dir.path()).mkpath("kit") &&
