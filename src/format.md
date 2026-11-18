@@ -238,6 +238,8 @@ hype check talk/presentation.md --json     every problem, with slide and line
 hype slides talk/presentation.md --json    an outline of the slides
 hype render talk/presentation.md --slide 3 -o slide.png
 hype render talk/presentation.md -o slides/        every slide, plus slides.json
+hype render talk/presentation.md --slide 3 -o slide.webp   smaller: webp or jpg, --quality 1-100
+hype batch                                         many renders and checks from one process
 hype export talk/presentation.md talk.pdf          or talk.pptx
 hype icons chart                                   icons for components
 hype new talk/presentation.md --template acme      start from a template

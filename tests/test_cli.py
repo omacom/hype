@@ -113,6 +113,68 @@ class CliTests(unittest.TestCase):
         manifest = json.loads((self.root / 'all/slides.json').read_text())
         self.assertEqual([s['image'] for s in manifest['slides']], ['slide-001.png', 'slide-002.png', 'slide-003.png'])
 
+    def test_render_writes_smaller_pictures_when_asked(self):
+        self.write(DECK)
+        # One slide takes its format from the file it is saved as.
+        self.hype('render', self.deck, '--slide', 1, '-o', 'one.webp', '--width', 640)
+        self.hype('render', self.deck, '--slide', 1, '-o', 'one.jpg', '--width', 640, '--quality', 80)
+        self.hype('render', self.deck, '--slide', 1, '-o', 'one.png', '--width', 640)
+        webp, jpg = (self.root / 'one.webp').read_bytes(), (self.root / 'one.jpg').read_bytes()
+        self.assertEqual((webp[:4], webp[8:12]), (b'RIFF', b'WEBP'))
+        self.assertEqual(jpg[:3], b'\xff\xd8\xff')
+        self.assertLess(len(webp), (self.root / 'one.png').stat().st_size)
+        # A directory has no ending to go by, so the format is named.
+        self.hype('render', self.deck, '-o', 'all', '--format', 'webp', '--width', 320)
+        manifest = json.loads((self.root / 'all/slides.json').read_text())
+        self.assertEqual([s['image'] for s in manifest['slides']], ['slide-001.webp', 'slide-002.webp', 'slide-003.webp'])
+        self.assertEqual((self.root / 'all/slide-002.webp').read_bytes()[:4], b'RIFF')
+        self.hype('render', self.deck, '--slide', 2, '--format', 'jpg')
+        self.assertEqual((self.root / 'slide-002.jpg').read_bytes()[:3], b'\xff\xd8\xff')
+        self.assertIn('png, webp or jpg', self.hype('render', self.deck, '--slide', 1, '--format', 'gif', code=1).stderr)
+        self.assertIn('between 1 and 100', self.hype('render', self.deck, '--slide', 1, '-o', 'x.webp', '--quality', 0, code=1).stderr)
+
+    def test_batch_answers_many_requests_from_one_process(self):
+        self.write(DECK + '\n---\n\n![](missing.png)\n')
+        requests = [
+            {'id': 1, 'command': 'render', 'presentation': str(self.deck), 'slide': 2, 'width': 320, 'output': str(self.root / 'two.webp')},
+            {'id': 'a', 'command': 'check', 'presentation': str(self.deck)},
+            {'id': 2, 'command': 'render', 'presentation': str(self.deck), 'slide': 4, 'output': str(self.root / 'four.png')},
+            {'id': 3, 'command': 'render', 'presentation': str(self.deck), 'slide': 9, 'output': str(self.root / 'nine.png')},
+            {'id': 4, 'command': 'render', 'presentation': str(self.root / 'nowhere.md'), 'slide': 1, 'output': str(self.root / 'x.png')},
+            {'id': 5, 'command': 'export'},
+        ]
+        lines = '\n'.join(json.dumps(request) for request in requests) + '\nnot json\n'
+        result = subprocess.run([str(APP), 'batch'], input=lines, env=self.env, cwd=self.root, capture_output=True, text=True,
+                                timeout=60)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        answers = [json.loads(line) for line in result.stdout.splitlines()]
+        self.assertEqual([answer.get('id') for answer in answers], [1, 'a', 2, 3, 4, 5, None])
+        self.assertEqual((answers[0]['width'], answers[0]['height'], answers[0]['problems']), (320, 180, []))
+        self.assertEqual((self.root / 'two.webp').read_bytes()[:4], b'RIFF')
+        # The same answers the commands give with --json.
+        self.assertEqual({key: answers[1][key] for key in ('ok', 'slides', 'problems')},
+                         json.loads(self.hype('check', self.deck, '--json', code=1).stdout))
+        self.assertIn('Missing media: missing.png', answers[2]['problems'][0]['message'])
+        self.assertEqual(self.png_size(self.root / 'four.png'), (1920, 1080))
+        self.assertIn('there are 4 slides', answers[3]['error'])
+        self.assertIn('nowhere.md', answers[4]['error'])
+        self.assertIn('render and check', answers[5]['error'])
+        self.assertIn('Not a JSON object', answers[6]['error'])
+        # The presentation is read afresh for each request.
+        process = subprocess.Popen([str(APP), 'batch'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, env=self.env,
+                                   cwd=self.root, text=True)
+        self.addCleanup(process.kill)
+        ask = json.dumps({'command': 'check', 'presentation': str(self.deck)}) + '\n'
+        process.stdin.write(ask)
+        process.stdin.flush()
+        self.assertEqual(json.loads(process.stdout.readline())['slides'], 4)
+        self.write(DECK)
+        process.stdin.write(ask)
+        process.stdin.flush()
+        self.assertEqual(json.loads(process.stdout.readline()), {'ok': True, 'slides': 3, 'problems': []})
+        process.stdin.close()
+        self.assertEqual(process.wait(timeout=10), 0)
+
     def test_render_shows_a_broken_slide_but_fails(self):
         self.write('# One\n\n---\n\n![](missing.png)\n')
         result = self.hype('render', self.deck, '--slide', 2, '-o', 'broken.png', code=1)

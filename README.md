@@ -243,6 +243,8 @@ hype check talk/presentation.md                   # every problem, with its slid
 hype slides talk/presentation.md                  # an outline: number, lines, headline, media
 hype render talk/presentation.md --slide 3 -o slide.png
 hype render talk/presentation.md -o slides/       # every slide, plus slides.json
+hype render talk/presentation.md --slide 3 -o slide.webp --quality 85   # smaller: webp or jpg
+hype batch                                        # many renders and checks from one process
 hype export talk/presentation.md talk.pdf         # or talk.pptx
 hype themes
 hype templates                                    # templates a presentation can name

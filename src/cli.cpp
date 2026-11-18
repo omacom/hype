@@ -2,6 +2,7 @@
 #include "blocks.h"
 #include "deck.h"
 #include "fonts.h"
+#include "images.h"
 #include "renderer.h"
 #include "templates.h"
 #include <QCommandLineParser>
@@ -199,6 +200,16 @@ struct Command {
     bool reportFonts = true; // check and fonts report missing fonts themselves.
 };
 
+QJsonObject checked(const Deck &deck, const QList<Problem> &problems) {
+    int errors = 0;
+    QJsonArray list;
+    for (const auto &problem : problems) {
+        errors += problem.error;
+        list << toJson(problem);
+    }
+    return {{"ok", errors == 0}, {"slides", deck.count()}, {"problems", list}};
+}
+
 int check(const QStringList &arguments) {
     Command command("check", "Report every problem in a presentation, with its slide and line.");
     command.json();
@@ -212,10 +223,7 @@ int check(const QStringList &arguments) {
     for (const auto &problem : problems)
         errors += problem.error;
     if (command.parser.isSet("json")) {
-        QJsonArray list;
-        for (const auto &problem : problems)
-            list << toJson(problem);
-        print({{"ok", errors == 0}, {"slides", deck.count()}, {"problems", list}});
+        print(checked(deck, problems));
         return errors ? 1 : 0;
     }
     for (const auto &problem : problems)
@@ -253,12 +261,54 @@ int slides(const QStringList &arguments) {
     return 0;
 }
 
+// One slide painted to a file, with what is wrong with it. A slide with problems still
+// renders, with the problems on a banner, so it can be looked at.
+struct Still {
+    bool saved = false;
+    int errors = 0;
+    QList<Problem> problems;
+    QJsonObject result;
+};
+Still renderStill(const Deck &deck, const ParsedDeck &parsed, int index, int width,
+                  const QString &output, const QByteArray &format, int quality) {
+    Still still;
+    QDir().mkpath(QFileInfo(output).absolutePath());
+    still.problems = slideProblemsAt(deck, parsed, index);
+    QString warning;
+    const QImage image = paint(deck, index, width, &warning);
+    still.saved = savePicture(image, output, format, quality);
+    if (!warning.isEmpty() && std::none_of(still.problems.cbegin(), still.problems.cend(),
+                                           [](const Problem &problem) { return problem.error; }))
+        still.problems << Problem{index + 1, firstLine(deck.source(), parsed.slides[index]), false,
+                                  warning};
+    QJsonArray list;
+    for (const auto &problem : still.problems) {
+        still.errors += problem.error;
+        list << toJson(problem);
+    }
+    still.result = {{"slide", index + 1},
+                    {"image", QFileInfo(output).absoluteFilePath()},
+                    {"width", image.width()},
+                    {"height", image.height()},
+                    {"problems", list}};
+    return still;
+}
+
 int render(const QStringList &arguments) {
-    Command command("render", "Render one slide to a PNG, or every slide to a directory with slides.json.");
+    Command command(
+        "render", "Render one slide to a picture, or every slide to a directory with slides.json.");
     command.parser.addOption({"slide", "Render only this slide (1-based)", "number"});
-    command.parser.addOption({{"o", "output"}, "PNG file for one slide, or directory for all (default: "
-                                               "slide-NNN.png, or slides/)", "path"});
+    command.parser.addOption({{"o", "output"},
+                              "Picture file for one slide, or directory for all (default: "
+                              "slide-NNN.png, or slides/)",
+                              "path"});
     command.parser.addOption({"width", "Image width in pixels (default: 1920)", "pixels", "1920"});
+    command.parser.addOption(
+        {"format", "png, webp or jpg (default: the output file's ending, else png)", "format"});
+    command.parser.addOption({"quality",
+                              "For webp and jpg, 1 to 100; webp at 100 loses nothing "
+                              "(default: 90)",
+                              "number", "90"});
     command.json();
     command.parser.process(arguments);
     Deck deck;
@@ -269,10 +319,23 @@ int render(const QStringList &arguments) {
         return fail("Width must be between 160 and 7680.");
     const bool json = command.parser.isSet("json");
     QString output = command.parser.value("output");
-    if (!command.parser.isSet("slide")) {
+    const bool single = command.parser.isSet("slide");
+    // One slide's format can come from the file it is saved as; a directory's has to be said.
+    const QString named = command.parser.isSet("format") ? command.parser.value("format")
+                          : single                       ? QFileInfo(output).suffix()
+                                                         : QString();
+    QByteArray format = pictureFormat(named);
+    if (format.isEmpty() && command.parser.isSet("format"))
+        return fail("Format must be png, webp or jpg.");
+    if (format.isEmpty())
+        format = "png";
+    const int quality = command.parser.value("quality").toInt();
+    if (quality < 1 || quality > 100)
+        return fail("Quality must be between 1 and 100.");
+    if (!single) {
         if (output.isEmpty())
             output = "slides";
-        if (!deck.renderImages(output, width))
+        if (!deck.renderImages(output, width, false, format, quality))
             return fail(deck.status());
         if (json)
             print({{"directory", QFileInfo(output).absoluteFilePath()},
@@ -282,45 +345,105 @@ int render(const QStringList &arguments) {
             print(stdout, QString("Rendered %1 slides to %2").arg(deck.count()).arg(output));
         return 0;
     }
-    const int number = command.parser.value("slide").toInt();
     const auto parsed = parseDeck(deck.source());
+    const int number = command.parser.value("slide").toInt();
     if (!parsed.error.isEmpty())
         return fail(QString("%1:%2: %3").arg(command.argument(1)).arg(lineAt(deck.source(), parsed.errorOffset))
                         .arg(parsed.error));
     if (number < 1 || number > deck.count())
         return fail(QString("Slide %1 does not exist; there are %2 slides.").arg(number).arg(deck.count()));
-    const QString name = QString("slide-%1.png").arg(number, 3, 10, QChar('0'));
+    const QString name =
+        QString("slide-%1.%2").arg(number, 3, 10, QChar('0')).arg(QString::fromLatin1(format));
     if (output.isEmpty())
         output = name;
     else if (QFileInfo(output).isDir())
         output = QDir(output).filePath(name);
-    QDir().mkpath(QFileInfo(output).absolutePath());
-    // A slide with problems still renders, with the problems on a banner, so it can be looked at.
-    const auto problems = slideProblemsAt(deck, parsed, number - 1);
-    QString warning;
-    const QImage image = paint(deck, number - 1, width, &warning);
-    if (!image.save(output, "PNG"))
+    const Still still = renderStill(deck, parsed, number - 1, width, output, format, quality);
+    if (!still.saved)
         return fail("Could not save " + output);
-    int errors = 0;
-    QJsonArray list;
-    for (const auto &problem : problems) {
-        errors += problem.error;
-        list << toJson(problem);
-        if (!json)
-            print(stderr, toText(command.argument(1), problem));
-    }
-    if (problems.isEmpty() && !warning.isEmpty()) {
-        const Problem problem{number, firstLine(deck.source(), parsed.slides[number - 1]), false, warning};
-        list << toJson(problem);
-        if (!json)
-            print(stderr, toText(command.argument(1), problem));
-    }
     if (json)
-        print({{"slide", number}, {"image", QFileInfo(output).absoluteFilePath()}, {"width", image.width()},
-               {"height", image.height()}, {"problems", list}});
-    else
+        print(still.result);
+    else {
+        for (const auto &problem : still.problems)
+            print(stderr, toText(command.argument(1), problem));
         print(stdout, "Rendered " + output);
-    return errors ? 1 : 0;
+    }
+    return still.errors ? 1 : 0;
+}
+
+// One request of `hype batch`, answered as the command of the same name would with --json.
+QJsonObject answer(const QJsonObject &request) {
+    auto failed = [](const QString &message) { return QJsonObject{{"error", message}}; };
+    const QString command = request["command"].toString();
+    if (command != "render" && command != "check")
+        return failed("Unknown command; batch answers render and check.");
+    const QString path = request["presentation"].toString();
+    if (path.isEmpty())
+        return failed("Name a Markdown presentation.");
+    Deck deck;
+    if (!deck.loadPath(path, false))
+        return failed(path + ": " + deck.status());
+    deck.fetchFonts();
+    if (command == "check")
+        return checked(deck, findProblems(deck));
+    const QString output = request["output"].toString();
+    if (output.isEmpty())
+        return failed("Name an output file.");
+    const QByteArray format = pictureFormat(
+        request.contains("format") ? request["format"].toString() : QFileInfo(output).suffix());
+    if (format.isEmpty())
+        return failed("Format must be png, webp or jpg.");
+    const int width = request["width"].toInt(1920), quality = request["quality"].toInt(90);
+    if (width < 160 || width > 7680)
+        return failed("Width must be between 160 and 7680.");
+    if (quality < 1 || quality > 100)
+        return failed("Quality must be between 1 and 100.");
+    const auto parsed = parseDeck(deck.source());
+    if (!parsed.error.isEmpty())
+        return failed(QString("%1:%2: %3")
+                          .arg(path)
+                          .arg(lineAt(deck.source(), parsed.errorOffset))
+                          .arg(parsed.error));
+    const int number = request["slide"].toInt();
+    if (number < 1 || number > deck.count())
+        return failed(
+            QString("Slide %1 does not exist; there are %2 slides.").arg(number).arg(deck.count()));
+    const Still still = renderStill(deck, parsed, number - 1, width, output, format, quality);
+    return still.saved ? still.result : failed("Could not save " + output);
+}
+
+// Every other command starts, reads its fonts, templates and pictures, answers and exits. A
+// program that draws slides all day, such as a server behind an editor, keeps this one
+// running instead, so what one request loaded is there for the next, as it is in the editor.
+int batch(const QStringList &arguments) {
+    Command command("batch", "Answer many render and check requests from one process.", false);
+    command.parser.setApplicationDescription(
+        "Answer render and check requests from standard input, one JSON object per line, until "
+        "it closes. Each answer is one line of JSON on standard output, in the order asked.\n\n"
+        "  {\"id\": 1, \"command\": \"render\", \"presentation\": \"talk/presentation.md\", "
+        "\"slide\": 3,\n   \"width\": 640, \"output\": \"/tmp/slide-3.webp\", \"quality\": 85}\n"
+        "  {\"id\": 2, \"command\": \"check\", \"presentation\": \"talk/presentation.md\"}\n\n"
+        "An answer holds what the command prints with --json, the request's id, and \"error\" "
+        "when the request could not be carried out. Presentations are read afresh each time.");
+    command.parser.process(arguments);
+    QFile input;
+    if (!input.open(stdin, QIODevice::ReadOnly))
+        return fail("Could not read standard input.");
+    for (QByteArray line = input.readLine(); !line.isEmpty(); line = input.readLine()) {
+        if (line.trimmed().isEmpty())
+            continue;
+        QJsonParseError parse;
+        const QJsonDocument document = QJsonDocument::fromJson(line, &parse);
+        QJsonObject reply =
+            document.isObject()
+                ? answer(document.object())
+                : QJsonObject{{"error", "Not a JSON object: " + parse.errorString()}};
+        if (document.isObject() && document.object().contains("id"))
+            reply["id"] = document.object()["id"];
+        fprintf(stdout, "%s\n", QJsonDocument(reply).toJson(QJsonDocument::Compact).constData());
+        fflush(stdout);
+    }
+    return 0;
 }
 
 int exportDeck(const QStringList &arguments) {
@@ -777,8 +900,10 @@ QString cliSummary() {
            "  new <presentation>              Start a presentation\n"
            "  check <presentation>            Report every problem, with slide and line\n"
            "  slides <presentation>           Outline the slides\n"
-           "  render <presentation>           Render one slide or all of them to PNG\n"
+           "  render <presentation>           Render one slide or all of them to pictures\n"
            "  export <presentation> <output>  Export PDF or PowerPoint\n"
+           "  batch                           Answer many render and check requests from one "
+           "process\n"
            "  themes                          List installed themes\n"
            "  templates [presentation]        List the templates a presentation can use\n"
            "  template save <presentation>    Add a presentation to the template library\n"
@@ -793,7 +918,7 @@ QString cliSummary() {
            "  skill [install]                 Print the skill for coding agents, or install it";
 }
 bool isCliCommand(const QString &word) {
-    return QStringList{"new",       "check",    "slides", "render", "export", "themes",
+    return QStringList{"new",       "check",    "slides", "render", "export", "batch", "themes",
                        "templates", "template", "icons",  "fonts",  "skill",  "help"}
         .contains(word);
 }
@@ -803,6 +928,7 @@ int runCli(const QStringList &arguments) {
            : command == "check"     ? check(arguments)
            : command == "slides"    ? slides(arguments)
            : command == "render"    ? render(arguments)
+           : command == "batch"     ? batch(arguments)
            : command == "export"    ? exportDeck(arguments)
            : command == "themes"    ? themes(arguments)
            : command == "templates" ? templatesCommand(arguments)

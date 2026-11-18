@@ -63,3 +63,19 @@ QByteArray compressedImage(const QImage &image, QString *extension) {
     }
     return png;
 }
+
+QByteArray pictureFormat(const QString &name) {
+    const QString format = name.toLower();
+    return format == "png" || format == "webp"   ? format.toLatin1()
+           : format == "jpg" || format == "jpeg" ? QByteArray("jpg")
+                                                 : QByteArray();
+}
+
+bool savePicture(const QImage &image, const QString &path, const QByteArray &format, int quality) {
+    if (format == "png")
+        return image.save(path, "PNG");
+    QImageWriter writer(path, format == "jpg" ? "jpeg" : format);
+    writer.setQuality(qBound(1, quality, 100));
+    // JPEG has no transparency; a slide's backdrop covers it anyway.
+    return writer.write(format == "jpg" ? image.convertToFormat(QImage::Format_RGB32) : image);
+}

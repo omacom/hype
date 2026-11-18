@@ -1926,7 +1926,8 @@ static bool opaque(const QImage &image) {
     }
     return true;
 }
-bool Deck::renderImages(const QString &directory, int width, bool powerPoint) {
+bool Deck::renderImages(const QString &directory, int width, bool powerPoint,
+                        const QByteArray &format, int quality) {
     if (!validateStructure("export"))
         return false;
     for (int i = 0; i < count(); ++i) {
@@ -1961,7 +1962,7 @@ bool Deck::renderImages(const QString &directory, int width, bool powerPoint) {
         rendered << QtConcurrent::run(
             &stills,
             [&stopped, source = slide(i), base = baseDir(), colors = slidePalette(i), width,
-             directory, powerPoint, i]() -> Still {
+             directory, powerPoint, format, quality, i]() -> Still {
                 if (stopped)
                     return {};
                 QImage image(width, width * 9 / 16, QImage::Format_ARGB32_Premultiplied);
@@ -1974,10 +1975,14 @@ bool Deck::renderImages(const QString &directory, int width, bool powerPoint) {
                 // is invisible, and the file is a fraction of the size. A slide with transparency
                 // stays PNG, and so does every image a plain render hands back.
                 const bool jpeg = powerPoint && opaque(image);
-                still.name =
-                    QString("slide-%1.%2").arg(i + 1, 3, 10, QChar('0')).arg(jpeg ? "jpg" : "png");
+                still.name = QString("slide-%1.%2")
+                                 .arg(i + 1, 3, 10, QChar('0'))
+                                 .arg(jpeg ? "jpg" : QString::fromLatin1(format));
                 const QString path = directory + "/" + still.name;
-                if (jpeg)
+                // A render asked for in a smaller format: pictures on their way to a browser.
+                if (!powerPoint && format != "png")
+                    still.saved = savePicture(image, path, format, quality);
+                else if (jpeg)
                     still.saved =
                         image.convertToFormat(QImage::Format_RGB32).save(path, "JPEG", 92);
                 else
