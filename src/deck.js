@@ -1338,21 +1338,43 @@ const slides = [...stage.querySelectorAll(".slide")]
 
 const slideTextures = new Map()
 
-function slideTexture(index) {
-  if (!Number.isInteger(index) || index < 0 || index >= slides.length)
+// Picture formats a browser can animate on its own. A still file in one of them
+// costs a single extra paint; a stale frame would otherwise show mid-transition.
+const ANIMATED_EXT = [ "gif", "webp" ]
+const URL_QUERY = /[?#]/
+
+function hasMovingMedia(section) {
+  if (section.querySelector("video")) return true
+  return [ ...section.querySelectorAll("img") ].some((element) => {
+    const path = element.src.split(URL_QUERY)[0]
+    const dot = path.lastIndexOf(".")
+    return dot >= 0 && ANIMATED_EXT.includes(path.slice(dot + 1).toLowerCase())
+  })
+}
+
+function slideTexture(index, refresh = false) {
+  if (!Number.isInteger(index) || index < 0 || index >= slides.length) {
     return null
-  const cached = slideTextures.get(index)
-  if (cached)
-    return cached
+  }
   const section = slides[index]
+  const cached = slideTextures.get(index)
+  if (cached) {
+    // A video or an animated picture has moved past the frame the cache holds,
+    // so a transition repaints it in place and keeps the identity it uploads.
+    if (refresh && hasMovingMedia(section)) {
+      paintSlideToCanvas(section, cached)
+    }
+    return cached
+  }
   const texture = paintSlideToCanvas(section)
   slideTextures.set(index, texture)
   // A texture painted before its pictures decoded is repainted, not replaced.
   const repaint = () => paintSlideToCanvas(section, texture)
   for (const element of section.querySelectorAll("img, video")) {
     if (element.tagName === "VIDEO") {
-      if (element.readyState < 2)
+      if (element.readyState < 2) {
         element.addEventListener("loadeddata", repaint, { once: true })
+      }
     } else if (!element.complete) {
       element.addEventListener("load", repaint, { once: true })
     }
@@ -1558,9 +1580,10 @@ const transitions = (() => {
   }
 
   // A 1920 × 1080 canvas painted from the slide, as the rasterizer supplies it.
-  function textureFor(index) {
+  // `refresh` repaints a moving slide's cached canvas before it is uploaded.
+  function textureFor(index, refresh) {
     try {
-      return slideTexture(index)
+      return slideTexture(index, refresh)
     } catch {
       return null
     }
@@ -1581,7 +1604,8 @@ const transitions = (() => {
     cancel()
     const transition = resolveTransition(toIndex)
     if (transition.name === "none" || !setUp()) return
-    const from = textureFor(fromIndex), to = textureFor(toIndex)
+    const from = textureFor(fromIndex, true)
+    const to = textureFor(toIndex, true)
     if (!from || !to) return
     const program = compile(transition.name)
     if (!program) return

@@ -200,6 +200,103 @@ transition-duration: 9
 </html>
 """
 
+# A deck whose first slide is an animated picture. Leaving it must repaint the
+# cached texture, because the picture has moved past the frame it was painted
+# with; a slide of text keeps its cache.
+MOVING_PAGE = """<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>deck moving media</title>
+    <link rel="stylesheet" href="__STYLESHEET__">
+  </head>
+  <body>
+    <div class="stage" id="stage">
+      <button type="button" class="nav prev" aria-label="Previous">&#8249;</button>
+      <button type="button" class="nav next" aria-label="Next">&#8250;</button>
+      <div class="counter" id="counter"></div>
+    </div>
+    <script type="text/markdown" id="source">---
+transition: "crossfade"
+transition-duration: 4
+---
+
+![](images/anim.gif)
+
+---
+
+# Still
+
+---
+
+# Third</script>
+    <script type="application/json" id="palette">{"background": "#1a1b26", "foreground": "#a9b1d6", "accent": "#7aa2f7"}</script>
+    <script type="application/json" id="transitions">{"crossfade":"vec4 transition(vec2 uv) { return mix(texture2D(fromTex, uv), texture2D(toTex, uv), progress); }"}</script>
+    <script src="__SCRIPT__"></script>
+    <script>
+      window.addEventListener("load", async () => {
+        const results = []
+        const add = (ok, name, detail) =>
+          results.push((ok ? "PASS " : "FAIL ") + name + (detail === undefined ? "" : " (" + detail + ")"))
+        const hook = window.HypeDeck
+        const hooked = !!hook && typeof hook.slideTexture === "function"
+        add(hooked, "HypeDeck hook")
+        if (hooked) {
+          // Every in-place repaint goes through this wrapper, so the test can
+          // tell a fresh paint from an upload of the cache.
+          const repaints = []
+          const paint = window.paintSlideToCanvas
+          add(typeof paint === "function", "rasterizer instrumentable")
+          window.paintSlideToCanvas = function (section, output, ...rest) {
+            if (output) repaints.push({ section, output })
+            return paint(section, output, ...rest)
+          }
+          const sections = [...document.querySelectorAll("section.slide")]
+          const texture = hook.slideTexture(0)
+          add(texture instanceof HTMLCanvasElement, "moving texture canvas")
+          add(!!hook.slideTexture(1), "static texture canvas")
+
+          const direct = repaints.length
+          hook.slideTexture(0, true)
+          add(repaints.length === direct + 1 && repaints[direct].section === sections[0],
+              "refresh repaints moving media", repaints.length - direct)
+          add(hook.slideTexture(0) === texture, "refresh keeps texture identity")
+          hook.slideTexture(1, true)
+          add(repaints.length === direct + 1, "refresh keeps static cache", repaints.length - direct)
+
+          // The transition engine is the only other caller; headless browsers
+          // may refuse it a context, which is a skip rather than a failure.
+          const probe = document.createElement("canvas")
+          if (!probe.getContext("webgl", { alpha: false, antialias: false })) {
+            results.push("SKIP webgl unavailable in headless")
+          } else {
+            const before = repaints.length
+            window.show(1)
+            const leaving = repaints.slice(before).filter(entry => entry.section === sections[0])
+            add(leaving.length === 1, "departing moving texture repainted", leaving.length)
+            add(leaving.length === 1 && leaving[0].output === texture,
+                "repaint reused the cached canvas")
+
+            window.show(0)
+            const entering = repaints.slice(before).filter(entry => entry.section === sections[0])
+            add(entering.length === 2, "incoming moving texture repainted", entering.length)
+
+            const still = repaints.length
+            window.show(2)
+            add(repaints.slice(still).every(entry => entry.section !== sections[1]),
+                "static texture stayed cached")
+          }
+        }
+        const report = document.createElement("pre")
+        report.id = "results"
+        report.textContent = results.join("\\n")
+        document.body.appendChild(report)
+      })
+    </script>
+  </body>
+</html>
+"""
+
 # A baked deck (the one-file export): the slides are pictures already, so the
 # transition engine reads them into WebGL textures. A null context is a skip.
 BAKED_PAGE = """<!DOCTYPE html>
@@ -312,8 +409,12 @@ transition-duration: 4
 
 @unittest.skipUnless(CHROMIUM, 'chromium is not installed')
 class DeckTransitionTests(unittest.TestCase):
-    def render(self, page):
+    def render(self, page, files=None):
         with tempfile.TemporaryDirectory() as directory:
+            for name, content in (files or {}).items():
+                target = Path(directory) / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(content)
             document = Path(directory) / 'index.html'
             document.write_text(page
                                 .replace('__STYLESHEET__', (ROOT / 'src/deck.css').as_uri())
@@ -346,6 +447,16 @@ class DeckTransitionTests(unittest.TestCase):
         self.assertGreaterEqual(report.count('PASS'), 6, report)
         self.assertTrue('PASS transition drew frames' in report or 'SKIP webgl' in report
                         or 'SKIP engine webgl' in report, report)
+
+    def test_moving_media_texture_repaints_at_transition(self):
+        animated = (ROOT / 'tests/fixtures/animated.gif').read_bytes()
+        report = self.render(MOVING_PAGE, {'images/anim.gif': animated})
+        self.assertNotIn('FAIL', report, report)
+        # Hook, instrumentation, both textures, and the direct refresh checks.
+        self.assertGreaterEqual(report.count('PASS'), 7, report)
+        self.assertIn('PASS refresh repaints moving media', report)
+        self.assertTrue('PASS departing moving texture repainted' in report
+                        or 'SKIP webgl' in report, report)
 
 
 if __name__ == '__main__':
