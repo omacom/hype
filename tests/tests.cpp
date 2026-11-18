@@ -2239,6 +2239,19 @@ static void write(const QString &path, const QString &content) {
                  QString("clip2.mp4"));
         QCOMPARE(parseMedia(paged.slide(2), paged.baseDir(), paged.slidePalette(2)).file,
                  QString("clip3.mp4"));
+        // The frame a presentation names wraps its slides, and may bring the video: with
+        // another frame, the same slide plays another clip.
+        const QString frames =
+            "<Define name=\"Day\">\n<Video src=\"day.mp4\"/>\n{children}\n</Define>\n\n"
+            "<Define name=\"Night\">\n<Video src=\"night.mp4\"/>\n{children}\n</Define>\n\n"
+            "---\n\n<Text>Words</Text>\n";
+        Deck framed;
+        framed.editSource("---\nframe: Day\n---\n\n" + frames);
+        QCOMPARE(parseMedia(framed.slide(1), framed.baseDir(), framed.slidePalette(1)).file,
+                 QString("day.mp4"));
+        framed.editSource("---\nframe: Night\n---\n\n" + frames);
+        QCOMPARE(parseMedia(framed.slide(1), framed.baseDir(), framed.slidePalette(1)).file,
+                 QString("night.mp4"));
         // The window plays each slide's own clip as the selection moves between them.
         paged.select(1);
         QVERIFY(paged.media().value("url").toUrl().path().endsWith("clip2.mp4"));

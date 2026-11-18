@@ -904,8 +904,10 @@ QVariantMap Deck::media() const {
     const QString source = slideSource(), base = baseDir();
     // A template can move a component video, so its stamp is part of the key; and where
     // slides know their page, two that read alike may still play different videos.
+    const QVariantMap colors = slidePalette(m_selected);
     const QString stamp = m_parsed.header + templateStamp() + QChar(0) +
-                          slidePalette(m_selected).value("page").toString();
+                          colors.value("template_id").toString() + QChar(0) +
+                          colors.value("page").toString() + '/' + colors.value("pages").toString();
     if (!m_mediaCache.isEmpty() && m_mediaSource == source && m_mediaBase == base &&
         m_mediaStamp == stamp)
         return m_mediaCache;

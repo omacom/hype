@@ -2063,11 +2063,15 @@ QMap<QString, QString> definedVideo(const QString &source, const QString &base,
     // Only where some definition holds a video is the slide laid out to look for one.
     if (!definitions(id).videos)
         return {};
-    static thread_local QCache<QString, QMap<QString, QString>> cache(256);
-    // What a definition may write into its video's props: the page and the title.
-    const QString key = id + QChar(0) + base + QChar(0) + palette.value("page").toString() + '/' +
-                        palette.value("pages").toString() + QChar(0) +
-                        palette.value("title").toString() + QChar(0) + source;
+    static thread_local QCache<QByteArray, QMap<QString, QString>> cache(256);
+    // Kept by everything the slide is laid out with: its page and title, which a definition
+    // may write into its video's props, its frame, and what other templates define.
+    QByteArray identity;
+    {
+        QDataStream stream(&identity, QIODevice::WriteOnly);
+        stream << source << base << palette;
+    }
+    const QByteArray key = QCryptographicHash::hash(identity, QCryptographicHash::Sha1);
     if (const auto found = cache.object(key))
         return *found;
     Ctx c = context(base, palette);
