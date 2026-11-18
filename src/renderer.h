@@ -30,6 +30,9 @@ QString withMedia(const QString &source, const QString &reference);
 QString withMediaDirectives(const QString &source, const QStringList &remove,
                             const QStringList &add);
 QString speakerNotes(const QString &source);
+// The source without its speaker-note comments, for exports that travel without
+// them; hype: directives are kept, since they steer rendering.
+QString withoutSpeakerNotes(const QString &source);
 Media parseMedia(const QString &source, const QString &base);
 // Parse errors are cached in the language they were made in; a language switch moves to a new generation.
 int translationGeneration();

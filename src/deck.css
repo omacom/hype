@@ -31,6 +31,8 @@ body {
 }
 .slide { display: none; }
 .slide.active { display: block; }
+/* Laid out invisibly while a hidden slide's text is fitted; never painted. */
+.slide.measuring { display: block; visibility: hidden; }
 .slide img {
   width: 100%;
   height: 100%;

@@ -32,7 +32,9 @@ matter, slide separators, and image and video options, for this version of Hype.
    or a folder ending in `/` such as `deck/` — the last renders the Markdown in
    the browser: it rides inside `deck/index.html` beside `deck.css`, `deck.js`,
    and the deck's real images and videos, so text edits show on refresh.
-   `talk.html` is the one self-contained file that opens in any browser.
+   `talk.html` is the one self-contained file that opens in any browser; the
+   Markdown rides inside it too, as the editable source beside the slide
+   pictures, with speaker notes left out.
 
 ## Working with the person
 

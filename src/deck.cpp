@@ -1736,8 +1736,9 @@ static bool readResource(const QString &path, QString *content, QString *error) 
 }
 
 // Fills the bundled deck page: shared chrome, plus the stylesheet, script, and slides
-// the two HTML exports each supply in their own form. The folder export also passes
-// its Markdown source and theme as inert script blocks, which its script renders.
+// the two HTML exports each supply in their own form. Both exports also pass the
+// deck's Markdown source as inert script blocks, which the folder export renders,
+// and the one-file export carries beside its slide pictures as the editable source.
 QString Deck::htmlPage(const QString &stylesheet, const QString &script, const QString &sections,
                         const QString &source) const {
     QString page, error;
@@ -1767,6 +1768,23 @@ QString Deck::htmlPage(const QString &stylesheet, const QString &script, const Q
         end = match.capturedEnd();
     }
     return filled + page.sliced(end);
+}
+
+// The deck's Markdown and resolved theme as inert script blocks, for both HTML
+// exports. The Markdown is the deck's source of truth: anyone who receives an
+// export can edit the block in any text editor and refresh the page (the folder
+// export) or copy it back into a presentation. The folder export embeds the
+// source as written; the one-file export strips speaker notes, since that file
+// travels to readers. A </script inside the Markdown would close the block
+// early, so it is escaped here and unescaped when read.
+QString Deck::sourceBlock(const QString &markdownSource) const {
+    QString markdown = markdownSource;
+    markdown.replace("</script", "<\\/script", Qt::CaseInsensitive);
+    const QByteArray colors =
+        QJsonDocument(QJsonObject::fromVariantMap(palette())).toJson(QJsonDocument::Compact);
+    return "<script type=\"text/markdown\" id=\"source\">\n" + markdown + "\n</script>\n"
+           "<script type=\"application/json\" id=\"palette\">" + QString::fromUtf8(colors)
+        + "</script>";
 }
 
 // Encodes one rendered slide as WebP, named for a screen reader, and for search, as PDF bookmarks do.
@@ -1815,9 +1833,12 @@ bool Deck::exportHtml(const QString &path) {
         sections += QString("<section class=\"slide\">\n<img src=\"data:image/webp;base64,%1\" alt=\"%2\">\n</section>\n")
                         .arg(QString::fromLatin1(webpBytes.toBase64()), alt);
     }
-    // One self-contained file: the stylesheet and script ride inside the page itself.
+    // One self-contained file: the stylesheet and script ride inside the page itself,
+    // and the Markdown rides with them as inert blocks, beside the slide pictures.
+    // Speaker notes stay out: this file is handed to readers.
     const QString deck = htmlPage("<style>\n" + stylesheet + "\n</style>",
-                                  "<script>\n" + script + "\n</script>", sections);
+                                  "<script>\n" + script + "\n</script>", sections,
+                                  sourceBlock(withoutSpeakerNotes(m_source)));
     if (deck.isEmpty()) {
         setStatus(tr("Could not read the deck template"));
         return false;
@@ -1918,15 +1939,8 @@ bool Deck::exportHtmlFolder(const QString &path) {
     // The Markdown is the deck's source of truth: edit the block below in any text
     // editor and refresh the page. A </script inside it would close the block early,
     // so it is escaped here and unescaped by the script that reads it.
-    QString markdown = m_source;
-    markdown.replace("</script", "<\\/script", Qt::CaseInsensitive);
-    const QByteArray colors =
-        QJsonDocument(QJsonObject::fromVariantMap(palette())).toJson(QJsonDocument::Compact);
-    const QString source =
-        "<script type=\"text/markdown\" id=\"source\">\n" + markdown + "\n</script>\n"
-        "<script type=\"application/json\" id=\"palette\">" + QString::fromUtf8(colors) + "</script>";
     const QString page = htmlPage("<link rel=\"stylesheet\" href=\"deck.css\">",
-                                  "<script src=\"deck.js\"></script>", {}, source);
+                                  "<script src=\"deck.js\"></script>", {}, sourceBlock(m_source));
     if (page.isEmpty()) {
         setStatus(tr("Could not read the deck template"));
         return false;

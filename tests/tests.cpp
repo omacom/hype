@@ -3362,6 +3362,12 @@ static void write(const QString &path, const QString &content) {
         QVERIFY(page.contains("<title>A &lt;big&gt; idea</title>"));
         QVERIFY(page.contains("alt=\"Slide 1: One\""));
         QVERIFY(page.contains("alt=\"Slide 2: Two\""));
+        // The Markdown rides inside the file as inert blocks: the editable source
+        // travels with the deck it produced.
+        QVERIFY(page.contains("<script type=\"text/markdown\" id=\"source\">"));
+        QVERIFY(page.contains("# One"));
+        QVERIFY(page.contains("- a"));
+        QVERIFY(page.contains("<script type=\"application/json\" id=\"palette\">"));
         // One self-contained file: nothing loads from outside it.
         QVERIFY(!page.contains("href=\""));
         QCOMPARE(page.count("src=\""), page.count("src=\"data:"));
@@ -3375,7 +3381,8 @@ static void write(const QString &path, const QString &content) {
     void exportHtmlAltTextLeavesSpeakerNotesOut() {
         QTemporaryDir tmp;
         write(tmp.path() + "/talk.md",
-              "---\ntitle: Notes\n---\n\n<!-- Private speaker note -->\n\nVisible line\n");
+              "---\ntitle: Notes\n---\n\n<!-- Private speaker note -->\n\n"
+              "<!-- hype: background=\"#101020\" -->\n\nVisible line\n");
         Deck d;
         QVERIFY(d.loadPath(tmp.path() + "/talk.md"));
         QVERIFY(d.exportHtml(tmp.path() + "/talk.html"));
@@ -3383,8 +3390,11 @@ static void write(const QString &path, const QString &content) {
         QVERIFY(file.open(QIODevice::ReadOnly));
         const QString page = QString::fromUtf8(file.readAll());
         // The alt text names the visible slide for anyone who receives the file, so a hidden
-        // speaker note on a slide without a headline never becomes part of it.
+        // speaker note on a slide without a headline never becomes part of it. The editable
+        // Markdown rides along too, with the same rule: notes stay out, directives stay in.
         QVERIFY(page.contains("alt=\"Slide 1: Visible line\""));
+        QVERIFY(page.contains("Visible line"));
+        QVERIFY(page.contains("hype: background"));
         QVERIFY(!page.contains("Private speaker note"));
     }
     void htmlTitleIsNotASlot() {

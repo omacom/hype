@@ -240,6 +240,10 @@ function parseFlags(media, flags) {
 function renderMarkdownDeck() {
   const sourceBlock = document.getElementById("source")
   if (!sourceBlock) return
+  // The one-file export embeds its Markdown the same way, beside slides that are
+  // already pictures. There the block is the editable source for anyone who
+  // receives the file, not a second deck to render on top of the first.
+  if (stage.querySelector("section.slide")) return
   const source = sourceBlock.textContent.replace(/<\\\//g, "</").trim() + "\n"
   const paletteTag = document.getElementById("palette")
   const palette = paletteTag ? JSON.parse(paletteTag.textContent) : {}
@@ -507,7 +511,12 @@ function drawText(canvas, area, source, media, palette, fits) {
   content.style.color = palette.foreground
   buildBlocks(content, media.text)
   let ceiling = high
+  const slide = canvas.closest(".slide")
   const fit = () => {
+    // Slides render while display: none, and a hidden element measures zero, which
+    // would let every size fit. Lay the slide out invisibly for the search, so its
+    // text is measured at its true size, then restore it.
+    if (slide) slide.classList.add("measuring")
     let low = 8
     const fitsAt = size => {
       content.style.fontSize = size + "px"
@@ -522,10 +531,13 @@ function drawText(canvas, area, source, media, palette, fits) {
       }
     }
     content.style.fontSize = low + "px"
+    if (slide) slide.classList.remove("measuring")
   }
+  // Attach before fitting: a detached element measures zero, which would let
+  // every size fit and leave the text at its ceiling.
+  canvas.appendChild(container)
   fit()
   fits.push(fit)
-  canvas.appendChild(container)
 }
 
 function buildBlocks(content, text) {
@@ -576,13 +588,14 @@ function buildBlocks(content, text) {
     }
     const item = /^ {0,3}([-*+]|\d+[.)]) +(.*)$/.exec(line)
     if (item) {
-      const ordered = /\d/.test(item[2])
+      // The marker decides the list kind, never the text after it.
+      const ordered = /\d/.test(item[1])
       const listElement = document.createElement(ordered ? "ol" : "ul")
       while (i < lines.length) {
         const entry = /^ {0,3}([-*+]|\d+[.)]) +(.*)$/.exec(lines[i])
         if (!entry) break
         const li = document.createElement("li")
-        inline(li, entry[3])
+        inline(li, entry[2])
         listElement.appendChild(li)
         i++
       }

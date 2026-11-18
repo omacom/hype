@@ -223,10 +223,14 @@ class Deck : public QAbstractListModel {
                const ParsedDeck *structure = nullptr);
     void replaceHeader(const QString &header);
     // Fills the bundled deck page: shared chrome plus the stylesheet, script, and slides
-    // the two HTML exports supply in their own form. The folder export also passes its
-    // Markdown source, which the deck's script renders in the browser.
+    // the two HTML exports supply in their own form. Both also pass the Markdown as
+    // inert blocks: the folder export renders it in the browser, the one-file export
+    // carries it beside the slide pictures as the editable source.
     QString htmlPage(const QString &stylesheet, const QString &script, const QString &sections,
                      const QString &source = {}) const;
+    // The deck's Markdown and theme as inert script blocks, shared by both exports;
+    // the one-file export passes the source without speaker notes.
+    QString sourceBlock(const QString &markdownSource) const;
     void replaceSlides(const QStringList &slides, int selected, int anchor = -1);
     bool confirmDiscard();
     bool validateStructure(const QString &operation);

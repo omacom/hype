@@ -103,6 +103,25 @@ static QString withoutComments(QString source) {
         source.remove(it->first, it->second);
     return source;
 }
+// Removes only the comments a reader cannot see: speaker notes. The hype: directives
+// that steer rendering stay, so what is left still presents the same deck.
+QString withoutSpeakerNotes(const QString &source) {
+    const QString visible = outsideCode(source);
+    auto matches = QRegularExpression("<!--[\\s\\S]*?-->").globalMatch(visible);
+    QVector<QPair<int, int>> ranges;
+    static const QRegularExpression directive("^hype:", QRegularExpression::CaseInsensitiveOption);
+    while (matches.hasNext()) {
+        const auto match = matches.next();
+        const QString note = source.mid(match.capturedStart() + 4, match.capturedLength() - 7).trimmed();
+        if (note.isEmpty() || directive.match(note).hasMatch())
+            continue;
+        ranges.append({match.capturedStart(), match.capturedLength()});
+    }
+    QString without = source;
+    for (auto it = ranges.crbegin(); it != ranges.crend(); ++it)
+        without.remove(it->first, it->second);
+    return without;
+}
 QString speakerNotes(const QString &source) {
     const QString visible = outsideCode(source);
     auto matches = QRegularExpression("<!--[\\s\\S]*?-->").globalMatch(visible);
