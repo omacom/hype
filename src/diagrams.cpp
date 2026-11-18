@@ -656,9 +656,16 @@ struct Task {
     QString name, group, tone;
     double start = 0, end = 0;
     bool milestone = false;
+    bool arrow = false; // Pointed at its end: the work carries on.
+    bool open = false;  // No end given: it runs to the end of the chart.
+};
+struct Period {
+    QString name;
+    double end = 0;
 };
 struct Schedule {
     QVector<Task> tasks;
+    QVector<Period> periods; // Named spans along the axis, each ending where the next begins.
     double start = 0, end = 0;
     bool dates = false;
     QString error;
@@ -759,9 +766,18 @@ Schedule schedule(const Node &n) {
         Q_UNUSED(before);
         Q_UNUSED(previous);
         s.dates = s.dates || date;
-        const QString endText = row.value(end).trimmed();
-        if (endText.isEmpty() || endText == "-" ||
-            plainText(endText) == plainText(row.value(start))) {
+        QString endText = row.value(end).trimmed();
+        // "→" after the end, or instead of one, points the bar onward.
+        static const QRegularExpression onward("\\s*(→|->)$");
+        if (const auto m = onward.match(endText); m.hasMatch()) {
+            t.arrow = true;
+            endText = endText.left(m.capturedStart()).trimmed();
+            t.open = endText.isEmpty();
+        }
+        if (t.open) {
+            t.end = t.start;
+        } else if (endText.isEmpty() || endText == "-" ||
+                   plainText(endText) == plainText(row.value(start))) {
             t.end = t.start;
             t.milestone = endText.isEmpty() || endText == "-";
             if (!t.milestone)
@@ -789,12 +805,32 @@ Schedule schedule(const Node &n) {
         s.start = timeValue(n.prop("start"), false, y, &ok, &date);
     if (n.has("end"))
         s.end = timeValue(n.prop("end"), true, y, &ok, &date);
+    for (const QString &part : n.prop("periods").split(';', Qt::SkipEmptyParts)) {
+        const int colon = part.lastIndexOf(':');
+        Period period;
+        period.name = plainText(part.left(qMax(0, colon)));
+        ok = false;
+        if (colon > 0)
+            period.end = timeValue(part.mid(colon + 1), true, y, &ok, &date);
+        if (!ok || (!s.periods.isEmpty() && period.end <= s.periods.last().end)) {
+            s.error = "can't read the period “" + part.trimmed() +
+                      "”; write periods=\"Name: end; Name: end\" with each end after the last";
+            return s;
+        }
+        s.periods << period;
+    }
+    if (!s.periods.isEmpty() && !n.has("end"))
+        s.end = qMax(s.end, s.periods.last().end);
     if (s.end <= s.start)
         s.end = s.start + 1;
+    for (Task &t : s.tasks)
+        if (t.open)
+            t.end = qMax(t.start, s.end);
     return s;
 }
 
 qreal ganttRow(const Node &n, Ctx &c) { return c.px(50 * scaleOf(n)); }
+qreal ganttAxis(const Node &n, Ctx &c) { return c.px(56 * scaleOf(n)); }
 QStringList ganttGroups(const Schedule &s) {
     QStringList groups;
     for (const Task &t : s.tasks)
@@ -803,6 +839,21 @@ QStringList ganttGroups(const Schedule &s) {
     return groups;
 }
 QFont ganttGroupFont(const Node &n, Ctx &c) { return uiFont(c, c.px(17 * scaleOf(n)), false, 800); }
+// Room past the end of the chart for the points of bars that carry on.
+qreal ganttTip(const Node &n, const Schedule &s, Ctx &c) {
+    for (const Task &t : s.tasks)
+        if (t.open)
+            return c.px(26 * scaleOf(n));
+    return 0;
+}
+// Where a time falls across the plot.
+struct TimeScale {
+    qreal left = 0;
+    double start = 0, perUnit = 1;
+    TimeScale(const Schedule &s, qreal left, qreal width)
+        : left(left), start(s.start), perUnit(qMax(1.0, width) / (s.end - s.start)) {}
+    qreal operator()(double v) const { return left + (v - start) * perUnit; }
+};
 // Room after each group so a turned label fits beside even a one-row group.
 QVector<qreal> ganttSideRoom(const Node &n, const Schedule &s, Ctx &c) {
     const QStringList groups = ganttGroups(s);
@@ -817,52 +868,212 @@ QVector<qreal> ganttSideRoom(const Node &n, const Schedule &s, Ctx &c) {
     }
     return room;
 }
-qreal measureGantt(Node &n, qreal, Ctx &c) {
+
+// groups="lanes": a lane for each group, named in a column on the left. Bars that do not
+// overlap share a row, so a lane is as tall as its busiest moment.
+struct Lanes {
+    QStringList names;      // In table order; tasks without a group share an unnamed lane.
+    QVector<int> lane, row; // Per task.
+    QVector<int> rows;      // Per lane.
+};
+bool ganttInLanes(const Node &n) { return n.prop("groups") == "lanes"; }
+qreal ganttLaneWidth(const Node &n, qreal width, Ctx &c) {
+    QString v = n.prop("lane-width").trimmed().toLower();
+    bool ok = false;
+    const qreal asked = v.endsWith('%') ? v.chopped(1).toDouble(&ok) / 100 * width
+                                        : c.px(v.remove("px").toDouble(&ok));
+    if (ok && asked > 0)
+        return qMin(asked, width * 0.5);
+    const qreal k = scaleOf(n);
+    return qBound(c.px(170 * k), width * 0.135, c.px(280 * k));
+}
+Lanes ganttLanes(const Node &n, const Schedule &s, Ctx &c, qreal plotWidth) {
+    Lanes lanes;
+    const qreal k = scaleOf(n), tip = ganttTip(n, s, c), diamond = c.px(14 * k);
+    const TimeScale x(s, 0, plotWidth - tip);
+    const QFontMetricsF bold(uiFont(c, c.px(19 * k), false, 700));
+    QVector<QVector<QVector<QPointF>>> taken; // Per lane, per row: the spans in use.
+    for (const Task &t : s.tasks) {
+        int lane = lanes.names.indexOf(t.group);
+        if (lane < 0) {
+            lane = lanes.names.size();
+            lanes.names << t.group;
+            lanes.rows << 0;
+            taken.append(QVector<QVector<QPointF>>());
+        }
+        qreal left = x(t.start), right = x(t.end) + (t.open ? tip : 0);
+        if (t.milestone) {
+            left -= diamond;
+            right = left + diamond * 2 + c.px(10) + bold.horizontalAdvance(t.name);
+        }
+        right = qMax(right, left + c.px(24 * k));
+        int row = 0;
+        for (;; ++row) {
+            if (row == taken[lane].size()) {
+                taken[lane].append(QVector<QPointF>());
+                break;
+            }
+            bool free = true;
+            for (const QPointF &span : std::as_const(taken[lane][row]))
+                free = free && (left >= span.y() - 0.5 || right <= span.x() + 0.5);
+            if (free)
+                break;
+        }
+        taken[lane][row] << QPointF(left, right);
+        lanes.lane << lane;
+        lanes.row << row;
+        lanes.rows[lane] = qMax(lanes.rows[lane], row + 1);
+    }
+    return lanes;
+}
+// Each lane's height before any growing: its rows, or its name where that needs more.
+QVector<qreal> ganttLaneHeights(const Node &n, const Lanes &lanes, qreal laneWidth, Ctx &c) {
+    const qreal k = scaleOf(n);
+    const QFontMetricsF metrics(ganttGroupFont(n, c));
+    QVector<qreal> heights;
+    for (int i = 0; i < lanes.names.size(); ++i) {
+        const qreal name =
+            metrics
+                .boundingRect(QRectF(0, 0, laneWidth - c.px(28), 1e5),
+                              Qt::AlignCenter | Qt::TextWordWrap, lanes.names[i].toUpper())
+                .height();
+        heights << qMax(lanes.rows[i] * c.px(58 * k), name + c.px(10)) + c.px(18 * k);
+    }
+    return heights;
+}
+
+qreal measureGantt(Node &n, qreal w, Ctx &c) {
     const Schedule s = schedule(n);
     const int groups = ganttGroups(s).size();
+    if (ganttInLanes(n)) {
+        const qreal laneWidth = ganttLaneWidth(n, w, c);
+        qreal height = ganttAxis(n, c);
+        for (qreal lane : ganttLaneHeights(n, ganttLanes(n, s, c, w - laneWidth), laneWidth, c))
+            height += lane;
+        return height;
+    }
     // Groups take a header row above their tasks, or a gap and a turned label beside them.
     if (n.prop("groups") == "side") {
         qreal room = 0;
         for (qreal r : ganttSideRoom(n, s, c))
             room += r;
-        return c.px(56 * scaleOf(n)) +
-               (s.tasks.size() + qMax(0, groups - 1) * 0.35) * ganttRow(n, c) + room;
+        return ganttAxis(n, c) + (s.tasks.size() + qMax(0, groups - 1) * 0.35) * ganttRow(n, c) +
+               room;
     }
-    return c.px(56 * scaleOf(n)) + (s.tasks.size() + groups * 0.75) * ganttRow(n, c);
+    return ganttAxis(n, c) + (s.tasks.size() + groups * 0.75) * ganttRow(n, c);
 }
 
-void paintGantt(Node &n, Ctx &c) {
-    QPainter *p = c.p;
-    const Schedule s = schedule(n);
-    if (!s.error.isEmpty())
+// A bar, pointed at its right end when the work carries on past it.
+QPainterPath ganttBar(const QRectF &bar, qreal radius, bool arrow) {
+    radius = qMax(0.0, qMin(radius, qMin(bar.height(), bar.width()) / 2));
+    if (!arrow)
+        return roundedPath(bar, radius, radius, radius, radius);
+    const qreal l = bar.left(), t = bar.top(), r = bar.right(), b = bar.bottom(),
+                tip = qMin(bar.height(), bar.width()) * 0.5;
+    QPainterPath path;
+    path.moveTo(l + radius, t);
+    path.lineTo(r - tip, t);
+    path.lineTo(r, bar.center().y());
+    path.lineTo(r - tip, b);
+    path.lineTo(l + radius, b);
+    if (radius > 0) {
+        path.arcTo(QRectF(l, b - 2 * radius, 2 * radius, 2 * radius), 270, -90);
+        path.lineTo(l, t + radius);
+        path.arcTo(QRectF(l, t, 2 * radius, 2 * radius), 180, -90);
+    } else {
+        path.lineTo(l, b);
+        path.lineTo(l, t);
+    }
+    path.closeSubpath();
+    return path;
+}
+// Names inside bars contrast with each bar's color, unless label-tone names one color for all.
+QColor ganttLabelColor(const Node &n, const QColor &bar, Ctx &c) {
+    const QColor asked = c.tone(n.prop("label-tone"), n.ink);
+    return asked.isValid() ? asked : inkOver(bar, n.ink, c).fg;
+}
+// radius="0" squares the bars; without it they are rounded to suit their height.
+qreal ganttRadius(const Node &n, qreal height, Ctx &c) {
+    bool ok = false;
+    const qreal asked = c.px(n.prop("radius").remove("px").toDouble(&ok));
+    return ok ? asked : height / 2.6;
+}
+
+// Words centered in a box on as many lines as fit, shrunk (not below 70%) before they are cut.
+void drawWrapped(QPainter *p, const QRectF &rect, const QString &text, QFont font,
+                 const QColor &color) {
+    if (text.isEmpty() || rect.width() <= 1)
         return;
+    const int flags = Qt::AlignCenter | Qt::TextWordWrap, original = font.pixelSize();
+    for (;;) {
+        const QRectF needed =
+            QFontMetricsF(font).boundingRect(QRectF(0, 0, rect.width(), 1e5), flags, text);
+        if (needed.height() <= rect.height() + 0.5 && needed.width() <= rect.width() + 0.5) {
+            p->setFont(font);
+            p->setPen(color);
+            p->drawText(rect, flags, text);
+            return;
+        }
+        if (font.pixelSize() <= original * 0.7)
+            break;
+        font.setPixelSize(font.pixelSize() - 1);
+    }
+    drawLabel(p, rect, text, font, color);
+}
+
+// The time axis: named periods, months for dates, otherwise whole units. It sits above the
+// plot or, with axis="bottom", below it.
+void paintGanttAxis(const Node &n, Ctx &c, const Schedule &s, const QRectF &axis,
+                    const QRectF &plot, const TimeScale &x) {
+    QPainter *p = c.p;
     const qreal k = scaleOf(n);
-    const QFont label = uiFont(c, c.px(20 * k)), bold = uiFont(c, c.px(19 * k), false, 700),
-                group = ganttGroupFont(n, c);
-    const QFontMetricsF lm(label);
-    const bool inside = n.prop("labels") == "inside";
-    const QStringList groups = ganttGroups(s);
-    const bool side = n.prop("groups") == "side" && !groups.isEmpty();
-    const qreal sideWidth = side ? c.px(70 * k) : 0;
-    qreal nameWidth = 0;
-    for (const Task &t : s.tasks)
-        nameWidth = qMax(nameWidth, lm.horizontalAdvance(t.name));
-    nameWidth = inside ? 0 : qMin(nameWidth + c.px(28), n.rect.width() * 0.3);
-    const qreal left = n.rect.left() + sideWidth;
-    const QRectF axis(left + nameWidth, n.rect.top(), n.rect.right() - left - nameWidth,
-                      c.px(56 * k));
-    const qreal row = ganttRow(n, c);
-    const QRectF plot(axis.left(), axis.bottom(), axis.width(), n.rect.bottom() - axis.bottom());
-    auto x = [&](double v) {
-        return plot.left() + (v - s.start) / (s.end - s.start) * plot.width();
+    const bool below = axis.top() > plot.top();
+    const QFont bold = uiFont(c, c.px(19 * k), false, 700);
+    const QFontMetricsF lm(uiFont(c, c.px(20 * k)));
+    const QColor grid = mix(n.ink.bg, n.ink.fg, 0.12);
+    auto tick = [&](double v) {
+        p->setPen(QPen(grid, c.px(1.2)));
+        if (below)
+            p->drawLine(QPointF(x(v), plot.top()), QPointF(x(v), axis.top() + c.px(6)));
+        else
+            p->drawLine(QPointF(x(v), axis.bottom() - c.px(6)), QPointF(x(v), plot.bottom()));
     };
-    const QColor grid = mix(n.ink.bg, n.ink.fg, 0.12), muted = mix(n.ink.fg, n.ink.bg, 0.35);
-    // Time axis: months for dates, otherwise whole units.
+    auto span = [&](qreal left, qreal right) {
+        return QRectF(left, axis.top() + (below ? axis.height() * 0.2 : 0), right - left,
+                      axis.height() * 0.8);
+    };
+    if (below || ganttInLanes(n)) {
+        // A rule between the plot and its axis.
+        const qreal y = below ? axis.top() : axis.bottom();
+        p->setPen(QPen(mix(n.ink.bg, n.ink.fg, 0.5), c.px(3)));
+        p->drawLine(QPointF(plot.left(), y), QPointF(plot.right(), y));
+    }
+    if (!s.periods.isEmpty()) {
+        const QFont name = uiFont(c, c.px(21 * k), false, 800);
+        QPen dots(mix(n.ink.bg, n.ink.fg, 0.6), c.px(2.6), Qt::CustomDashLine, Qt::RoundCap);
+        dots.setDashPattern({0.01, 2.6});
+        double from = s.start;
+        for (const Period &period : s.periods) {
+            const double to = qMin(period.end, s.end);
+            if (to > from)
+                drawLabel(p, span(x(from), x(to)).adjusted(c.px(8), 0, -c.px(8), 0), period.name,
+                          name, mix(n.ink.fg, n.ink.bg, 0.22));
+            // A dotted line closes each period, through the plot and its axis.
+            if (period.end > s.start && x(period.end) < plot.right() - c.px(6)) {
+                p->setPen(dots);
+                p->drawLine(
+                    QPointF(x(period.end), below ? plot.top() : axis.top() + c.px(6)),
+                    QPointF(x(period.end), below ? axis.bottom() - c.px(6) : plot.bottom()));
+            }
+            from = qMax(from, to);
+        }
+        return;
+    }
     p->setFont(bold);
     const QDate base(2000, 1, 1);
     if (s.dates) {
-        const double span = s.end - s.start;
-        const int every = span > 900 ? 3 : 1;
+        const double range = s.end - s.start;
+        const int every = range > 900 ? 3 : 1;
         QDate d = base.addDays(qint64(s.start));
         d = QDate(d.year(), d.month(), 1);
         bool firstLabel = true;
@@ -871,10 +1082,8 @@ void paintGantt(Node &n, Ctx &c) {
             const QDate next = d.addMonths(every);
             const qreal left = x(qMax(v, s.start)),
                         right = x(qMin(double(base.daysTo(next)), s.end));
-            if (v >= s.start) {
-                p->setPen(QPen(grid, c.px(1.2)));
-                p->drawLine(QPointF(x(v), axis.bottom() - c.px(6)), QPointF(x(v), plot.bottom()));
-            }
+            if (v >= s.start)
+                tick(v);
             QString text = QLocale(QLocale::English).monthName(d.month(), QLocale::ShortFormat);
             if (every == 3)
                 text = "Q" + QString::number((d.month() - 1) / 3 + 1);
@@ -882,21 +1091,153 @@ void paintGantt(Node &n, Ctx &c) {
                 text += " " + QString::number(d.year()).right(2).prepend('\'');
             firstLabel = false;
             if (right - left > lm.horizontalAdvance("Mmm") * 0.8)
-                drawLabel(p, QRectF(left, axis.top(), right - left, axis.height() * 0.8), text,
-                          bold, n.ink.fg);
+                drawLabel(p, span(left, right), text, bold, n.ink.fg);
         }
     } else {
         const double step = niceStep(s.end - s.start, 8);
         for (double v = std::ceil(s.start / step) * step; v <= s.end; v += step) {
-            p->setPen(QPen(grid, c.px(1.2)));
-            p->drawLine(QPointF(x(v), axis.bottom() - c.px(6)), QPointF(x(v), plot.bottom()));
+            tick(v);
             if (v < s.end)
-                drawLabel(
-                    p,
-                    QRectF(x(v), axis.top(), x(qMin(v + step, s.end)) - x(v), axis.height() * 0.8),
-                    QString::number(v + 1), bold, n.ink.fg);
+                drawLabel(p, span(x(v), x(qMin(v + step, s.end))), QString::number(v + 1), bold,
+                          n.ink.fg);
         }
     }
+}
+
+void paintGanttToday(const Node &n, Ctx &c, const Schedule &s, const QRectF &axis,
+                     const QRectF &plot, const TimeScale &x) {
+    if (!n.has("today"))
+        return;
+    QPainter *p = c.p;
+    const qreal k = scaleOf(n);
+    const QFont bold = uiFont(c, c.px(19 * k), false, 700);
+    const QFontMetricsF lm(uiFont(c, c.px(20 * k)));
+    int year = QDate::currentDate().year();
+    bool ok = false, date = false;
+    const double today = timeValue(n.prop("today"), false, year, &ok, &date);
+    if (!ok || today < s.start || today > s.end)
+        return;
+    // The word sits at the head of the line: in the axis above the plot, or just inside it.
+    const bool below = axis.top() > plot.top();
+    const qreal top = below ? plot.top() + lm.height() * 1.1 : axis.bottom() - c.px(4);
+    p->setPen(QPen(n.ink.accent, c.px(3)));
+    p->drawLine(QPointF(x(today), top), QPointF(x(today), plot.bottom()));
+    drawLabel(p,
+              QRectF(x(today) - c.px(60), below ? plot.top() : axis.bottom() - lm.height() * 1.1,
+                     c.px(120), lm.height()),
+              "Today", bold, n.ink.accent);
+}
+
+void paintGanttLanes(Node &n, Ctx &c, const Schedule &s) {
+    QPainter *p = c.p;
+    const qreal k = scaleOf(n);
+    const bool below = n.prop("axis") == "bottom";
+    const qreal laneWidth = ganttLaneWidth(n, n.rect.width(), c), axisHeight = ganttAxis(n, c);
+    const QRectF column(n.rect.left(), n.rect.top(), laneWidth, n.rect.height());
+    const QRectF plot(column.right(), n.rect.top() + (below ? 0 : axisHeight),
+                      n.rect.width() - laneWidth, n.rect.height() - axisHeight);
+    const QRectF axis(plot.left(), below ? plot.bottom() : n.rect.top(), plot.width(), axisHeight);
+    const TimeScale x(s, plot.left(), plot.width() - ganttTip(n, s, c));
+    const Lanes lanes = ganttLanes(n, s, c, plot.width());
+    QVector<qreal> heights = ganttLaneHeights(n, lanes, laneWidth, c);
+    qreal natural = 0;
+    for (qreal height : std::as_const(heights))
+        natural += height;
+    // Lanes share whatever room the chart was given.
+    const qreal stretch = natural > 0 ? plot.height() / natural : 1;
+    QVector<qreal> tops;
+    qreal y = plot.top();
+    for (qreal &height : heights) {
+        tops << y;
+        height *= stretch;
+        y += height;
+    }
+    // The column of lane names, over its own fill when it has one.
+    const QColor fill = c.tone(n.prop("lane-fill"), n.ink);
+    const Ink names = fill.isValid() ? inkOver(fill, n.ink, c) : n.ink;
+    if (fill.isValid())
+        p->fillRect(column, fill);
+    paintGanttAxis(n, c, s, axis, plot, x);
+    const QFont nameFont = ganttGroupFont(n, c);
+    for (int i = 0; i < lanes.names.size(); ++i) {
+        if (i > 0 || fill.isValid()) {
+            p->setPen(QPen(mix(names.bg, names.fg, 0.3), c.px(1.5)));
+            p->drawLine(QPointF(column.left(), tops[i]), QPointF(column.right(), tops[i]));
+        }
+        if (i > 0) {
+            p->setPen(QPen(mix(n.ink.bg, n.ink.fg, 0.3), c.px(1.5)));
+            p->drawLine(QPointF(plot.left(), tops[i]), QPointF(plot.right(), tops[i]));
+        }
+        drawWrapped(p, QRectF(column.left() + c.px(14), tops[i], laneWidth - c.px(28), heights[i]),
+                    lanes.names[i].toUpper(), nameFont, names.fg);
+    }
+    const QStringList groups = ganttGroups(s);
+    const QFont bold = uiFont(c, c.px(19 * k), false, 700);
+    const qreal pad = c.px(9 * k) * stretch, gap = c.px(4 * k);
+    for (int i = 0; i < s.tasks.size(); ++i) {
+        const Task &t = s.tasks[i];
+        const int lane = lanes.lane[i], groupIndex = groups.indexOf(t.group);
+        const qreal row = (heights[lane] - 2 * pad) / qMax(1, lanes.rows[lane]),
+                    top = tops[lane] + pad + lanes.row[i] * row;
+        const QColor color = !t.tone.isEmpty() && c.tone(t.tone, n.ink).isValid()
+                                 ? c.tone(t.tone, n.ink)
+                             : groupIndex >= 0 ? seriesColor(groupIndex, n.ink, c, colorList(n))
+                                               : toneOr(n, c);
+        if (t.milestone) {
+            const qreal r = qMin(row * 0.28, c.px(18 * k));
+            const QPointF center(x(t.start), top + row / 2);
+            QPainterPath diamond;
+            diamond.moveTo(center + QPointF(0, -r));
+            diamond.lineTo(center + QPointF(r, 0));
+            diamond.lineTo(center + QPointF(0, r));
+            diamond.lineTo(center + QPointF(-r, 0));
+            diamond.closeSubpath();
+            p->fillPath(diamond, color);
+            drawLabel(p, QRectF(center.x() + r + c.px(10), top, plot.right() - center.x() - r, row),
+                      t.name, bold, n.ink.fg, Qt::AlignLeft | Qt::AlignVCenter);
+            continue;
+        }
+        // Bars keep a sliver of air between neighbors, and start flush with the chart.
+        const qreal h = qMin(row * 0.8, c.px(72 * k)),
+                    left = x(t.start) + (t.start > s.start ? gap : 0),
+                    right = t.open ? plot.right() : x(t.end) - gap;
+        const QRectF bar(left, top + (row - h) / 2, qMax(h * 0.6, right - left), h);
+        p->fillPath(ganttBar(bar, ganttRadius(n, h, c), t.arrow), color);
+        // Names grow a little with their bars, on two lines where one is too long.
+        drawWrapped(p,
+                    bar.adjusted(c.px(10), c.px(2), -c.px(10) - (t.arrow ? h * 0.3 : 0), -c.px(2)),
+                    t.name, uiFont(c, qBound(c.px(16 * k), h * 0.3, c.px(21 * k)), false, 700),
+                    ganttLabelColor(n, color, c));
+    }
+    paintGanttToday(n, c, s, axis, plot, x);
+}
+
+void paintGantt(Node &n, Ctx &c) {
+    QPainter *p = c.p;
+    const Schedule s = schedule(n);
+    if (!s.error.isEmpty())
+        return;
+    if (ganttInLanes(n))
+        return paintGanttLanes(n, c, s);
+    const qreal k = scaleOf(n);
+    const QFont label = uiFont(c, c.px(20 * k)), bold = uiFont(c, c.px(19 * k), false, 700),
+                group = ganttGroupFont(n, c);
+    const QFontMetricsF lm(label);
+    const bool inside = n.prop("labels") == "inside", below = n.prop("axis") == "bottom";
+    const QStringList groups = ganttGroups(s);
+    const bool side = n.prop("groups") == "side" && !groups.isEmpty();
+    const qreal sideWidth = side ? c.px(70 * k) : 0;
+    qreal nameWidth = 0;
+    for (const Task &t : s.tasks)
+        nameWidth = qMax(nameWidth, lm.horizontalAdvance(t.name));
+    nameWidth = inside ? 0 : qMin(nameWidth + c.px(28), n.rect.width() * 0.3);
+    const qreal left = n.rect.left() + sideWidth, axisHeight = ganttAxis(n, c);
+    const QRectF plot(left + nameWidth, n.rect.top() + (below ? 0 : axisHeight),
+                      n.rect.right() - left - nameWidth, n.rect.height() - axisHeight);
+    const QRectF axis(plot.left(), below ? plot.bottom() : n.rect.top(), plot.width(), axisHeight);
+    const qreal row = ganttRow(n, c);
+    const TimeScale x(s, plot.left(), plot.width() - ganttTip(n, s, c));
+    paintGanttAxis(n, c, s, axis, plot, x);
     qreal y = plot.top();
     QString current;
     struct Span {
@@ -943,18 +1284,20 @@ void paintGantt(Node &n, Ctx &c) {
                     p, QRectF(center.x() + r + c.px(10), y, n.rect.right() - center.x() - r, row),
                     t.name, bold, n.ink.fg, Qt::AlignLeft | Qt::AlignVCenter);
         } else {
-            const qreal h = row * 0.56;
-            const QRectF bar(x(t.start), y + (row - h) / 2, qMax(h, x(t.end) - x(t.start)), h);
-            p->fillPath(roundedPath(bar, h / 2.6, h / 2.6, h / 2.6, h / 2.6), color);
+            const qreal h = row * 0.56, right = t.open ? plot.right() : x(t.end);
+            const QRectF bar(x(t.start), y + (row - h) / 2, qMax(h, right - x(t.start)), h);
+            p->fillPath(ganttBar(bar, ganttRadius(n, h, c), t.arrow), color);
             if (inside) {
                 // Inside the bar when the name fits, otherwise just after it.
                 const QFont small = uiFont(c, c.px(17 * k), false, 700);
-                const qreal need = QFontMetricsF(small).horizontalAdvance(t.name) + c.px(28);
+                const qreal need = QFontMetricsF(small).horizontalAdvance(t.name) + c.px(28) +
+                                   (t.arrow ? h * 0.3 : 0);
                 const qreal after = n.rect.right() - bar.right() - c.px(10),
                             before = bar.left() - plot.left() - c.px(10);
                 const qreal wanted = QFontMetricsF(label).horizontalAdvance(t.name);
                 if (need <= bar.width())
-                    drawLabel(p, bar, t.name, small, inkOver(color, n.ink, c).fg);
+                    drawLabel(p, bar.adjusted(0, 0, t.arrow ? -h * 0.3 : 0, 0), t.name, small,
+                              ganttLabelColor(n, color, c));
                 else if (after >= wanted || after >= before)
                     drawLabel(p,
                               QRectF(bar.right() + c.px(10), bar.top() - c.px(4), after,
@@ -986,21 +1329,7 @@ void paintGantt(Node &n, Ctx &c) {
                   groups[span.group].toUpper(), group, color);
         p->restore();
     }
-    if (n.has("today")) {
-        int year = QDate::currentDate().year();
-        bool ok = false, date = false;
-        const double today = timeValue(n.prop("today"), false, year, &ok, &date);
-        if (ok && today >= s.start && today <= s.end) {
-            p->setPen(QPen(n.ink.accent, c.px(3)));
-            p->drawLine(QPointF(x(today), axis.bottom() - c.px(4)),
-                        QPointF(x(today), plot.bottom()));
-            drawLabel(p,
-                      QRectF(x(today) - c.px(60), axis.bottom() - lm.height() * 1.1, c.px(120),
-                             lm.height()),
-                      "Today", bold, n.ink.accent);
-        }
-    }
-    Q_UNUSED(muted);
+    paintGanttToday(n, c, s, axis, plot, x);
 }
 
 // ---------------------------------------------------------------------------

@@ -1697,6 +1697,72 @@ static void write(const QString &path, const QString &content) {
         QVERIFY(errors(moved, 5).contains("unknown color “corall”"));
         QCOMPARE(warnings(moved, 3) + warnings(moved, 4) + warnings(moved, 5), QString());
     }
+    void ganttLanesShareRowsAndPointOnward() {
+        Deck deck;
+        const QString table = "| Task | Start | End | Lane |\n| --- | --- | --- | --- |\n"
+                              "| A | 1 | 5 | One |\n| B | 6 | 10 | One |\n| C | 3 | 8 | One |\n"
+                              "| D | 11 | → | Two |\n";
+        deck.editSource("---\ncolor_background: \"#ffffff\"\ncolor_foreground: \"#111111\"\n---\n\n"
+                        "<Split>\n<Panel pad=\"0\">\n<Gantt groups=\"lanes\" axis=\"bottom\" "
+                        "lane-width=\"20%\" lane-fill=\"#000000\" radius=\"0\" start=\"1\" "
+                        "periods=\"First: 10; Second: 20\" colors=\"#ff0000, #0000ff\" grow>\n" +
+                        table + "</Gantt>\n</Panel>\n</Split>\n");
+        QCOMPARE(slideProblems(deck.slide(0), deck.baseDir(), deck.slidePalette(0)).join("\n"),
+                 QString());
+        const QImage chart = renderSlide(deck, 0);
+        // Where a column of the picture crosses bars of one color: the top and bottom of each.
+        auto bars = [&](int x, const QColor &color) {
+            QVector<QPoint> runs;
+            int top = -1;
+            for (int y = 0; y < chart.height(); ++y) {
+                const bool on = nearColor(chart.pixelColor(x, y), color, 2);
+                if (on && top < 0)
+                    top = y;
+                if (!on && top >= 0) {
+                    runs << QPoint(top, y);
+                    top = -1;
+                }
+            }
+            return runs;
+        };
+        const QColor red("#ff0000"), blue("#0000ff");
+        // The lanes are named in their own column, here white on black.
+        QVERIFY(nearColor(chart.pixelColor(20, 20), QColor("#000000"), 2));
+        bool named = false;
+        for (int y = 0; y < 600 && !named; ++y)
+            for (int x = 0; x < 384 && !named; ++x)
+                named = chart.pixelColor(x, y).lightness() > 220;
+        QVERIFY(named);
+        // A and B follow one another, so they share a row; C overlaps both and takes the next.
+        const QVector<QPoint> a = bars(450, red), b = bars(1050, red), both = bars(870, red);
+        QCOMPARE(a.size(), 1);
+        QCOMPARE(b.size(), 1);
+        QCOMPARE(a, b);
+        QCOMPARE(both.size(), 2);
+        QCOMPARE(both.first(), b.first());
+        QVERIFY(both.last().x() > b.first().y());
+        // D has no end: it runs to the edge of the chart, narrowing to a point there.
+        const QVector<QPoint> body = bars(1500, blue), point = bars(1915, blue);
+        QCOMPARE(body.size(), 1);
+        QCOMPARE(point.size(), 1);
+        QVERIFY(point.first().y() - point.first().x() < (body.first().y() - body.first().x()) / 2);
+        QVERIFY(bars(700, blue).isEmpty());
+        // The second lane sits below the first, and the axis below them both.
+        QVERIFY(body.first().x() > both.last().y());
+        QVERIFY(body.first().y() < chart.height() - 40);
+        auto problems = [&](const QString &props) {
+            return slideProblems("<Gantt " + props + ">\n" + table + "</Gantt>", deck.baseDir(),
+                                 deck.slidePalette(0))
+                .join("\n");
+        };
+        QCOMPARE(problems("groups=\"lanes\" label-tone=\"white\" periods=\"Now: 10; Next: 20\""),
+                 QString());
+        QVERIFY(problems("periods=\"Soon\"").contains("can't read the period “Soon”"));
+        QVERIFY(
+            problems("periods=\"Now: 10; Then: 5\"").contains("can't read the period “Then: 5”"));
+        QVERIFY(problems("axis=\"left\"").contains("axis"));
+        QVERIFY(problems("lane-fill=\"blak\"").contains("unknown color “blak”"));
+    }
     void presentationsAreTemplatesAndDefineComponents() {
         QTemporaryDir dir;
         QVERIFY(QDir(dir.path()).mkpath("base/images") && QDir(dir.path()).mkpath("kit") &&

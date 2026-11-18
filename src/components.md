@@ -362,11 +362,42 @@ number, use a `Stat` instead.
 
 Dates can be ISO (`2026-05-14`), months (`May`, `May 2026`, `2026-05`),
 quarters (`Q3 2026`), weeks (`W3`), or plain numbers. A missing year follows
-the last one given, and an empty End makes a milestone diamond. Rows are
-grouped and colored by `Group`/`Phase`; a `Tone` column overrides a row's
-color. Props: `start`, `end`, `today`, `labels` (`left`, or `inside` to put
-names in their bars), `groups` (`top`, or `side` for a turned label beside each
-group), and `colors`.
+the last one given, and an empty End makes a milestone diamond. An End of `→`
+(or `->`) runs to the end of the chart and points onward; `Sep →` ends in
+September and points onward too. Rows are grouped and colored by
+`Group`/`Phase`/`Lane`; a `Tone` column overrides a row's color.
+
+| Prop | Meaning |
+| --- | --- |
+| `start`, `end` | The span of the chart, when it should be wider than its tasks |
+| `today` | A marked line at that date |
+| `labels` | `left` (default), or `inside` to put names in their bars |
+| `groups` | `top` (a heading above each group), `side` (a turned label beside it), or `lanes` |
+| `periods` | Names spans of the axis in place of months or numbers: `periods="Discover: Jun; Build: Aug"`. Each ends at the time given, and a dotted line closes it |
+| `axis` | `top` (default) or `bottom` |
+| `radius` | Bar corners in pixels; `0` squares them |
+| `colors` | Group colors in order |
+
+`groups="lanes"` draws a roadmap: each group is a band named in a column on
+the left, and bars that do not overlap share a row.
+
+```markdown
+<Gantt groups="lanes" axis="bottom" start="1" periods="Days 1–30: 30; Days 31–60: 60; Days 61–90: 90">
+| Task | Start | End | Lane |
+| --- | --- | --- | --- |
+| Inventory | 1 | 20 | Plan |
+| Interviews | 21 | 30 | Plan |
+| Pilot desks | 15 | 60 | Roll out |
+| Studio-wide rollout | 61 | → | Roll out |
+| Weekly check-in | 1 | → | Support |
+</Gantt>
+```
+
+Write a lane's tasks in the order they should stack: each takes the first row
+it fits on. Names sit inside their bars, on two lines where one is too long,
+so keep them to a few words. `lane-width` (`220`, `14%`) and `lane-fill` set
+the column of names, `label-tone="white"` gives the names in every bar one
+color, and `grow` lets the lanes share the room the slide has left.
 
 ### Timeline, Steps, Cycle, Funnel, Venn, Tree
 

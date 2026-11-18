@@ -167,13 +167,15 @@ const QHash<QString, Spec> &specs() {
                          {{"show", {"value", "percent", "none"}}},
                          true,
                          "A progress bar, or one per table row"};
-        s["Gantt"] = {
-            {"start", "end", "unit", "today", "colors", "tone", "size", "labels", "groups"},
-            {{"unit", {"auto", "day", "week", "month", "quarter"}},
-             {"labels", {"left", "inside"}},
-             {"groups", {"top", "side"}}},
-            true,
-            "Bars on a time axis from a Markdown table"};
+        s["Gantt"] = {{"start", "end", "unit", "today", "colors", "tone", "size", "labels",
+                       "groups", "axis", "periods", "radius", "lane-width", "lane-fill",
+                       "label-tone"},
+                      {{"unit", {"auto", "day", "week", "month", "quarter"}},
+                       {"labels", {"left", "inside"}},
+                       {"groups", {"top", "side", "lanes"}},
+                       {"axis", {"top", "bottom"}}},
+                      true,
+                      "Bars on a time axis from a Markdown table"};
         s["Timeline"] = {
             {"direction", "tone", "style", "size", "colors"},
             {{"direction", {"horizontal", "vertical"}}, {"style", {"dot", "number", "icon"}}},
@@ -1014,7 +1016,7 @@ bool isColorProp(const QString &type, const QString &key) {
         return !(type == "Logos" && key == "tone");
     if (key == "header")
         return type == "Table";
-    if (key == "border" || key == "bold-tone")
+    if (key == "border" || key == "bold-tone" || key == "lane-fill" || key == "label-tone")
         return true;
     return false;
 }
