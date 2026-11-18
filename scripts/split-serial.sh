@@ -10,7 +10,7 @@
 #   FROM=05-name ./scripts/split-serial.sh     resume at a step
 #
 # Files run in filename order, so 01-, 02-, 03- sets the order. Logs land in
-# .scratch/split/.
+# .scratch/split/ and are never staged for commit.
 
 set -euo pipefail
 
@@ -93,7 +93,7 @@ for file in "${files[@]}"; do
   fi
 
   if [ "$COMMIT" = "1" ]; then
-    git add -A -- .
+    git add -A -- . ':(exclude).scratch'
     if git diff --cached --quiet; then
       echo "== $name: nothing to commit"
     else
