@@ -77,6 +77,15 @@ ApplicationWindow {
     property real transitionProgress: 0
     // Both frames have to be decoded before the shader has anything to mix.
     property bool transitionPreparing: false
+    property int transitionFromSlide: -1
+    // Until the shader takes over, the stage keeps showing the outgoing slide
+    // rather than following the new selection. Otherwise the new preview can
+    // load first, flash, and then be replaced by the old slide mid-transition.
+    readonly property int previewSlide: transitionPreparing && transitionFromSlide >= 0
+        ? transitionFromSlide : deck.selected
+    readonly property string previewSource: transitionPreparing && transitionFrom !== ""
+        ? "image://slides/" + transitionFrom
+        : "image://slides/" + (deck.revision, deck.renderId(deck.selected)) + (animation.active ? "/background" : "")
     // Qt Multimedia probes the GPU's video decoders when first used, which takes seconds on some
     // machines, so the player loads with the first video slide rather than with every window.
     property bool videoUsed: false
@@ -441,11 +450,17 @@ ApplicationWindow {
             return
         }
         transitionAnimation.stop()
-        transitionPreparing = true
+        transitionFromSlide = from
         transitionProgress = 0
         transitionFrom = deck.renderId(from)
         transitionTo = deck.renderId(to)
         transitionShaderName = name
+        // Record the outgoing slide as the one on screen; the source may already
+        // have followed the selection for a moment before this handler ran.
+        slidePreview.shownSlide = from
+        // Set this last, so the preview never reads a preparing state without a
+        // frame to hold on to.
+        transitionPreparing = true
         // The frames may still be in the pixmap cache, but a new decode starts
         // asynchronously; the Images' status handlers start the animation once
         // both are ready, whichever finishes last.
@@ -468,6 +483,7 @@ ApplicationWindow {
         transitionFrom = ""
         transitionTo = ""
         transitionShaderName = ""
+        transitionFromSlide = -1
     }
     function finishSlideTransition() {
         // At progress 1 the shader shows exactly the incoming slide, so dropping
@@ -476,6 +492,7 @@ ApplicationWindow {
         transitionFrom = ""
         transitionTo = ""
         transitionShaderName = ""
+        transitionFromSlide = -1
     }
     Component.onCompleted: { syncSourceEditor(); syncEditors(); syncVideo(true); lastSelected = deck.selected; Qt.callLater(thumbnails.revealSelection); if (deck.path !== "") focusForDeck(true) }
     Connections {
@@ -1622,24 +1639,25 @@ ApplicationWindow {
                     // briefly after loading, it cannot cover the sharp image once that is ready.
                     Image {
                         objectName: "slideQuickPreview"; anchors.fill: parent
-                        visible: slidePreview.status === Image.Loading && slidePreview.shownSlide !== deck.selected && status === Image.Ready
+                        visible: slidePreview.status === Image.Loading && slidePreview.shownSlide !== win.previewSlide && status === Image.Ready
                         // The same URL and size as the sidebar thumbnail, so it comes from Qt's pixmap cache.
-                        source: "image://slides/" + (deck.revision, deck.renderId(deck.selected))
+                        source: win.previewSource
                         asynchronous: true; cache: true; sourceSize: Qt.size(340, 192)
                     }
                     Image {
                         id: slidePreview; objectName: "slidePreview"; anchors.fill: parent
-                        source: "image://slides/" + (deck.revision, deck.renderId(deck.selected)) + (animation.active ? "/background" : "")
+                        source: win.previewSource
                         asynchronous: true; retainWhileLoading: true; cache: true; sourceSize: Qt.size(1920, 1080)
                         property int shownSlide: -1
                         // On a new slide, let its thumbnail show while this render loads. Edits to
                         // the same slide retain the previous sharp frame until the new one is ready.
-                        visible: status === Image.Ready || shownSlide === deck.selected
-                        onStatusChanged: if (status === Image.Ready) shownSlide = deck.selected
+                        visible: status === Image.Ready || shownSlide === win.previewSlide
+                        onStatusChanged: if (status === Image.Ready) shownSlide = win.transitionPreparing && win.transitionFromSlide >= 0
+                            ? win.transitionFromSlide : deck.selected
                     }
                     Loader {
                         id: animation; objectName: "animationLoader"
-                        active: workspace.visible && !!deck.media.animated
+                        active: workspace.visible && !!deck.media.animated && !win.transitionPreparing
                         x: deck.media.rect.x * slideFrame.width / 1920
                         y: deck.media.rect.y * slideFrame.height / 1080
                         width: deck.media.rect.width * slideFrame.width / 1920
@@ -1680,14 +1698,14 @@ ApplicationWindow {
                         sourceComponent: VideoOutput {
                             id: video; objectName: "videoOutput"
                             property alias player: player
-                            visible: deck.media.video && (player.playbackState !== MediaPlayer.StoppedState || player.mediaStatus === MediaPlayer.EndOfMedia)
+                            visible: deck.media.video && !win.transitionPreparing && (player.playbackState !== MediaPlayer.StoppedState || player.mediaStatus === MediaPlayer.EndOfMedia)
                             endOfStreamPolicy: VideoOutput.KeepLastFrame
                             fillMode: deck.media.span ? VideoOutput.PreserveAspectCrop : VideoOutput.PreserveAspectFit
                             MediaPlayer { id: player; objectName: "player"; videoOutput: video; audioOutput: AudioOutput { muted: deck.media.muted } loops: deck.media.loop ? MediaPlayer.Infinite : 1; onErrorOccurred: function(error,message) { deck.setStatus(message) } }
                         }
                     }
-                    Image { anchors.fill: parent; source: visible ? "image://slides/" + (deck.revision, deck.renderId(deck.selected)) + "/overlay" : ""; asynchronous: true; retainWhileLoading: true; sourceSize: Qt.size(1920,1080); visible: animation.active || (videoLoader.item && videoLoader.item.visible && deck.media.span) }
-                    Button { visible: deck.media.video && !win.presenting; anchors.centerIn: parent; text: player && player.playbackState === MediaPlayer.PlayingState ? qsTr("Pause") : "▶ " + qsTr("Play"); onClicked: win.toggleVideo() }
+                    Image { anchors.fill: parent; source: visible ? "image://slides/" + (deck.revision, deck.renderId(deck.selected)) + "/overlay" : ""; asynchronous: true; retainWhileLoading: true; sourceSize: Qt.size(1920,1080); visible: !win.transitionPreparing && (animation.active || (videoLoader.item && videoLoader.item.visible && deck.media.span)) }
+                    Button { visible: deck.media.video && !win.presenting && !win.transitionPreparing; anchors.centerIn: parent; text: player && player.playbackState === MediaPlayer.PlayingState ? qsTr("Pause") : "▶ " + qsTr("Play"); onClicked: win.toggleVideo() }
                     // The transition draws last, over the slide and its media. Its two
                     // frames are full renders kept hidden: ShaderEffectSource turns
                     // them into the fromTex and toTex the shared shader samples.

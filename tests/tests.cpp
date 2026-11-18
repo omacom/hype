@@ -4421,6 +4421,40 @@ static void write(const QString &path, const QString &content) {
                                                   stageCapture->image().height() / 2),
                  QColor::fromRgb(QColor::fromHsv(17 * 19, 230, 210).rgb()));
     }
+    void outgoingSlideStaysVisibleWhileTransitionPrepares() {
+        if (qEnvironmentVariable("HYPE_GUI_TESTS") == "0")
+            QSKIP("HYPE_GUI_TESTS=0 skips the window-level tests");
+        Deck deck;
+        deck.editSource("---\ntransition: crossfade\ntransition-duration: 0.2\n---\n\n# One\n\n---\n\n# Two\n");
+        QQuickStyle::setStyle("Basic");
+        qmlRegisterType<SlideItem>("Hype", 1, 0, "SlideCanvas");
+        qmlRegisterType<AppTheme>("Hype", 1, 0, "AppTheme");
+        QQmlApplicationEngine engine;
+        engine.rootContext()->setContextProperty("deck", &deck);
+        engine.addImageProvider("slides", new Thumbnails(&deck));
+        engine.load(QUrl("qrc:/Main.qml"));
+        QVERIFY(!engine.rootObjects().isEmpty());
+        auto window = qobject_cast<QQuickWindow *>(engine.rootObjects()[0]);
+        auto preview = window->findChild<QQuickItem *>("slidePreview");
+        QVERIFY(window && preview);
+        QCOMPARE(deck.selected(), 0);
+        QTRY_COMPARE_WITH_TIMEOUT(preview->property("status").toInt(), 1, 5000);
+        QCOMPARE(preview->property("shownSlide").toInt(), 0);
+        const QString outgoing = "image://slides/" + deck.renderId(0);
+        const QString incoming = "image://slides/" + deck.renderId(1);
+
+        // The new selection must not reach the stage until the shader is ready.
+        deck.select(1);
+        QVERIFY(window->property("transitionPreparing").toBool());
+        QCOMPARE(preview->property("source").toString(), outgoing);
+        QCOMPARE(preview->property("shownSlide").toInt(), 0);
+
+        // A failed or timed-out preparation drops the hold and shows the new slide.
+        QVERIFY(QMetaObject::invokeMethod(window, "endSlideTransition"));
+        QVERIFY(!window->property("transitionPreparing").toBool());
+        QCOMPARE(preview->property("source").toString(), incoming);
+        QTRY_COMPARE_WITH_TIMEOUT(preview->property("shownSlide").toInt(), 1, 5000);
+    }
     void imageTextOverlaysEveryLayout() {
         QTemporaryDir tmp;
         QVERIFY(QDir().mkpath(tmp.path() + "/images"));
