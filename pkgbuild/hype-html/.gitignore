@@ -1,0 +1,6 @@
+# makepkg artifacts: the SRCDEST git mirror (named after pkgname), the build
+# tree, the staging root, and built packages.
+/hype-html/
+/src/
+/pkg/
+/*.pkg.tar.zst

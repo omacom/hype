@@ -1,6 +1,7 @@
 # Package this fork as hype-html, beside an installed hype: the same app with
 # the HTML deck export, under its own name, icon, and desktop entry. The
-# source is the local checkout, so re-run makepkg after pulling or committing.
+# source is the checkout this PKGBUILD lives in, at the branch checked out
+# there, so commit before building and re-run makepkg after pulling.
 pkgname=hype-html
 pkgver=0.7.1
 pkgrel=1
@@ -24,7 +25,12 @@ depends=(
   'qt6-wayland'
 )
 makedepends=('cmake' 'gcc' 'make' 'pkgconf' 'git')
-source=("$pkgname::git+file:///home/mrjohn/Work/hype#branch=export-html-deck")
+
+# This PKGBUILD sits at <checkout>/pkgbuild/hype-html, so the checkout root is
+# two levels up. Cloning from there lets any checkout build itself; git source
+# means the package still tracks the committed branch, not the working tree.
+_checkout="$(realpath -- "$(dirname -- "${BASH_SOURCE[0]}")/../..")"
+source=("$pkgname::git+file://${_checkout}")
 sha256sums=('SKIP')
 
 build() {

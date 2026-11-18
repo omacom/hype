@@ -1,8 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=Hype HTML
-Comment=Markdown presentations, exported as self-contained HTML decks
-Exec=hype-html open %f
-Icon=hype-html
-Terminal=false
-Categories=Office;Presentation;
