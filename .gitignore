@@ -1,4 +1,5 @@
 /build/
 /trials/
+/prompt/
 *.user
 __pycache__/
