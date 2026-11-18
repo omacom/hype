@@ -993,6 +993,35 @@ void Deck::watchMedia() {
             for (const QString &name : dir.entryList(QDir::Files))
                 paths.append(dir.absoluteFilePath(name));
         }
+    // The template's pictures too, which plain slides draw as components do. Those kept
+    // deeper in its folders are watched where a slide names them.
+    const QVariantMap colors = palette();
+    for (const QString &folder :
+         colors.value("template_dirs").toString().split('\n', Qt::SkipEmptyParts)) {
+        const QDir dir(QDir(folder).filePath("images"));
+        if (folder.startsWith(":/") || !dir.exists())
+            continue; // Built into Hype, or without pictures.
+        paths.append(dir.absolutePath());
+        for (const QString &name : dir.entryList(QDir::Files))
+            paths.append(dir.absoluteFilePath(name));
+    }
+    const QString own = baseDir() + '/';
+    for (const auto &slide : std::as_const(m_parsed.slides)) {
+        if (hasComponents(slide.source))
+            continue;
+        const Media media = parseMedia(slide.source, baseDir(), colors);
+        QStringList named{media.path, media.poster};
+        for (const GalleryItem &item : media.gallery)
+            named << item.path;
+        for (const QString &path : std::as_const(named)) {
+            if (path.isEmpty() || path.startsWith(own) || path.startsWith(":/") ||
+                !QFileInfo::exists(path))
+                continue;
+            for (const QString &watch : {QFileInfo(path).absolutePath(), path})
+                if (!paths.contains(watch))
+                    paths.append(watch);
+        }
+    }
     QStringList stale, added;
     for (const QString &path : watched)
         if (!paths.contains(path))

@@ -2064,7 +2064,10 @@ QMap<QString, QString> definedVideo(const QString &source, const QString &base,
     if (!definitions(id).videos)
         return {};
     static thread_local QCache<QString, QMap<QString, QString>> cache(256);
-    const QString key = id + QChar(0) + base + QChar(0) + source;
+    // What a definition may write into its video's props: the page and the title.
+    const QString key = id + QChar(0) + base + QChar(0) + palette.value("page").toString() + '/' +
+                        palette.value("pages").toString() + QChar(0) +
+                        palette.value("title").toString() + QChar(0) + source;
     if (const auto found = cache.object(key))
         return *found;
     Ctx c = context(base, palette);

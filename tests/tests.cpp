@@ -2231,6 +2231,14 @@ static void write(const QString &path, const QString &content) {
         QVERIFY(media.loop);
         QVERIFY(media.path.endsWith("/videos/demo.mp4"));
         QVERIFY(!parseMedia(deck.slide(2), deck.baseDir(), deck.slidePalette(2)).video);
+        // A definition may name its video by the page: two slides alike play two clips.
+        Deck paged;
+        paged.editSource("<Define name=\"Clip\">\n<Video src=\"clip{page}.mp4\"/>\n</Define>\n\n"
+                         "---\n\n<Clip/>\n\n---\n\n<Clip/>\n");
+        QCOMPARE(parseMedia(paged.slide(1), paged.baseDir(), paged.slidePalette(1)).file,
+                 QString("clip2.mp4"));
+        QCOMPARE(parseMedia(paged.slide(2), paged.baseDir(), paged.slidePalette(2)).file,
+                 QString("clip3.mp4"));
         // So the window plays it, in the place its layout gives it.
         deck.select(1);
         const QVariantMap shown = deck.media();
@@ -5483,6 +5491,36 @@ static void write(const QString &path, const QString &content) {
         QVERIFY(d.renderId(1) != before);
         QVERIFY(d.totalBytes() != bytes);
         QCOMPARE(d.dirty(), false);
+    }
+    void replacedTemplatePicturesRefreshPlainSlides() {
+        QTemporaryDir dir;
+        QVERIFY(QDir(dir.path()).mkpath("kit/images/cases") && QDir(dir.path()).mkpath("talk"));
+        auto picture = [&](const QString &file, QColor color, int size) {
+            QImage image(size, size, QImage::Format_RGB32);
+            image.fill(color);
+            QVERIFY(image.save(dir.filePath(file)));
+        };
+        picture("kit/images/photo.png", Qt::red, 40);
+        picture("kit/images/cases/logo.png", Qt::red, 40);
+        write(dir.filePath("kit/presentation.md"), "# The kit\n");
+        write(dir.filePath("talk/presentation.md"),
+              "---\ntemplate: \"../kit/presentation.md\"\n---\n\n![](photo.png)\n\n---\n\n"
+              "![](cases/logo.png)\n");
+        Deck d;
+        QVERIFY(d.loadPath(dir.filePath("talk/presentation.md")));
+        QCOMPARE(slideProblems(d.slide(1), d.baseDir(), d.slidePalette(1)), QStringList());
+        // A picture the slide takes from its template, changed there, redraws the slide.
+        QString before = d.renderId(0);
+        QSignalSpy changes(&d, &Deck::changed);
+        picture("kit/images/photo.png", Qt::blue, 80);
+        QTRY_VERIFY(changes.count() > 0);
+        QVERIFY(d.renderId(0) != before);
+        // So does one kept deeper in the template's folders.
+        before = d.renderId(1);
+        changes.clear();
+        picture("kit/images/cases/logo.png", Qt::blue, 80);
+        QTRY_VERIFY(changes.count() > 0);
+        QVERIFY(d.renderId(1) != before);
     }
     void fontSelection() {
         Deck d;
