@@ -1,5 +1,7 @@
 /build/
 /trials/
 /prompt/
+/.scratch/
+**/.hype-backups/
 *.user
 __pycache__/
