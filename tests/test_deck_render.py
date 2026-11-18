@@ -58,7 +58,33 @@ Line twenty of a long block of prose that wraps around a bit.
 ---
 1. First numbered step with a longer line of text that will wrap
 2. Second numbered step with a longer line of text that will wrap
-3. Third numbered step with a longer line of text that will wrap</script>
+3. Third numbered step with a longer line of text that will wrap
+
+---
+A pipe is an ordinary character | not proof of a table.
+
+| Name | Value |
+| --- | --- |
+| alpha | 1 |
+
+---
+![overlay=0.8](missing.png) An explicit overlay still darkens the picture.
+
+---
+![overlay=0](missing.png) Choosing no overlay turns the darkening off.
+
+---
+# Blurred backdrop
+![background=blur](missing.png)
+
+---
+# Spanning backdrop
+![span background=blur](missing.png)
+
+---
+First line of a wrapped paragraph.
+Second line of a wrapped paragraph.
+Third line with an explicit break marker\\</script>
     <script type="application/json" id="palette">{"background": "#1a1b26", "foreground": "#a9b1d6", "accent": "#7aa2f7"}</script>
     <script src="__SCRIPT__"></script>
     <script>
@@ -88,6 +114,42 @@ Line twenty of a long block of prose that wraps around a bit.
             const right = kind === wantedKind[index] && items === 3
             results.push((right ? "PASS " : "FAIL ") + label + " list " + kind
               + " items=" + items)
+          }
+          if (index === 4) {
+            // A prose line with a pipe stays prose; the table below it still renders.
+            const paragraphs = content.querySelectorAll("p").length
+            const tables = content.querySelectorAll("table")
+            const rows = tables.length ? tables[0].querySelectorAll("tbody tr").length : 0
+            const right = paragraphs === 1 && tables.length === 1 && rows === 1
+            results.push((right ? "PASS " : "FAIL ") + label + " pipe prose p=" + paragraphs
+              + " tables=" + tables.length + " rows=" + rows)
+          }
+          if (index === 5 || index === 6) {
+            // overlay= replaces the default darkening, including turning it off.
+            const layer = section.querySelector(".overlay")
+            const color = layer ? getComputedStyle(layer).backgroundColor : "none"
+            const expected = index === 5 ? "rgba(0, 0, 0, 0.8)" : "none"
+            results.push((color === expected ? "PASS " : "FAIL ") + label + " overlay " + color)
+          }
+          if (index === 7 || index === 8) {
+            // A headline no longer keeps background=blur spanning: the picture fits
+            // and a blurred copy fills the margins. An explicit span still spans.
+            const backdrop = section.querySelector(".backdrop")
+            const covered = section.querySelector(".media.cover")
+            const right = index === 7 ? (!!backdrop && !covered) : (!backdrop && !!covered)
+            results.push((right ? "PASS " : "FAIL ") + label + " blur backdrop="
+              + !!backdrop + " span=" + !!covered)
+          }
+          if (index === 9) {
+            // Ordinary line breaks stay visible: each becomes a <br>, and an explicit
+            // hard-break marker is not left behind as text.
+            const paragraph = content.querySelector("p")
+            const breaks = paragraph ? paragraph.querySelectorAll("br").length : 0
+            const text = paragraph ? paragraph.textContent : ""
+            const right = breaks === 2 && text.startsWith("First line")
+              && text.includes("Third line") && !text.includes("\\\\")
+            results.push((right ? "PASS " : "FAIL ") + label + " line breaks=" + breaks
+              + " text=" + text)
           }
         }
         const wanted = document.querySelectorAll("section.slide").length
@@ -121,8 +183,9 @@ class DeckRenderTests(unittest.TestCase):
             self.assertIsNotNone(match, result.stdout + result.stderr)
             report = html.unescape(match.group(1))
             self.assertNotIn('FAIL', report, report)
-            # Every slide fits and is measured: one fit line and one render line per slide.
-            self.assertEqual(report.count('PASS'), 7, report)
+            # Every slide fits and is measured: one fit line per slide, plus the
+            # list, table, overlay, blur, line-break, and rendered-slide checks.
+            self.assertEqual(report.count('PASS'), 19, report)
 
 
 if __name__ == '__main__':

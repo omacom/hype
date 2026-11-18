@@ -1780,8 +1780,12 @@ QString Deck::htmlPage(const QString &stylesheet, const QString &script, const Q
 QString Deck::sourceBlock(const QString &markdownSource) const {
     QString markdown = markdownSource;
     markdown.replace("</script", "<\\/script", Qt::CaseInsensitive);
-    const QByteArray colors =
+    QByteArray colors =
         QJsonDocument(QJsonObject::fromVariantMap(palette())).toJson(QJsonDocument::Compact);
+    // The palette's font comes from the Markdown header too. JSON leaves '<' alone, so a
+    // font of </script><script>... would close this block and run. Spell '<' as JSON's own
+    // < escape: the page's JSON.parse reads back the same value.
+    colors.replace('<', "\\u003c");
     return "<script type=\"text/markdown\" id=\"source\">\n" + markdown + "\n</script>\n"
            "<script type=\"application/json\" id=\"palette\">" + QString::fromUtf8(colors)
         + "</script>";
@@ -1876,6 +1880,9 @@ bool Deck::exportHtmlFolder(const QString &path) {
     struct Copy { QString from, to; };
     QList<Copy> copies;
     QSet<QString> seen;
+    // Where each copied file lands, so the Markdown names the copy rather than the
+    // path it came from: a deck shared on its own still finds its pictures.
+    QHash<QString, QString> targets;
     const QString base = baseDir();
     for (const auto &slide : m_parsed.slides) {
         const auto media = parseMedia(slide.source, base);
@@ -1891,6 +1898,7 @@ bool Deck::exportHtmlFolder(const QString &path) {
                 continue;
             seen.insert(target);
             copies.append({item.first, target});
+            targets.insert(QFileInfo(item.first).absoluteFilePath(), target);
         }
     }
     // Build beside the destination, not in /tmp: the finished folder then moves into
@@ -1940,7 +1948,8 @@ bool Deck::exportHtmlFolder(const QString &path) {
     // editor and refresh the page. A </script inside it would close the block early,
     // so it is escaped here and unescaped by the script that reads it.
     const QString page = htmlPage("<link rel=\"stylesheet\" href=\"deck.css\">",
-                                  "<script src=\"deck.js\"></script>", {}, sourceBlock(m_source));
+                                  "<script src=\"deck.js\"></script>", {},
+                                  sourceBlock(withExportedMedia(m_source, base, targets)));
     if (page.isEmpty()) {
         setStatus(tr("Could not read the deck template"));
         return false;

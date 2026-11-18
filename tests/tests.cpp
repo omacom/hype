@@ -3378,6 +3378,32 @@ static void write(const QString &path, const QString &content) {
         QVERIFY(file.seek(0));
         QCOMPARE(QString::fromUtf8(file.readAll()), page);
     }
+    void exportHtmlPaletteCannotCloseItsScriptBlock() {
+        QTemporaryDir tmp;
+        write(tmp.path() + "/talk.md",
+              "---\nfont: \"</script><script>alert(1)</script>\"\n---\n\n# One\n");
+        Deck d;
+        QVERIFY(d.loadPath(tmp.path() + "/talk.md"));
+        QVERIFY(d.exportHtml(tmp.path() + "/talk.html"));
+        QFile file(tmp.path() + "/talk.html");
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        const QString page = QString::fromUtf8(file.readAll());
+        // The font reaches the page through the palette JSON, so that copy needs the
+        // same protection as the Markdown block: a closing script tag in the header
+        // must not close the block early.
+        const QString open = "<script type=\"application/json\" id=\"palette\">";
+        const qsizetype start = page.indexOf(open);
+        QVERIFY(start >= 0);
+        const qsizetype end = page.indexOf("</script>", start);
+        QVERIFY(end > start);
+        const QString json = page.mid(start + open.size(), end - start - open.size());
+        QVERIFY(!json.contains("</script"));
+        // Escaped for HTML, still the font when the page parses it.
+        const auto doc = QJsonDocument::fromJson(json.toUtf8());
+        QVERIFY(doc.isObject());
+        QCOMPARE(doc.object().value("font").toString(),
+                 QString("</script><script>alert(1)</script>"));
+    }
     void exportHtmlAltTextLeavesSpeakerNotesOut() {
         QTemporaryDir tmp;
         write(tmp.path() + "/talk.md",
@@ -3479,6 +3505,35 @@ static void write(const QString &path, const QString &content) {
         QVERIFY(QDir().mkdir(blocked));
         QVERIFY(!d.exportHtmlFolder(blocked));
         QVERIFY(QDir(blocked).isEmpty());
+    }
+    void exportHtmlFolderRewritesMediaCopiedFromOutside() {
+        QTemporaryDir tmp;
+        QDir().mkpath(tmp.path() + "/shared");
+        QDir().mkpath(tmp.path() + "/talks");
+        write(tmp.path() + "/shared/photo.png", "photo");
+        write(tmp.path() + "/shared/cover.jpg", "cover");
+        write(tmp.path() + "/shared/clip.mp4", "clip");
+        const QString photo = tmp.path() + "/shared/photo.png";
+        const QString cover = tmp.path() + "/shared/cover.jpg";
+        const QString clip = tmp.path() + "/shared/clip.mp4";
+        write(tmp.path() + "/talks/talk.md",
+              "# One\n\n![](" + photo + ")\n\n---\n\n" + "![poster=" + cover + "](" + clip + ")\n");
+        Deck d;
+        QVERIFY(d.loadPath(tmp.path() + "/talks/talk.md"));
+        const QString folder = tmp.path() + "/shared-html";
+        QVERIFY(d.exportHtmlFolder(folder));
+        QVERIFY(QFile::exists(folder + "/images/photo.png"));
+        QVERIFY(QFile::exists(folder + "/images/cover.jpg"));
+        QVERIFY(QFile::exists(folder + "/videos/clip.mp4"));
+        QFile file(folder + "/index.html");
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        const QString page = QString::fromUtf8(file.readAll());
+        // Media copied in from outside is named where the copy lands, poster included,
+        // so the folder still shows its pictures when it is shared on its own.
+        QVERIFY(page.contains("![](images/photo.png)"));
+        QVERIFY(page.contains("![poster=images/cover.jpg](videos/clip.mp4)"));
+        QVERIFY(!page.contains(photo));
+        QVERIFY(!page.contains(clip));
     }
     void saveCopyRollsBackOnFailure() {
         QTemporaryDir tmp;

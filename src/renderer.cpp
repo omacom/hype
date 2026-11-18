@@ -2,6 +2,7 @@
 #include "budget.h"
 #include "images.h"
 #include "syntax.h"
+#include <algorithm>
 #include <atomic>
 #include <QCoreApplication>
 #include <QAbstractTextDocumentLayout>
@@ -226,6 +227,86 @@ QString withMediaDirectives(const QString &source, const QStringList &remove,
     }
     reference.replace(2, end - 2, kept.join(' '));
     return withMedia(source, reference);
+}
+QString withExportedMedia(const QString &source, const QString &base,
+                          const QHash<QString, QString> &targets) {
+    if (targets.isEmpty())
+        return source;
+    // Only a reference the reader sees counts: code and comments keep their text.
+    QString visible = outsideCode(source);
+    auto comments = QRegularExpression("<!--[\\s\\S]*?-->").globalMatch(visible);
+    while (comments.hasNext()) {
+        const auto comment = comments.next();
+        visible.replace(comment.capturedStart(), comment.capturedLength(),
+                        QString(comment.capturedLength(), ' '));
+    }
+    // Where Hype finds the file a reference names.
+    const auto located = [&base](const QString &file, bool video) {
+        return QFileInfo(QFileInfo(file).isAbsolute()
+                             ? file
+                             : QDir(base).filePath(file.startsWith("images/") ||
+                                                           file.startsWith("videos/")
+                                                       ? file
+                                                       : (video ? "videos/" : "images/") + file))
+            .absoluteFilePath();
+    };
+    // Where the browser will look, mirroring assetPath() in deck.js.
+    static const QRegularExpression scheme("^[a-z]+:", QRegularExpression::CaseInsensitiveOption);
+    const auto lookedUp = [](const QString &file, bool video) {
+        if (scheme.match(file).hasMatch() || file.startsWith('/'))
+            return file;
+        return file.startsWith("images/") || file.startsWith("videos/")
+                   ? file
+                   : (video ? "videos/" : "images/") + file;
+    };
+    const auto spaced = [](const QString &text) {
+        return text.contains(QRegularExpression(R"(\s|[()<>])"));
+    };
+    struct Edit { int start, length; QString text; };
+    QList<Edit> edits;
+    static const QRegularExpression token(R"re(([a-z]+)(?:=("(?:[^"\\]|\\.)*"|[^\s]+))?)re");
+    auto matches = mediaRe.globalMatch(visible);
+    while (matches.hasNext()) {
+        const auto match = matches.next();
+        const bool angled = !match.captured(2).isEmpty();
+        const QString file = angled ? match.captured(2) : match.captured(3);
+        const bool video = isVideoFile(file);
+        const QString exported = targets.value(located(file, video));
+        if (!exported.isEmpty() && exported != lookedUp(file, video)) {
+            // A rewritten bare path keeps its angle brackets when it would need them.
+            const int group = angled ? 2 : 3;
+            edits.append({match.capturedStart(group), match.capturedLength(group),
+                          !angled && spaced(exported) ? "<" + exported + ">" : exported});
+        }
+        // A poster is a directive in the flags, and is copied like the picture it pairs with.
+        auto tokens = token.globalMatch(match.captured(1));
+        while (tokens.hasNext()) {
+            const auto directive = tokens.next();
+            if (directive.captured(1) != "poster" || directive.captured(2).isEmpty())
+                continue;
+            QString value = directive.captured(2);
+            const bool quoted = value.startsWith('"');
+            if (quoted)
+                value = value.mid(1, value.size() - 2).replace("\\\"", "\"").replace("\\\\", "\\");
+            const QString poster = targets.value(located(value, false));
+            if (poster.isEmpty() || poster == lookedUp(value, false))
+                continue;
+            QString text = poster;
+            if (quoted || poster.contains('"') || spaced(poster))
+                text = "\"" + QString(poster).replace("\\", "\\\\").replace("\"", "\\\"") + "\"";
+            edits.append({match.capturedStart(1) + directive.capturedStart(2),
+                          directive.capturedLength(2), text});
+        }
+    }
+    // A poster sits before the path it belongs to, so the list is not in source
+    // order until it is sorted. Apply from the end, where a replacement cannot move
+    // an offset that is still to come.
+    std::sort(edits.begin(), edits.end(),
+              [](const Edit &left, const Edit &right) { return left.start < right.start; });
+    QString rewritten = source;
+    for (auto edit = edits.crbegin(); edit != edits.crend(); ++edit)
+        rewritten.replace(edit->start, edit->length, edit->text);
+    return rewritten;
 }
 static Media readMedia(const QString &source, const QString &base) {
     Media result;

@@ -29,6 +29,10 @@ QImage softenedImage(const QImage &image, const QSizeF &slideSize);
 QString withMedia(const QString &source, const QString &reference);
 QString withMediaDirectives(const QString &source, const QStringList &remove,
                             const QStringList &add);
+// Rewrites media references and poster directives to the paths an exported folder
+// actually has. `targets` maps each source file's absolute path to its path there.
+QString withExportedMedia(const QString &source, const QString &base,
+                          const QHash<QString, QString> &targets);
 QString speakerNotes(const QString &source);
 // The source without its speaker-note comments, for exports that travel without
 // them; hype: directives are kept, since they steer rendering.

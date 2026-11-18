@@ -174,7 +174,7 @@ function parseMedia(source) {
   media.svgBlocks = 0
   takeAllFences(media)
   media.span = !media.video && /^# /m.test(outsideCode(media.text))
-  parseFlags(media, match[1].trim())
+  const explicitOverlay = parseFlags(media, match[1].trim())
   if (media.position) {
     // A placed image leaves the slide's own layout and colors alone.
     media.span = false
@@ -183,6 +183,8 @@ function parseMedia(source) {
     return media
   }
   media.overlay = (!media.video || media.span) && media.text.trim() ? 0.25 : 0
+  // The default darkening comes first; an explicit overlay= replaces it.
+  if (explicitOverlay !== null) media.overlay = explicitOverlay
   return media
 }
 
@@ -199,8 +201,8 @@ function takeAllFences(media) {
 function parseFlags(media, flags) {
   DIRECTIVE_RE.lastIndex = 0
   const first = DIRECTIVE_RE.exec(flags)
-  if (!first || first.index !== 0) return
-  if (!["fit", "span", "loop", "muted"].includes(first[1]) && first[2] === undefined) return
+  if (!first || first.index !== 0) return null
+  if (!["fit", "span", "loop", "muted"].includes(first[1]) && first[2] === undefined) return null
   let explicitOverlay = "", fit = false, span = false
   DIRECTIVE_RE.lastIndex = 0
   let match
@@ -229,10 +231,12 @@ function parseFlags(media, flags) {
     }
   }
   if (fit && span) media.span = false
-  if (explicitOverlay !== "") {
-    const opacity = parseFloat(explicitOverlay)
-    if (!Number.isNaN(opacity) && opacity >= 0 && opacity <= 1) media.overlay = opacity
-  }
+  // A background choice implies fitting unless span was explicitly requested.
+  if (!span && (media.background === "blur" || media.background === "auto"))
+    media.span = false
+  if (explicitOverlay === "") return null
+  const opacity = parseFloat(explicitOverlay)
+  return !Number.isNaN(opacity) && opacity >= 0 && opacity <= 1 ? opacity : null
 }
 
 // --- Deck rendering --------------------------------------------------------
@@ -315,12 +319,14 @@ function drawSvg(canvas, rect, svg, palette) {
   const box = document.createElement("div")
   box.className = "svg-box"
   placeAt(box, rect)
-  box.innerHTML = themedSvg(svg, palette)
-  const drawing = box.firstChild
-  if (drawing) {
-    drawing.style.maxWidth = "100%"
-    drawing.style.maxHeight = "100%"
-  }
+  // A drawing comes from whoever shared the deck, so it must not enter the page
+  // as markup: scripts, event handlers, and <style> would then run with the
+  // deck's privileges. Browsers draw an SVG image without scripts or access to
+  // the page, which is also how the editor's own preview treats it.
+  const drawing = document.createElement("img")
+  drawing.alt = ""
+  drawing.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(themedSvg(svg, palette))
+  box.appendChild(drawing)
   canvas.appendChild(box)
 }
 
@@ -487,6 +493,11 @@ function placeAt(element, rect) {
 
 const TABLE_DELIMITER = /^ {0,3}(?=[^\n]*\|)\|? *:?-+:? *(?:\| *:?-+:? *)*\|? *$/
 
+// A pipe alone does not make a table: the line below has to be a delimiter row.
+function startsTable(lines, index) {
+  return lines[index].includes("|") && index + 1 < lines.length && TABLE_DELIMITER.test(lines[index + 1])
+}
+
 function drawText(canvas, area, source, media, palette, fits) {
   const container = document.createElement("div")
   container.className = "text"
@@ -538,6 +549,15 @@ function drawText(canvas, area, source, media, palette, fits) {
   canvas.appendChild(container)
   fit()
   fits.push(fit)
+}
+
+// Ordinary line breaks stay visible on the slide, as Hype shows them. Markdown's
+// hard-break markers (a trailing backslash or two trailing spaces) are not text, and
+// every other newline becomes a <br>: HTML alone would fold it into a space.
+function appendLines(parent, lines) {
+  // One pass over the whole paragraph, so inline markup can span its lines.
+  const text = lines.map(line => line.replace(/ +$/, "").replace(/\\$/, "")).join("\n")
+  inline(parent, text)
 }
 
 function buildBlocks(content, text) {
@@ -602,7 +622,7 @@ function buildBlocks(content, text) {
       content.appendChild(listElement)
       continue
     }
-    if (line.includes("|") && i + 1 < lines.length && TABLE_DELIMITER.test(lines[i + 1])) {
+    if (startsTable(lines, i)) {
       content.appendChild(buildTable(lines, i))
       while (i < lines.length && lines[i].includes("|") && lines[i].trim()) i++
       continue
@@ -611,9 +631,9 @@ function buildBlocks(content, text) {
     const body = []
     while (i < lines.length && lines[i].trim() && !lineIsFence(lines[i]) &&
            !/^ {0,3}#{1,6} /.test(lines[i]) && !lines[i].trimStart().startsWith(">") &&
-           !/^ {0,3}([-*+]|\d+[.)]) /.test(lines[i]) && !lines[i].includes("|"))
+           !/^ {0,3}([-*+]|\d+[.)]) /.test(lines[i]) && !startsTable(lines, i))
       body.push(lines[i++])
-    inline(paragraph, body.join("\n"))
+    appendLines(paragraph, body)
     content.appendChild(paragraph)
   }
 }
@@ -667,10 +687,16 @@ const INLINE_SOURCE =
 
 function inline(parent, text) {
   const pattern = new RegExp(INLINE_SOURCE, "g")
+  // Text between constructs carries the paragraph's newlines: on the slide they are
+  // breaks, which HTML would otherwise fold into spaces.
+  const literal = value => value.split("\n").forEach((part, index) => {
+    if (index) parent.appendChild(document.createElement("br"))
+    if (part) parent.appendChild(document.createTextNode(part))
+  })
   let last = 0
   let match
   while ((match = pattern.exec(text))) {
-    if (match.index > last) parent.appendChild(document.createTextNode(text.slice(last, match.index)))
+    if (match.index > last) literal(text.slice(last, match.index))
     const [, ticks, , bold, boldUnderscore, italic, underline, linkText, linkTarget] = match
     if (ticks) {
       const element = document.createElement("code")
@@ -696,7 +722,7 @@ function inline(parent, text) {
     }
     last = match.index + match[0].length
   }
-  if (last < text.length) parent.appendChild(document.createTextNode(text.slice(last)))
+  if (last < text.length) literal(text.slice(last))
 }
 
 // --- Code highlighting -----------------------------------------------------

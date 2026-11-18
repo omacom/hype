@@ -84,7 +84,7 @@ set_tests_properties(hype_tests PROPERTIES ENVIRONMENT
 find_package(Python3 COMPONENTS Interpreter)
 if(Python3_FOUND)
   add_test(NAME hype_commands
-    COMMAND ${Python3_EXECUTABLE} -m unittest test_cli test_export test_deck_navigation test_shutdown
+    COMMAND ${Python3_EXECUTABLE} -m unittest test_cli test_export test_deck_navigation test_deck_svg test_shutdown
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/tests)
 else()
   add_test(NAME hype_commands COMMAND sh -c "echo 'hype_commands needs Python 3' >&2; exit 1")
