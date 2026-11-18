@@ -55,6 +55,34 @@ class CliTests(unittest.TestCase):
         self.assertIn('already exists', self.hype('new', self.deck, code=1).stderr)
         self.assertIn('paper', self.hype('new', self.root / 'other.md', '--theme', 'nope', code=1).stderr)
 
+    def test_version_comes_from_the_build(self):
+        self.assertRegex(self.hype('--version').stdout, r'^hype [0-9a-z][^\s]*\n$')
+
+    def test_save_applies_a_theme_and_exits(self):
+        self.write('# One\n')
+        self.hype(self.deck, '--theme', 'paper', '--save')
+        self.assertIn('color_background: "#ffffff"', self.deck.read_text())
+        self.assertIn('to save', self.hype('--theme', 'paper', '--save', code=1).stderr)
+        unfinished = '# One\n\n```ruby\nputs 1\n'
+        self.write(unfinished)
+        self.assertTrue(self.hype(self.deck, '--theme', 'paper', '--save', code=1).stderr.strip())
+        self.assertEqual(self.deck.read_text(), unfinished)
+
+    def test_render_never_overwrites_the_presentation_and_reports_its_manifest(self):
+        self.write(DECK)
+        link = self.root / 'link.md'
+        link.symlink_to(self.deck)
+        for output in (self.deck, link):
+            self.assertIn('presentation itself', self.hype('render', self.deck, '--slide', 1, '-o', output, code=1).stderr)
+        self.assertEqual(self.deck.read_text(), DECK)
+        alias = self.root / 'alias.md'
+        os.link(self.deck, alias)
+        self.hype('render', self.deck, '--slide', 1, '-o', alias)
+        self.assertEqual(self.deck.read_text(), DECK)
+        self.png_size(alias)
+        (self.root / 'slides/slides.json').mkdir(parents=True)
+        self.assertIn('slides.json', self.hype('render', self.deck, '-o', self.root / 'slides', code=1).stderr)
+
     def test_check_reports_every_problem_with_slide_and_line(self):
         self.write(DECK + '\n---\n\n![](missing.png)\n\n---\n\n![bogus=1](gone.png)\n\n---\n')
         report = json.loads(self.hype('check', self.deck, '--json', code=1).stdout)

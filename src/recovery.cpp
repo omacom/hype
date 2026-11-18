@@ -57,7 +57,7 @@ bool Deck::checkpoint() {
         {"selected", m_selected}, {"anchor", m_anchor}, {"conflict", m_externalChange},
         {"timestamp", QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)}}).toJson();
     if (!QDir().mkpath(folder + "/versions")) {
-        setStatus("Could not create the recovery folder. Changes are still in the editor.");
+        setStatus(tr("Could not create the recovery folder. Changes are still in the editor."));
         return false;
     }
     // Keep every distinct checkpoint. These contain Markdown, never media copies.
@@ -69,12 +69,12 @@ bool Deck::checkpoint() {
             '-' + QString::number(order).rightJustified(20, '0') + '-' +
             digest(m_source.toUtf8()).left(16) + ".json";
         if (!writeAtomically(folder + "/versions/" + version, bytes)) {
-            setStatus("Could not back up this version. Changes are still in the editor.");
+            setStatus(tr("Could not back up this version. Changes are still in the editor."));
             return false;
         }
     }
     if (!writeAtomically(folder + "/latest.json", bytes)) {
-        setStatus("Could not save the recovery draft. Changes are still in the editor.");
+        setStatus(tr("Could not save the recovery draft. Changes are still in the editor."));
         return false;
     }
     m_checkpointSource = m_source;
@@ -93,11 +93,11 @@ bool Deck::flushAutosave() {
         bool complete = parsed.error.isEmpty() && m_parsed.error.isEmpty() && parsed.slides.size() == count();
         for (int i = 0; complete && i < count(); ++i)
             complete = parsed.slides[i].source == m_parsed.slides[i].source;
-        if (!complete) setStatus("Draft backed up · finish the Markdown to save the presentation");
+        if (!complete) setStatus(tr("Draft backed up · finish the Markdown to save the presentation"));
         else if (!m_externalChange) {
             savePath(m_path);
-        } else setStatus("Draft backed up · file changed outside Hype; use Save As to keep both");
-    } else if (m_path.isEmpty()) setStatus("Draft backed up · Ctrl+S to choose a file");
+        } else setStatus(tr("Draft backed up · file changed outside Hype; use Save As to keep both"));
+    } else if (m_path.isEmpty()) setStatus(tr("Draft backed up · Ctrl+S to choose a file"));
     return true; // A recoverable draft is sufficient to close, even if the file cannot be saved.
 }
 bool Deck::restoreSnapshot(const QByteArray &bytes, bool opening) {
@@ -136,9 +136,9 @@ bool Deck::restoreSnapshot(const QByteArray &bytes, bool opening) {
     m_checkpointSource = source;
     m_checkpointPath = m_path;
     if (opening && dirty())
-        setStatus(conflict ? "Recovered draft · file also changed outside Hype; use Save As to keep both"
-                           : "Recovered your last draft");
-    if (!opening) setStatus("Restored earlier version");
+        setStatus(conflict ? tr("Recovered draft · file also changed outside Hype; use Save As to keep both")
+                           : tr("Recovered your last draft"));
+    if (!opening) setStatus(tr("Restored earlier version"));
     return true;
 }
 void Deck::recoverDraft() {
@@ -157,12 +157,12 @@ void Deck::recoverDraft() {
     for (const auto &entry : recoveryVersions()) {
         QFile version(recoveryFolder() + "/versions/" + entry.toMap()["name"].toString());
         if (version.open(QIODevice::ReadOnly) && restoreSnapshot(version.readAll(), true)) {
-            setStatus("Recovered from version history; the latest recovery file was missing or damaged");
+            setStatus(tr("Recovered from version history; the latest recovery file was missing or damaged"));
             return;
         }
     }
     if (latest.exists())
-        setStatus("Could not read the recovery draft. Earlier versions are available in History.");
+        setStatus(tr("Could not read the recovery draft. Earlier versions are available in History."));
 }
 void Deck::retireDraft() {
     if (m_recoveryDirectory.isEmpty()) return;
@@ -188,9 +188,9 @@ QVariantList Deck::recoveryVersions() const {
 bool Deck::restoreVersion(const QString &name) {
     if (m_recoveryDirectory.isEmpty() || name != QFileInfo(name).fileName() || !name.endsWith(".json")) return false;
     QFile version(recoveryFolder() + "/versions/" + name);
-    if (!version.open(QIODevice::ReadOnly)) { setStatus("Could not read that version."); return false; }
+    if (!version.open(QIODevice::ReadOnly)) { setStatus(tr("Could not read that version.")); return false; }
     if (!checkpoint()) return false;
-    if (!restoreSnapshot(version.readAll(), false)) { setStatus("That recovery version is damaged."); return false; }
+    if (!restoreSnapshot(version.readAll(), false)) { setStatus(tr("That recovery version is damaged.")); return false; }
     // Capture the restoration as a new version; preserve the version being restored.
     m_checkpointSource.clear();
     return flushAutosave();

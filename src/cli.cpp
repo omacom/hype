@@ -358,6 +358,9 @@ int render(const QStringList &arguments) {
         output = name;
     else if (QFileInfo(output).isDir())
         output = QDir(output).filePath(name);
+    const QString target = QFileInfo(output).canonicalFilePath();
+    if (!target.isEmpty() && target == QFileInfo(deck.path()).canonicalFilePath())
+        return fail("Choose an output other than the presentation itself.");
     const Still still = renderStill(deck, parsed, number - 1, width, output, format, quality);
     if (!still.saved)
         return fail("Could not save " + output);
@@ -389,6 +392,9 @@ QJsonObject answer(const QJsonObject &request) {
     const QString output = request["output"].toString();
     if (output.isEmpty())
         return failed("Name an output file.");
+    const QString target = QFileInfo(output).canonicalFilePath();
+    if (!target.isEmpty() && target == QFileInfo(deck.path()).canonicalFilePath())
+        return failed("Choose an output other than the presentation itself.");
     const QByteArray format = pictureFormat(
         request.contains("format") ? request["format"].toString() : QFileInfo(output).suffix());
     if (format.isEmpty())
@@ -471,7 +477,7 @@ int exportDeck(const QStringList &arguments) {
 int create(const QStringList &arguments) {
     Command command("new", "Start a presentation, with images/ and videos/ beside it.");
     command.parser.addOption({"title", "Presentation title (default: the file name)", "title"});
-    command.parser.addOption({"theme", "Installed theme; see hype themes (default: tokyo-night)", "name"});
+    command.parser.addOption({"theme", "Installed theme; see hype themes (default: the current Omarchy theme)", "name"});
     command.parser.addOption({"font", "Installed font family (default: JetBrains Mono)", "family"});
     command.parser.addOption({"template",
                               "Template: a name in templates/ or ~/.local/share/hype/templates/, "

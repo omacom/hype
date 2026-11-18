@@ -2,6 +2,7 @@
 #include "cli.h"
 #include "deck.h"
 #include "renderer.h"
+#include "translator.h"
 #include <QGuiApplication>
 #include <QCommandLineParser>
 #include <QDBusConnection>
@@ -18,6 +19,11 @@
 #include <QScopeGuard>
 #include <QTimer>
 #include <cstdio>
+#include <optional>
+// Qt's own words in the window, the text fields' right-click menu, which reach the Translator because it ignores the
+// context. Qt translates them itself only for the languages it ships a catalog for; Undo, Redo and Delete are Hype's too.
+[[maybe_unused]] static const char *const qtStrings[] = {QT_TR_NOOP("Cut"), QT_TR_NOOP("Copy"), QT_TR_NOOP("Paste"),
+                                                         QT_TR_NOOP("Select All")};
 // The desktop's interface font, e.g. "Adwaita Sans 11", which the gtk3 platform
 // theme used to supply. Without a settings portal Qt's default font stays.
 static void adoptDesktopFont() {
@@ -45,7 +51,7 @@ int main(int argc, char **argv) {
     bool windowless = command;
     for (int i = 1; i < argc; ++i) {
         const QByteArray argument(argv[i]);
-        for (const char *option : {"--pdf", "--pptx", "--render", "--help", "--version"})
+        for (const char *option : {"--pdf", "--pptx", "--render", "--save", "--help", "--version"})
             windowless = windowless || argument.startsWith(option);
         windowless = windowless || argument == "-h" || argument == "-v";
     }
@@ -53,7 +59,7 @@ int main(int argc, char **argv) {
         qputenv("QT_QPA_PLATFORM", "offscreen");
     QGuiApplication app(argc, argv);
     app.setApplicationName("hype");
-    app.setApplicationVersion("0.6.0");
+    app.setApplicationVersion(HYPE_VERSION);
     app.setDesktopFileName(qEnvironmentVariable("HYPE_DESKTOP_FILE", "hype"));
     if (command)
         return runCli(app.arguments());
@@ -66,7 +72,7 @@ int main(int argc, char **argv) {
     args.addOption({"pptx", "Export rendered PowerPoint and exit", "file"});
     args.addOption({"render", "Render slide PNGs and manifest and exit", "directory"});
     args.addOption({"theme", "Apply installed theme", "name"});
-    args.addOption({"save", "Save changes (for theme snapshots)"});
+    args.addOption({"save", "Save changes, such as --theme, and exit"});
     args.addOption({"slide", "Select a slide (1-based)", "number"});
     args.addOption({"markdown", "Start in full-document Markdown mode"});
     args.addOption({"overview", "Start in slide overview mode"});
@@ -78,8 +84,16 @@ int main(int argc, char **argv) {
     if (arguments.value(1) == "open")
         arguments.removeAt(1);
     args.process(arguments);
-    Deck deck;
     const bool exportWorker = args.isSet(snapshotOption);
+    const bool exporting = args.isSet("pdf") || args.isSet("pptx") || args.isSet("render") || args.isSet("save");
+    // The window, and the export worker whose progress it shows, follow the Omarchy language; commands and
+    // command-line exports stay in English for the scripts and agents that read them.
+    std::optional<Translator> translator;
+    if (!exporting || exportWorker) {
+        translator.emplace();
+        app.installTranslator(&*translator);
+    }
+    Deck deck;
     auto report = [](const QJsonObject &event) {
         const auto line = QJsonDocument(event).toJson(QJsonDocument::Compact);
         fprintf(stdout, "%s\n", line.constData());
@@ -96,9 +110,8 @@ int main(int argc, char **argv) {
         });
     }
     auto positional = args.positionalArguments();
-    const bool exporting = args.isSet("pdf") || args.isSet("pptx") || args.isSet("render");
     if (exporting && positional.isEmpty() && !exportWorker) {
-        fprintf(stderr, "Name a Markdown presentation to export.\n");
+        fprintf(stderr, "Name a Markdown presentation to %s.\n", args.isSet("save") ? "save" : "export");
         return 1;
     }
     if (!positional.isEmpty() && !deck.loadPath(positional[0], !exporting)) {
@@ -109,11 +122,14 @@ int main(int argc, char **argv) {
         deck.reopenLastPresentation();
     if (args.isSet("theme"))
         deck.chooseTheme(args.value("theme"));
-    if (args.isSet("save"))
-        deck.save();
+    bool success = true, headless = false;
+    // Like an export, a save from the command line writes the file and exits.
+    if (args.isSet("save")) {
+        headless = true;
+        success = deck.savePath(deck.path());
+    }
     if (args.isSet("slide"))
         deck.select(args.value("slide").toInt() - 1);
-    bool success = true, headless = false;
     if (exporting && !exportWorker)
         for (const QString &problem : deck.fetchFonts())
             fprintf(stderr, "%s\n", qPrintable(problem));
@@ -140,6 +156,8 @@ int main(int argc, char **argv) {
     qmlRegisterType<SlideItem>("Hype", 1, 0, "SlideCanvas");
     qmlRegisterType<AppTheme>("Hype", 1, 0, "AppTheme");
     QQmlApplicationEngine engine;
+    QObject::connect(&*translator, &Translator::changed, &deck, &Deck::retranslate);
+    QObject::connect(&*translator, &Translator::changed, &engine, &QQmlEngine::retranslate);
     QObject::connect(&engine, &QQmlEngine::warnings, [](const QList<QQmlError> &errors) {
         for (const auto &error : errors)
             fprintf(stderr, "%s\n", qPrintable(error.toString()));

@@ -16,7 +16,7 @@ Then open **Hype** from the app launcher, or run `hype` in a terminal.
 
 ## Make a presentation
 
-Open Hype from your app launcher. It reopens your last presentation; use **Ctrl+N** to start a new one, or **Ctrl+O** to choose a Markdown file.
+Open Hype from your app launcher. It reopens your last presentation; use **Ctrl+N** to start a new one in your current Omarchy theme, or **Ctrl+O** to choose a Markdown file.
 
 In **Visual** mode, select a slide in the sidebar and write its Markdown below the preview. Changes appear as you type. Drag the divider to give the preview or editor more room. Two buttons in the top bar switch modes. The grid button, or **Ctrl+M**, turns the **Overview** on and off, returning to the mode you came from. The button beside it shows a slide in **Visual** mode and `#` in **Markdown** mode; click it, or press **Ctrl+.**, to switch between them. Markdown mode edits the whole presentation, with the same formatting bar on top.
 
@@ -213,7 +213,7 @@ Each slide supports one image or video. Copy the whole presentation folder when 
 
 The palette icon opens your presentation's look: a template, or an installed Omarchy theme. A template brings colors, fonts, a frame, and components of its own; any presentation can be one, and **File › Save as template…** adds yours to the list, as a link that follows it or as a copy. Hype comes with an Omarchy template, and **Desktop theme** follows whichever theme your desktop has, changing as it does. With a template chosen, **Ctrl+Shift+Enter** adds a slide that starts as one of the template's own: search them, browse them by section, and add one or a whole section, such as a case study.
 
-The font icon chooses a presentation font. Choose **Google Fonts…** at the end of the font list to search the open-source Google Fonts library; Hype downloads the font you pick, with its license, and keeps it for all your presentations. Hover to see the current choices. Theme colors apply to text, code, and slide backgrounds; your images keep their original colors. Code stays monospaced. Hype’s interface follows your current desktop theme independently and updates when you change it.
+The font icon chooses a presentation font. Choose **Google Fonts…** at the end of the font list to search the open-source Google Fonts library; Hype downloads the font you pick, with its license, and keeps it for all your presentations. Hover to see the current choices. Theme colors apply to text, code, and slide backgrounds; your images keep their original colors. Code stays monospaced. Hype’s interface follows your current desktop theme independently and updates when you change it. It speaks the language picked under Omarchy's **Setup > Language** too, switching as soon as you pick another; your slides stay as you wrote them.
 
 The header shows the presentation's name with your position in it, such as “Slide 4 of 45”; saving and exporting report their progress on that line. The file icon beside it holds New, Open, Save, Export, and Version history, and is highlighted when you have unsaved changes.
 
@@ -267,6 +267,7 @@ Slide navigation and selection shortcuts apply when the sidebar or preview has f
 | --- | --- |
 | Ctrl+N / Ctrl+O | New presentation / open file |
 | Ctrl+S / Ctrl+Shift+S | Save / save as |
+| Ctrl+Q | Quit |
 | Ctrl+E / Ctrl+Shift+E | Export as PDF / PowerPoint |
 | Ctrl+M | Overview on / off |
 | Ctrl+. | Markdown source on / off |
@@ -306,22 +307,21 @@ The mouse wheel over the sidebar selects the previous or next slide. Home/End ju
 
 ## Run from source
 
-To build Hype yourself, install a C++17 compiler, make, Qt 6.9 or newer, FFmpeg, and GNU source-highlight; see [the package definition](pkgbuild/PKGBUILD) for dependencies. Then:
+To build Hype yourself, install a C++17 compiler, CMake, Qt 6.9 or newer, FFmpeg, and GNU source-highlight; see [the package definition in omarchy-pkgs](https://github.com/omacom/omarchy-pkgs/blob/master/pkgbuilds/hype/PKGBUILD) for dependencies. Then:
 
 ```sh
 ./bin/build
 ./build/hype open examples/welcome.md
 ```
 
-`bin/build` uses a Qt toolchain under `build/qt/` when present, then falls back to `qmake6` on your PATH. It checks for Qt 6.9 or newer before compiling. Set `HYPE_QMAKE=/path/to/qmake6` to select a different toolchain.
+The build uses a Qt toolchain from Qt's installer under `build/qt/` when present, newest first, then the system Qt, and checks for Qt 6.9 or newer before compiling. Set `CMAKE_PREFIX_PATH=/path/to/Qt/6.9.0/gcc_64` to select a different toolchain, and delete `build/CMakeCache.txt` when switching, since CMake remembers the Qt it found.
 
 For a launcher entry that rebuilds this checkout when opened, run `./bin/install-dev` and choose **Hype (Development)**.
 
-Run `./bin/test` for the regression suite. After building the tests, the presenter
-check can also run with two virtual displays:
+Run `./bin/test` for the regression suite: the C++ tests (`hype_tests`, which read exported PDFs back with Qt Pdf from `qt6-webengine`) and the command-line tests (`hype_commands`, in Python). Arguments go to `ctest`, so `./bin/test -R hype_commands` runs only those. Set `HYPE_GUI_TESTS=0` to skip the C++ window-level tests on a machine without multimedia. Every string the window shows is translated; [docs/i18n.md](docs/i18n.md) covers adding one and how the translations are kept in sync. After building the tests, the presenter check can also run with two virtual displays:
 
 ```sh
-HYPE_GUI_TESTS=1 QT_QPA_PLATFORMTHEME=generic QT_STYLE_OVERRIDE=Fusion \
+QT_QPA_PLATFORMTHEME=generic QT_STYLE_OVERRIDE=Fusion \
   QT_QPA_PLATFORM="offscreen:configfile=$PWD/tests/fixtures/presenter-screens.json" \
-  ./build/tests/hype-tests presenterViewUsesSeparateScreens
+  ./build/hype_tests presenterViewUsesSeparateScreens
 ```
