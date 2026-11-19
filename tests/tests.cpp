@@ -2506,8 +2506,8 @@ static void write(const QString &path, const QString &content) {
         QTRY_VERIFY(slideEditor->hasActiveFocus());
     }
     void caretEdgesFollowThePlatformTheme() {
-        if (!qEnvironmentVariableIsSet("HYPE_GUI_TESTS"))
-            QSKIP("Set HYPE_GUI_TESTS=1 with local multimedia access");
+        if (qEnvironmentVariable("HYPE_GUI_TESTS") == "0")
+            QSKIP("HYPE_GUI_TESTS=0 skips the window-level tests");
         QQuickStyle::setStyle("Basic");
         qmlRegisterType<SlideItem>("Hype", 1, 0, "SlideCanvas");
         qmlRegisterType<AppTheme>("Hype", 1, 0, "AppTheme");

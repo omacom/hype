@@ -64,15 +64,18 @@ enable_testing()
 # The tests read exports back with Qt Pdf, which ships in qt6-webengine, so
 # building the app alone doesn't need it; testing without it fails, not skips.
 find_package(Qt6 6.9 COMPONENTS Pdf GuiPrivate)
-if(TARGET Qt6::Pdf)
+if(TARGET Qt6::Pdf AND TARGET Qt6::GuiPrivate)
   # The window-level tests load the same QML as the app, so they embed it too.
   add_executable(hype_tests tests/tests.cpp src/resources.qrc)
   target_link_libraries(hype_tests PRIVATE hype_core Qt6::GuiPrivate Qt6::Widgets Qt6::Pdf Qt6::Test)
   set_target_properties(hype_tests PROPERTIES INTERPROCEDURAL_OPTIMIZATION ON)
   add_test(NAME hype_tests COMMAND hype_tests)
-else()
+elseif(NOT TARGET Qt6::Pdf)
   message(WARNING "Qt Pdf was not found, so the tests can't be built; install qt6-webengine.")
   add_test(NAME hype_tests COMMAND sh -c "echo 'hype_tests needs Qt Pdf, from qt6-webengine' >&2; exit 1")
+else()
+  message(WARNING "Qt's private Gui headers were not found, so the tests can't be built.")
+  add_test(NAME hype_tests COMMAND sh -c "echo 'hype_tests needs Qt6::GuiPrivate, the private Gui headers' >&2; exit 1")
 endif()
 # Hype draws its own controls, so the tests keep Qt's platform theme and style out of it.
 set_tests_properties(hype_tests PROPERTIES ENVIRONMENT
