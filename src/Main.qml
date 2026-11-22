@@ -1504,7 +1504,7 @@ ApplicationWindow {
                     // Keep the fast thumbnail behind the full render. Even if it remains visible
                     // briefly after loading, it cannot cover the sharp image once that is ready.
                     Image {
-                        objectName: "slideQuickPreview"; anchors.fill: parent
+                        id: slideQuickPreview; objectName: "slideQuickPreview"; anchors.fill: parent
                         visible: slidePreview.status === Image.Loading && slidePreview.shownSlide !== deck.selected && status === Image.Ready
                         // The same URL and size as the sidebar thumbnail, so it comes from Qt's pixmap cache.
                         source: "image://slides/" + (deck.revision, deck.renderId(deck.selected))
@@ -1517,7 +1517,12 @@ ApplicationWindow {
                         property int shownSlide: -1
                         // On a new slide, let its thumbnail show while this render loads. Edits to
                         // the same slide retain the previous sharp frame until the new one is ready.
+                        // When the thumbnail is not cached yet (e.g. while presenting, where the
+                        // sidebar is hidden), keep holding the current frame rather than dropping to
+                        // the window background — otherwise navigating flashes the background for a
+                        // frame, even between slides that share a background.
                         visible: status === Image.Ready || shownSlide === deck.selected
+                                 || !slideQuickPreview.visible
                         onStatusChanged: if (status === Image.Ready) shownSlide = deck.selected
                     }
                     Loader {
