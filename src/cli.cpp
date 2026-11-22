@@ -1,6 +1,10 @@
 #include "cli.h"
+#include "blocks.h"
 #include "deck.h"
+#include "fonts.h"
+#include "images.h"
 #include "renderer.h"
+#include "templates.h"
 #include <QCommandLineParser>
 #include <QDir>
 #include <QFile>
@@ -48,14 +52,19 @@ QImage paint(const Deck &deck, int index, int width, QString *warning) {
     QImage image(width, width * 9 / 16, QImage::Format_ARGB32_Premultiplied);
     image.fill(Qt::transparent);
     QPainter painter(&image);
-    paintSlide(&painter, image.rect(), deck.slide(index), deck.baseDir(), deck.palette(), warning);
+    paintSlide(&painter, image.rect(), deck.slide(index), deck.baseDir(), deck.slidePalette(index),
+               warning);
     return image;
 }
 QList<Problem> slideProblemsAt(const Deck &deck, const ParsedDeck &parsed, int index) {
     QList<Problem> problems;
     const int line = firstLine(deck.source(), parsed.slides[index]);
-    for (const auto &message : slideProblems(deck.slide(index), deck.baseDir()))
+    for (const auto &message :
+         slideProblems(deck.slide(index), deck.baseDir(), deck.slidePalette(index)))
         problems << Problem{index + 1, line, true, message};
+    for (const auto &message :
+         slideWarnings(deck.slide(index), deck.baseDir(), deck.slidePalette(index)))
+        problems << Problem{index + 1, line, false, message};
     if (deck.slide(index).trimmed().isEmpty())
         problems << Problem{index + 1, line, false, "Empty slide"};
     return problems;
@@ -71,17 +80,45 @@ QList<Problem> findProblems(const Deck &deck) {
         return lineAt(source, qMax(0, parsed.header.indexOf(QRegularExpression(
                                           "^" + key + ":", QRegularExpression::MultilineOption))));
     };
+    // A font that could not be found or fetched falls back to another; say so, and where.
+    for (const QString &family : deck.missingFonts()) {
+        const QString pattern = "font\\s*=\\s*[\"']" + QRegularExpression::escape(family) + "[\"']";
+        int slide = 0, line = 0;
+        for (int i = 0; i < parsed.slides.size() && !slide; ++i)
+            if (const auto m = QRegularExpression(pattern).match(parsed.slides[i].source);
+                m.hasMatch()) {
+                slide = i + 1;
+                line = lineAt(source, parsed.slides[i].start + m.capturedStart());
+            }
+        if (!slide)
+            line = lineAt(source, qMax(0, parsed.header.indexOf(family)));
+        QString reason = fonts::downloadsAllowed()
+                             ? "is not installed and could not be fetched from Google Fonts"
+                             : "is not installed (font downloads are off)";
+        if (const QStringList near = fonts::suggestions(family);
+            !near.isEmpty() && !near.contains(family))
+            reason += "; did you mean " + near.join(", ") + "?";
+        problems << Problem{slide, line, false,
+                            "Font " + family + " " + reason + "; text uses a fallback"};
+    }
     if (!scalar(parsed.header, "theme").isEmpty() && !deck.themeNames().contains(deck.themeName()) &&
         scalar(parsed.header, "color_background").isEmpty())
         problems << Problem{0, headerLine("theme"), false,
                             "Theme " + deck.themeName() + " is not installed; using the default colors"};
+    const QString templateError = deck.palette().value("template_error").toString();
+    if (!templateError.isEmpty())
+        for (const QString &line : templateError.split('\n'))
+            problems << Problem{0, headerLine("template"), true, line};
     QList<int> indices;
     for (int i = 0; i < deck.count(); ++i)
         indices << i;
     // Only painting reveals text that had to shrink too far, so lay out every slide.
     std::function<QList<Problem>(int)> inspect = [&](int index) {
         auto found = slideProblemsAt(deck, parsed, index);
-        if (found.isEmpty()) {
+        // A slide with an error is not laid out for its warnings; one drawn without a
+        // template's component still is.
+        if (std::none_of(found.cbegin(), found.cend(),
+                         [](const Problem &problem) { return problem.error; })) {
             QString warning;
             paint(deck, index, 480, &warning);
             if (!warning.isEmpty())
@@ -151,14 +188,33 @@ struct Command {
             print(stderr, argument(1) + ": " + deck.status());
             return false;
         }
+        // Fonts the presentation names but this machine lacks come from Google Fonts first,
+        // so text is measured and drawn in the font the author chose.
+        fontProblems = deck.fetchFonts();
+        if (reportFonts)
+            for (const QString &problem : fontProblems)
+                print(stderr, "warning: " + problem);
         return true;
     }
+    mutable QStringList fontProblems;
+    bool reportFonts = true; // check and fonts report missing fonts themselves.
 };
+
+QJsonObject checked(const Deck &deck, const QList<Problem> &problems) {
+    int errors = 0;
+    QJsonArray list;
+    for (const auto &problem : problems) {
+        errors += problem.error;
+        list << toJson(problem);
+    }
+    return {{"ok", errors == 0}, {"slides", deck.count()}, {"problems", list}};
+}
 
 int check(const QStringList &arguments) {
     Command command("check", "Report every problem in a presentation, with its slide and line.");
     command.json();
     command.parser.process(arguments);
+    command.reportFonts = false;
     Deck deck;
     if (!command.load(deck))
         return 1;
@@ -167,10 +223,7 @@ int check(const QStringList &arguments) {
     for (const auto &problem : problems)
         errors += problem.error;
     if (command.parser.isSet("json")) {
-        QJsonArray list;
-        for (const auto &problem : problems)
-            list << toJson(problem);
-        print({{"ok", errors == 0}, {"slides", deck.count()}, {"problems", list}});
+        print(checked(deck, problems));
         return errors ? 1 : 0;
     }
     for (const auto &problem : problems)
@@ -208,12 +261,54 @@ int slides(const QStringList &arguments) {
     return 0;
 }
 
+// One slide painted to a file, with what is wrong with it. A slide with problems still
+// renders, with the problems on a banner, so it can be looked at.
+struct Still {
+    bool saved = false;
+    int errors = 0;
+    QList<Problem> problems;
+    QJsonObject result;
+};
+Still renderStill(const Deck &deck, const ParsedDeck &parsed, int index, int width,
+                  const QString &output, const QByteArray &format, int quality) {
+    Still still;
+    QDir().mkpath(QFileInfo(output).absolutePath());
+    still.problems = slideProblemsAt(deck, parsed, index);
+    QString warning;
+    const QImage image = paint(deck, index, width, &warning);
+    still.saved = savePicture(image, output, format, quality);
+    if (!warning.isEmpty() && std::none_of(still.problems.cbegin(), still.problems.cend(),
+                                           [](const Problem &problem) { return problem.error; }))
+        still.problems << Problem{index + 1, firstLine(deck.source(), parsed.slides[index]), false,
+                                  warning};
+    QJsonArray list;
+    for (const auto &problem : still.problems) {
+        still.errors += problem.error;
+        list << toJson(problem);
+    }
+    still.result = {{"slide", index + 1},
+                    {"image", QFileInfo(output).absoluteFilePath()},
+                    {"width", image.width()},
+                    {"height", image.height()},
+                    {"problems", list}};
+    return still;
+}
+
 int render(const QStringList &arguments) {
-    Command command("render", "Render one slide to a PNG, or every slide to a directory with slides.json.");
+    Command command(
+        "render", "Render one slide to a picture, or every slide to a directory with slides.json.");
     command.parser.addOption({"slide", "Render only this slide (1-based)", "number"});
-    command.parser.addOption({{"o", "output"}, "PNG file for one slide, or directory for all (default: "
-                                               "slide-NNN.png, or slides/)", "path"});
+    command.parser.addOption({{"o", "output"},
+                              "Picture file for one slide, or directory for all (default: "
+                              "slide-NNN.png, or slides/)",
+                              "path"});
     command.parser.addOption({"width", "Image width in pixels (default: 1920)", "pixels", "1920"});
+    command.parser.addOption(
+        {"format", "png, webp or jpg (default: the output file's ending, else png)", "format"});
+    command.parser.addOption({"quality",
+                              "For webp and jpg, 1 to 100; webp at 100 loses nothing "
+                              "(default: 90)",
+                              "number", "90"});
     command.json();
     command.parser.process(arguments);
     Deck deck;
@@ -224,10 +319,23 @@ int render(const QStringList &arguments) {
         return fail("Width must be between 160 and 7680.");
     const bool json = command.parser.isSet("json");
     QString output = command.parser.value("output");
-    if (!command.parser.isSet("slide")) {
+    const bool single = command.parser.isSet("slide");
+    // One slide's format can come from the file it is saved as; a directory's has to be said.
+    const QString named = command.parser.isSet("format") ? command.parser.value("format")
+                          : single                       ? QFileInfo(output).suffix()
+                                                         : QString();
+    QByteArray format = pictureFormat(named);
+    if (format.isEmpty() && command.parser.isSet("format"))
+        return fail("Format must be png, webp or jpg.");
+    if (format.isEmpty())
+        format = "png";
+    const int quality = command.parser.value("quality").toInt();
+    if (quality < 1 || quality > 100)
+        return fail("Quality must be between 1 and 100.");
+    if (!single) {
         if (output.isEmpty())
             output = "slides";
-        if (!deck.renderImages(output, width))
+        if (!deck.renderImages(output, width, false, format, quality))
             return fail(deck.status());
         if (json)
             print({{"directory", QFileInfo(output).absoluteFilePath()},
@@ -237,14 +345,15 @@ int render(const QStringList &arguments) {
             print(stdout, QString("Rendered %1 slides to %2").arg(deck.count()).arg(output));
         return 0;
     }
-    const int number = command.parser.value("slide").toInt();
     const auto parsed = parseDeck(deck.source());
+    const int number = command.parser.value("slide").toInt();
     if (!parsed.error.isEmpty())
         return fail(QString("%1:%2: %3").arg(command.argument(1)).arg(lineAt(deck.source(), parsed.errorOffset))
                         .arg(parsed.error));
     if (number < 1 || number > deck.count())
         return fail(QString("Slide %1 does not exist; there are %2 slides.").arg(number).arg(deck.count()));
-    const QString name = QString("slide-%1.png").arg(number, 3, 10, QChar('0'));
+    const QString name =
+        QString("slide-%1.%2").arg(number, 3, 10, QChar('0')).arg(QString::fromLatin1(format));
     if (output.isEmpty())
         output = name;
     else if (QFileInfo(output).isDir())
@@ -252,36 +361,95 @@ int render(const QStringList &arguments) {
     const QString target = QFileInfo(output).canonicalFilePath();
     if (!target.isEmpty() && target == QFileInfo(deck.path()).canonicalFilePath())
         return fail("Choose an output other than the presentation itself.");
-    QDir().mkpath(QFileInfo(output).absolutePath());
-    // A slide with problems still renders, with the problems on a banner, so it can be looked at.
-    const auto problems = slideProblemsAt(deck, parsed, number - 1);
-    QString warning;
-    const QImage image = paint(deck, number - 1, width, &warning);
-    // Written beside and renamed over, so an existing file, or a hard link to the
-    // presentation, is replaced rather than overwritten in place.
-    QSaveFile file(output);
-    if (!file.open(QIODevice::WriteOnly) || !image.save(&file, "PNG") || !file.commit())
+    const Still still = renderStill(deck, parsed, number - 1, width, output, format, quality);
+    if (!still.saved)
         return fail("Could not save " + output);
-    int errors = 0;
-    QJsonArray list;
-    for (const auto &problem : problems) {
-        errors += problem.error;
-        list << toJson(problem);
-        if (!json)
-            print(stderr, toText(command.argument(1), problem));
-    }
-    if (problems.isEmpty() && !warning.isEmpty()) {
-        const Problem problem{number, firstLine(deck.source(), parsed.slides[number - 1]), false, warning};
-        list << toJson(problem);
-        if (!json)
-            print(stderr, toText(command.argument(1), problem));
-    }
     if (json)
-        print({{"slide", number}, {"image", QFileInfo(output).absoluteFilePath()}, {"width", image.width()},
-               {"height", image.height()}, {"problems", list}});
-    else
+        print(still.result);
+    else {
+        for (const auto &problem : still.problems)
+            print(stderr, toText(command.argument(1), problem));
         print(stdout, "Rendered " + output);
-    return errors ? 1 : 0;
+    }
+    return still.errors ? 1 : 0;
+}
+
+// One request of `hype batch`, answered as the command of the same name would with --json.
+QJsonObject answer(const QJsonObject &request) {
+    auto failed = [](const QString &message) { return QJsonObject{{"error", message}}; };
+    const QString command = request["command"].toString();
+    if (command != "render" && command != "check")
+        return failed("Unknown command; batch answers render and check.");
+    const QString path = request["presentation"].toString();
+    if (path.isEmpty())
+        return failed("Name a Markdown presentation.");
+    Deck deck;
+    if (!deck.loadPath(path, false))
+        return failed(path + ": " + deck.status());
+    deck.fetchFonts();
+    if (command == "check")
+        return checked(deck, findProblems(deck));
+    const QString output = request["output"].toString();
+    if (output.isEmpty())
+        return failed("Name an output file.");
+    const QString target = QFileInfo(output).canonicalFilePath();
+    if (!target.isEmpty() && target == QFileInfo(deck.path()).canonicalFilePath())
+        return failed("Choose an output other than the presentation itself.");
+    const QByteArray format = pictureFormat(
+        request.contains("format") ? request["format"].toString() : QFileInfo(output).suffix());
+    if (format.isEmpty())
+        return failed("Format must be png, webp or jpg.");
+    const int width = request["width"].toInt(1920), quality = request["quality"].toInt(90);
+    if (width < 160 || width > 7680)
+        return failed("Width must be between 160 and 7680.");
+    if (quality < 1 || quality > 100)
+        return failed("Quality must be between 1 and 100.");
+    const auto parsed = parseDeck(deck.source());
+    if (!parsed.error.isEmpty())
+        return failed(QString("%1:%2: %3")
+                          .arg(path)
+                          .arg(lineAt(deck.source(), parsed.errorOffset))
+                          .arg(parsed.error));
+    const int number = request["slide"].toInt();
+    if (number < 1 || number > deck.count())
+        return failed(
+            QString("Slide %1 does not exist; there are %2 slides.").arg(number).arg(deck.count()));
+    const Still still = renderStill(deck, parsed, number - 1, width, output, format, quality);
+    return still.saved ? still.result : failed("Could not save " + output);
+}
+
+// Every other command starts, reads its fonts, templates and pictures, answers and exits. A
+// program that draws slides all day, such as a server behind an editor, keeps this one
+// running instead, so what one request loaded is there for the next, as it is in the editor.
+int batch(const QStringList &arguments) {
+    Command command("batch", "Answer many render and check requests from one process.", false);
+    command.parser.setApplicationDescription(
+        "Answer render and check requests from standard input, one JSON object per line, until "
+        "it closes. Each answer is one line of JSON on standard output, in the order asked.\n\n"
+        "  {\"id\": 1, \"command\": \"render\", \"presentation\": \"talk/presentation.md\", "
+        "\"slide\": 3,\n   \"width\": 640, \"output\": \"/tmp/slide-3.webp\", \"quality\": 85}\n"
+        "  {\"id\": 2, \"command\": \"check\", \"presentation\": \"talk/presentation.md\"}\n\n"
+        "An answer holds what the command prints with --json, the request's id, and \"error\" "
+        "when the request could not be carried out. Presentations are read afresh each time.");
+    command.parser.process(arguments);
+    QFile input;
+    if (!input.open(stdin, QIODevice::ReadOnly))
+        return fail("Could not read standard input.");
+    for (QByteArray line = input.readLine(); !line.isEmpty(); line = input.readLine()) {
+        if (line.trimmed().isEmpty())
+            continue;
+        QJsonParseError parse;
+        const QJsonDocument document = QJsonDocument::fromJson(line, &parse);
+        QJsonObject reply =
+            document.isObject()
+                ? answer(document.object())
+                : QJsonObject{{"error", "Not a JSON object: " + parse.errorString()}};
+        if (document.isObject() && document.object().contains("id"))
+            reply["id"] = document.object()["id"];
+        fprintf(stdout, "%s\n", QJsonDocument(reply).toJson(QJsonDocument::Compact).constData());
+        fflush(stdout);
+    }
+    return 0;
 }
 
 int exportDeck(const QStringList &arguments) {
@@ -311,6 +479,10 @@ int create(const QStringList &arguments) {
     command.parser.addOption({"title", "Presentation title (default: the file name)", "title"});
     command.parser.addOption({"theme", "Installed theme; see hype themes (default: the current Omarchy theme)", "name"});
     command.parser.addOption({"font", "Installed font family (default: JetBrains Mono)", "family"});
+    command.parser.addOption({"template",
+                              "Template: a name in templates/ or ~/.local/share/hype/templates/, "
+                              "or a folder or presentation to build on",
+                              "template"});
     command.json();
     command.parser.process(arguments);
     const QString path = command.argument(1);
@@ -322,17 +494,42 @@ int create(const QStringList &arguments) {
     const QString theme = command.parser.value("theme");
     if (!theme.isEmpty() && !deck.themeNames().contains(theme))
         return fail("Theme " + theme + " is not installed. Installed: " + deck.themeNames().join(", "));
-    const QString font = command.parser.value("font");
-    if (!font.isEmpty() && font != deck.fontName() && !deck.fontNames().contains(font))
-        return fail("Font " + font + " is not installed.");
+    QString font = command.parser.value("font");
+    if (!font.isEmpty() && font != deck.fontName() && !fonts::available(font)) {
+        QString name;
+        if (const QString error = fonts::download(font, &name); !error.isEmpty())
+            return fail("Font " + font + ": " + error);
+        fonts::loadDirectory(fonts::downloadedDirectory(name));
+        print(stderr, "Fetched " + name + " from Google Fonts");
+        font = name;
+    }
+    const QString templateName = command.parser.value("template");
+    if (!templateName.isEmpty()) {
+        const TemplatePack pack = loadTemplate(templateName, QFileInfo(path).absolutePath());
+        if (pack.path.isEmpty())
+            return fail(pack.error);
+    }
     // Choosing a theme also records its colors, so the file renders the same anywhere.
-    deck.chooseTheme(theme.isEmpty() ? deck.themeName() : theme);
-    if (!font.isEmpty())
-        deck.chooseFont(font);
-    const QString title = command.parser.isSet("title") ? command.parser.value("title")
-                                                        : QFileInfo(path).completeBaseName();
-    const auto parsed = parseDeck(deck.source());
-    const QString source = setScalar(parsed.header, "title", title) + "\n# " + title + "\n";
+    // A template brings its own colors instead.
+    if (templateName.isEmpty() || !theme.isEmpty())
+        deck.chooseTheme(theme.isEmpty() ? deck.themeName() : theme);
+    if (!font.isEmpty() && font != deck.fontName())
+        deck.editSource(setScalar(parseDeck(deck.source()).header, "font", font) +
+                        deck.source().mid(parseDeck(deck.source()).header.size()));
+    // talk/presentation.md is named for its folder.
+    const QFileInfo named(path);
+    const QString title = command.parser.isSet("title")           ? command.parser.value("title")
+                          : named.fileName() == "presentation.md" ? named.absoluteDir().dirName()
+                                                                  : named.completeBaseName();
+    auto parsed = parseDeck(deck.source());
+    QString header = setScalar(parsed.header, "title", title);
+    if (!templateName.isEmpty()) {
+        if (theme.isEmpty())
+            header = setScalar(header, "theme", "");
+        header.remove(QRegularExpression("^theme: *\"?\"?\n", QRegularExpression::MultilineOption));
+        header = setScalar(header, "template", templateName);
+    }
+    const QString source = header + "\n# " + title + "\n";
     const QDir directory = QFileInfo(path).absoluteDir();
     if (!directory.mkpath("images") || !directory.mkpath("videos"))
         return fail("Could not create " + directory.path());
@@ -357,6 +554,163 @@ int themes(const QStringList &arguments) {
         for (const auto &name : deck.themeNames())
             print(stdout, name);
     return 0;
+}
+
+QJsonObject toJson(const templates::Entry &entry) {
+    return {{"name", entry.name},
+            {"title", entry.title},
+            {"where", entry.where},
+            {"path", entry.path},
+            {"linked", entry.linked.isEmpty() ? QJsonValue() : QJsonValue(entry.linked)},
+            {"theme", entry.theme.isEmpty() ? QJsonValue() : QJsonValue(entry.theme)},
+            {"template", entry.buildsOn.isEmpty() ? QJsonValue() : QJsonValue(entry.buildsOn)},
+            {"components", QJsonArray::fromStringList(entry.components)},
+            {"slides", entry.slides},
+            {"starters", [&] {
+                 QJsonArray list;
+                 for (int i = 0; i < entry.starters.size(); ++i)
+                     list << QJsonObject{{"slide", i + 1},
+                                         {"label", entry.starters[i]},
+                                         {"section", entry.sections[i]}};
+                 return list;
+             }()}};
+}
+
+int templatesCommand(const QStringList &arguments) {
+    Command command("templates", "List the templates a presentation can name with template:.",
+                    false);
+    command.parser.addPositionalArgument(
+        "presentation", "Also list templates/ beside this presentation", "[presentation]");
+    command.json();
+    command.parser.process(arguments);
+    const QString presentation = command.argument(1);
+    const QString base =
+        presentation.isEmpty() ? QDir::currentPath() : QFileInfo(presentation).absolutePath();
+    const auto found = templates::available(base);
+    if (command.parser.isSet("json")) {
+        QJsonArray list;
+        for (const auto &entry : found)
+            list << toJson(entry);
+        print({{"templates", list}, {"library", templates::libraryDirectory()}});
+        return 0;
+    }
+    for (const auto &entry : found) {
+        QStringList details{entry.where};
+        if (!entry.buildsOn.isEmpty())
+            details << "builds on " + entry.buildsOn;
+        details << QString::number(entry.components.size()) + " components";
+        if (entry.slides)
+            details << QString::number(entry.slides) + " slides";
+        print(stdout,
+              QString("%1  %2  (%3)").arg(entry.name, -16).arg(entry.title, details.join(", ")));
+        print(stdout,
+              QString(18, ' ') + (entry.linked.isEmpty() ? entry.path : "follows " + entry.linked));
+    }
+    if (found.isEmpty())
+        print(
+            stdout,
+            "No templates yet. Save a presentation as one with: hype template save <presentation>");
+    return 0;
+}
+
+int templateCommand(const QStringList &arguments) {
+    Command command(
+        "template",
+        "Add a presentation to the template library, remove one, or list its slides:\n"
+        "  hype template save <presentation> [--name acme] [--copy]\n"
+        "  hype template remove <name>\n"
+        "  hype template slides <template> [slide]   the slides to copy, or one slide's Markdown",
+        false);
+    command.parser.addPositionalArgument("action", "save, remove or slides", "save|remove|slides");
+    command.parser.addPositionalArgument(
+        "target", "The presentation to save, the template to remove or list", "<target>");
+    command.parser.addOption(
+        {"name", "The name presentations use for it (default: the file or folder's name)", "name"});
+    command.parser.addOption(
+        {"copy", "Keep a copy as it is now, instead of a link that follows the presentation"});
+    command.parser.addOption({"force", "Replace a template of the same name"});
+    command.json();
+    command.parser.process(arguments);
+    const QString action = command.argument(1), target = command.argument(2);
+    const bool json = command.parser.isSet("json");
+    if (action == "slides") {
+        if (target.isEmpty())
+            return fail("Name the template: hype template slides omarchy");
+        // A name, folder or presentation, found as template: finds it from here.
+        const TemplatePack pack = loadTemplate(target, QDir::currentPath());
+        if (pack.path.isEmpty())
+            return fail(pack.error);
+        const auto starters = templates::starterSlides(pack.path);
+        if (!command.argument(3).isEmpty()) {
+            bool ok = false;
+            const int n = command.argument(3).toInt(&ok);
+            if (!ok || n < 1 || n > starters.size())
+                return fail(QString("Choose a slide from 1 to %1").arg(starters.size()));
+            const auto &starter = starters[n - 1];
+            if (json)
+                print({{"slide", n},
+                       {"label", starter.label},
+                       {"section", starter.section},
+                       {"source", starter.source.trimmed()}});
+            else
+                print(stdout, starter.source.trimmed());
+            return 0;
+        }
+        if (json) {
+            QJsonArray list;
+            for (int i = 0; i < starters.size(); ++i)
+                list << QJsonObject{{"slide", i + 1},
+                                    {"label", starters[i].label},
+                                    {"section", starters[i].section},
+                                    {"source", starters[i].source.trimmed()}};
+            print({{"template", pack.path}, {"slides", list}});
+            return 0;
+        }
+        QString section = "\x01";
+        for (int i = 0; i < starters.size(); ++i) {
+            if (starters[i].section != section) {
+                section = starters[i].section;
+                print(stdout,
+                      (i ? "\n" : "") + (section.isEmpty() ? QString("(no section)") : section));
+            }
+            print(stdout, QString("%1  %2").arg(i + 1, 4).arg(starters[i].label));
+        }
+        return 0;
+    }
+    if (action == "save") {
+        if (target.isEmpty())
+            return fail("Name the presentation to save: hype template save talk/presentation.md");
+        Deck deck;
+        if (!deck.loadPath(target, false))
+            return fail(target + ": " + deck.status());
+        QString saved;
+        const bool copy = command.parser.isSet("copy");
+        if (const QString error = templates::save(target, command.parser.value("name"), copy,
+                                                  command.parser.isSet("force"), &saved);
+            !error.isEmpty())
+            return fail(error);
+        const QString name = QFileInfo(saved).fileName();
+        if (json)
+            print({{"name", name},
+                   {"path", saved},
+                   {"copy", copy},
+                   {"presentation", QFileInfo(target).absoluteFilePath()}});
+        else
+            print(stdout, (copy ? "Copied " : "Linked ") + target + " as the template " + name +
+                              ". Presentations use it with template: " + name);
+        return 0;
+    }
+    if (action == "remove") {
+        QString removed;
+        if (const QString error = templates::remove(target, &removed); !error.isEmpty())
+            return fail(error);
+        if (json)
+            print({{"removed", target}});
+        else
+            print(stdout, removed);
+        return 0;
+    }
+    return fail("Use hype template save <presentation> or hype template remove <name>.");
 }
 
 // As the hey and basecamp tools do: one shared copy, linked into Claude Code, found directly by Codex.
@@ -394,8 +748,142 @@ int skill(const QStringList &arguments) {
     return 0;
 }
 
+int fontsCommand(const QStringList &arguments) {
+    Command command("fonts", "Show the fonts a presentation uses, or add and search Google Fonts.",
+                    false);
+    command.parser.addPositionalArgument("what", "A presentation, add <family>…, or search <words>",
+                                         "<presentation> | add <family>… | search [words]");
+    command.parser.addOption(
+        {"into", "With add: copy the fonts into fonts/ beside this presentation", "presentation"});
+    command.json();
+    command.parser.process(arguments);
+    const QStringList words = command.parser.positionalArguments().mid(1);
+    const bool json = command.parser.isSet("json");
+    if (words.value(0) == "search") {
+        const QStringList names = fonts::search(words.mid(1).join(' '), 40);
+        if (fonts::catalog(false).isEmpty())
+            return fail("Could not load the Google Fonts catalog.");
+        if (json) {
+            QJsonArray list;
+            for (const auto &family : fonts::catalog(false))
+                if (names.contains(family.name))
+                    list << QJsonObject{{"family", family.name},
+                                        {"category", family.category},
+                                        {"styles", QJsonArray::fromStringList(family.styles)}};
+            print({{"fonts", list}});
+        } else if (names.isEmpty())
+            return fail("No Google Fonts family matches " + words.mid(1).join(' ') + ".");
+        else
+            print(stdout, names.join('\n'));
+        return 0;
+    }
+    if (words.value(0) == "add") {
+        if (words.size() < 2)
+            return fail("Name a Google Fonts family: hype fonts add \"Encode Sans\"");
+        QString into;
+        if (command.parser.isSet("into")) {
+            into = QFileInfo(command.parser.value("into")).absoluteDir().filePath("fonts");
+            if (!QDir().mkpath(into))
+                return fail("Could not create " + into);
+        }
+        QJsonArray added;
+        for (const QString &family : words.mid(1)) {
+            QString name = family;
+            if (const QString error = fonts::download(family, &name); !error.isEmpty())
+                return fail("Font " + family + ": " + error);
+            const QDir from(fonts::downloadedDirectory(name));
+            QStringList files = from.entryList({"*.ttf", "*.otf", "*.txt"}, QDir::Files);
+            for (const QString &file : files) {
+                if (into.isEmpty())
+                    continue;
+                // A license file names its family, so two families never overwrite each other's.
+                const QString target =
+                    file.endsWith(".txt") ? QString(name).remove(' ') + "-" + file : file;
+                QFile::remove(QDir(into).filePath(target));
+                if (!QFile::copy(from.filePath(file), QDir(into).filePath(target)))
+                    return fail("Could not copy " + file + " into " + into);
+            }
+            added << QJsonObject{{"family", name},
+                                 {"directory", into.isEmpty() ? from.path() : into},
+                                 {"files", QJsonArray::fromStringList(files)}};
+            if (!json)
+                print(stdout, "Added " + name + " (" +
+                                  QString::number(files.filter(".ttf").size()) + " styles) to " +
+                                  (into.isEmpty() ? from.path() : into));
+        }
+        if (json)
+            print({{"added", added}});
+        return 0;
+    }
+    if (words.isEmpty())
+        return fail(
+            "Name a presentation, or use hype fonts add <family> or hype fonts search <words>.");
+    Command load("fonts", "", true);
+    load.parser.process({arguments[0], "fonts", words[0]});
+    load.reportFonts = false;
+    Deck deck;
+    if (!load.load(deck))
+        return 1;
+    // Where each family the presentation names comes from.
+    const QVariantMap palette = deck.palette();
+    QStringList bundled;
+    QStringList folders{deck.baseDir() + "/fonts"};
+    for (const QString &directory :
+         palette.value("template_dirs").toString().split('\n', Qt::SkipEmptyParts))
+        folders << directory + "/fonts";
+    for (const QString &folder : folders)
+        for (const QString &file : QDir(folder).entryList({"*.ttf", "*.otf"}, QDir::Files))
+            bundled << QFileInfo(folder + "/" + file).absoluteFilePath();
+    QStringList families{palette.value("font").toString()};
+    families += deck.requestedFonts();
+    families.removeDuplicates();
+    QJsonArray list;
+    for (const QString &family : families) {
+        QString where = "installed";
+        const QString compact = QString(family).remove(' ').toLower();
+        for (const QString &file : bundled)
+            if (QFileInfo(file).fileName().remove(' ').toLower().startsWith(compact))
+                where = QDir(deck.baseDir()).relativeFilePath(QFileInfo(file).absolutePath());
+        if (where == "installed" && QFileInfo::exists(fonts::downloadedDirectory(family)))
+            where = "Google Fonts (" + fonts::downloadedDirectory(family) + ")";
+        if (!fonts::available(family))
+            where = "missing";
+        list << QJsonObject{{"family", family}, {"source", where}};
+        if (!json)
+            print(where == "missing" ? stderr : stdout, family + ": " + where);
+    }
+    for (const QString &problem : load.fontProblems)
+        print(stderr, problem);
+    if (json)
+        print({{"fonts", list}});
+    return deck.missingFonts().isEmpty() ? 0 : 1;
+}
+
+int icons(const QStringList &arguments) {
+    Command command("icons", "Search the bundled Lucide icons by name or keyword.", false);
+    command.parser.addPositionalArgument("query", "Words to search for, such as chart or user",
+                                         "[query...]");
+    command.parser.addOption(
+        {"limit", "Most names to list (default: 40; 0 for all)", "count", "40"});
+    command.json();
+    command.parser.process(arguments);
+    const QStringList words = command.parser.positionalArguments().mid(1);
+    const QStringList names = searchIcons(words.join(' '), command.parser.value("limit").toInt());
+    if (command.parser.isSet("json"))
+        print({{"icons", QJsonArray::fromStringList(names)}});
+    else if (names.isEmpty())
+        return fail("No icon matches " + words.join(' ') + ".");
+    else
+        print(stdout, names.join('\n'));
+    return 0;
+}
+
 int help(const QStringList &arguments) {
     const QString topic = arguments.value(2);
+    if (topic == "components") {
+        fputs(componentGuide().toUtf8().constData(), stdout);
+        return 0;
+    }
     if (topic == "format") {
         QFile guide(":/format.md");
         if (!guide.open(QIODevice::ReadOnly))
@@ -412,28 +900,47 @@ int help(const QStringList &arguments) {
 
 QString cliSummary() {
     return "Editor:\n"
-           "  open [presentation]             Open the editor, on the last presentation by default\n\n"
+           "  open [presentation]             Open the editor, on the last presentation by "
+           "default\n\n"
            "Commands that need no display (hype help <command> for options):\n"
            "  new <presentation>              Start a presentation\n"
            "  check <presentation>            Report every problem, with slide and line\n"
            "  slides <presentation>           Outline the slides\n"
-           "  render <presentation>           Render one slide or all of them to PNG\n"
+           "  render <presentation>           Render one slide or all of them to pictures\n"
            "  export <presentation> <output>  Export PDF or PowerPoint\n"
+           "  batch                           Answer many render and check requests from one "
+           "process\n"
            "  themes                          List installed themes\n"
+           "  templates [presentation]        List the templates a presentation can use\n"
+           "  template save <presentation>    Add a presentation to the template library\n"
+           "  template remove <name>          Remove a template from the library\n"
+           "  template slides <template> [n]  List a template's slides, or print one\n"
+           "  icons [query]                   Search icons for components\n"
+           "  fonts <presentation>            Show where each font comes from\n"
+           "  fonts add <family>… [--into p]  Add Google Fonts, optionally into a presentation\n"
+           "  fonts search [words]            Search Google Fonts\n"
            "  help format                     How to write a presentation\n"
+           "  help components                 Layouts, cards, charts, diagrams and templates\n"
            "  skill [install]                 Print the skill for coding agents, or install it";
 }
 bool isCliCommand(const QString &word) {
-    return QStringList{"new", "check", "slides", "render", "export", "themes", "skill", "help"}.contains(word);
+    return QStringList{"new",       "check",    "slides", "render", "export", "batch", "themes",
+                       "templates", "template", "icons",  "fonts",  "skill",  "help"}
+        .contains(word);
 }
 int runCli(const QStringList &arguments) {
     const QString command = arguments.value(1);
-    return command == "new"      ? create(arguments)
-           : command == "check"  ? check(arguments)
-           : command == "slides" ? slides(arguments)
-           : command == "render" ? render(arguments)
-           : command == "export" ? exportDeck(arguments)
-           : command == "themes" ? themes(arguments)
-           : command == "skill"  ? skill(arguments)
-                                 : help(arguments);
+    return command == "new"         ? create(arguments)
+           : command == "check"     ? check(arguments)
+           : command == "slides"    ? slides(arguments)
+           : command == "render"    ? render(arguments)
+           : command == "batch"     ? batch(arguments)
+           : command == "export"    ? exportDeck(arguments)
+           : command == "themes"    ? themes(arguments)
+           : command == "templates" ? templatesCommand(arguments)
+           : command == "template"  ? templateCommand(arguments)
+           : command == "icons"     ? icons(arguments)
+           : command == "fonts"     ? fontsCommand(arguments)
+           : command == "skill"     ? skill(arguments)
+                                    : help(arguments);
 }

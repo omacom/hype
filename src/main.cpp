@@ -130,6 +130,9 @@ int main(int argc, char **argv) {
     }
     if (args.isSet("slide"))
         deck.select(args.value("slide").toInt() - 1);
+    if (exporting && !exportWorker)
+        for (const QString &problem : deck.fetchFonts())
+            fprintf(stderr, "%s\n", qPrintable(problem));
     for (const QString &option : {QString("pdf"), QString("pptx"), QString("render")})
         if (args.isSet(option)) {
             headless = true;
@@ -147,6 +150,7 @@ int main(int argc, char **argv) {
         return success ? 0 : 1;
     }
     deck.enableAutosave();
+    deck.enableFontDownloads();
     adoptDesktopFont();
     QQuickStyle::setStyle("Basic");
     qmlRegisterType<SlideItem>("Hype", 1, 0, "SlideCanvas");

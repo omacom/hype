@@ -4,6 +4,8 @@
 #include <QElapsedTimer>
 #include <QFileSystemWatcher>
 #include <QImage>
+#include <QMutex>
+#include <QSet>
 #include <QTimer>
 #include <QUrl>
 #include <QVariantMap>
@@ -17,6 +19,7 @@ struct Slide {
 struct ParsedDeck {
     QString header;
     QVector<Slide> slides;
+    QString definitions; // The <Define> blocks on its slides.
     QString error;
     int errorOffset = -1; // Where the unfinished front matter or code fence opens.
 };
@@ -46,11 +49,12 @@ class Deck : public QAbstractListModel {
     Q_PROPERTY(double exportProgress READ exportProgress NOTIFY exportChanged)
     Q_PROPERTY(QString exportStatus READ exportStatus NOTIFY exportChanged)
     Q_PROPERTY(bool exportFailed READ exportFailed NOTIFY exportChanged)
-    Q_PROPERTY(QStringList fontNames READ fontNames CONSTANT)
+    Q_PROPERTY(QStringList fontNames READ fontNames NOTIFY fontsChanged)
     Q_PROPERTY(QString fontName READ fontName NOTIFY fontChanged)
     Q_PROPERTY(QStringList themeNames READ themeNames NOTIFY themesChanged)
     Q_PROPERTY(QStringList mediaPositions READ mediaPositions CONSTANT)
     Q_PROPERTY(QString themeName READ themeName NOTIFY changed)
+    Q_PROPERTY(QString templateName READ templateName NOTIFY changed)
     Q_PROPERTY(QColor background READ background NOTIFY changed)
     Q_PROPERTY(QColor foreground READ foreground NOTIFY changed)
     Q_PROPERTY(QColor accent READ accent NOTIFY changed)
@@ -89,12 +93,25 @@ class Deck : public QAbstractListModel {
     QStringList fontNames() const;
     QString fontName() const;
     Q_INVOKABLE void chooseFont(const QString &family);
+    // Google Fonts families matching a search; empty until loadGoogleFonts has the catalog.
+    Q_INVOKABLE QStringList googleFonts(const QString &query) const;
+    Q_INVOKABLE void loadGoogleFonts();
+    // Families the presentation or its template names, and those not yet on this machine.
+    QStringList requestedFonts() const;
+    QStringList missingFonts() const;
+    // Downloads missing families from Google Fonts; returns what could not be fetched.
+    QStringList fetchFonts();
+    // The editor downloads missing fonts in the background as they are named.
+    void enableFontDownloads();
     QStringList themeNames() const;
     QString themeName() const;
+    QString templateName() const;
     QColor background() const;
     QColor foreground() const;
     QColor accent() const;
     QVariantMap palette() const;
+    // The palette plus page numbers, for slides whose template shows them.
+    QVariantMap slidePalette(int index) const;
     QVariantMap media() const;
     QStringList mediaPositions() const;
     QString baseDir() const;
@@ -111,7 +128,8 @@ class Deck : public QAbstractListModel {
     bool exportPdf(const QString &path);
     bool exportPptx(const QString &path);
     // For PowerPoint, animations become videos and opaque slides are stored as JPEG.
-    bool renderImages(const QString &directory, int width = 1920, bool powerPoint = false);
+    bool renderImages(const QString &directory, int width = 1920, bool powerPoint = false,
+                      const QByteArray &format = "png", int quality = 90);
     Q_INVOKABLE void select(int index);
     // After a language switch, so what the window shows is made again in the new language.
     void retranslate();
@@ -130,6 +148,20 @@ class Deck : public QAbstractListModel {
     Q_INVOKABLE void undo();
     Q_INVOKABLE void redo();
     Q_INVOKABLE void chooseTheme(const QString &name);
+    // Installed themes with their colors, the desktop's own first.
+    Q_INVOKABLE QVariantList themeChoices() const;
+    // Templates the presentation can build on, each with a preview render id.
+    Q_INVOKABLE QVariantList templates() const;
+    // Builds the presentation on a template, or on none for an empty name.
+    Q_INVOKABLE void chooseTemplate(const QString &name);
+    // The template's slides, drawn in this presentation, that a new slide can start from.
+    Q_INVOKABLE QVariantList templateSlides() const;
+    Q_INVOKABLE void addTemplateSlide(int index);
+    // Adds the template's slides at these indices, in order, after the selection.
+    Q_INVOKABLE void addTemplateSlides(const QVariantList &indices);
+    // Adds the saved presentation to the template library; returns an error.
+    Q_INVOKABLE QString saveAsTemplate(const QString &name, bool copy, bool replace);
+    Q_INVOKABLE QString suggestedTemplateName() const;
     Q_INVOKABLE void openDialog();
     Q_INVOKABLE void save();
     Q_INVOKABLE void saveAs();
@@ -158,6 +190,8 @@ class Deck : public QAbstractListModel {
     void exportChanged();
     void exportAdvanced(double progress, const QString &message);
     void exportFinished(bool success);
+    void fontsChanged();
+    void googleFontsReady();
     void pasteRequested(const QString &name, const QString &extension, bool video);
 
   private:
@@ -167,7 +201,7 @@ class Deck : public QAbstractListModel {
         int anchor;
         ParsedDeck parsed;
     };
-    mutable QString m_paletteHeader, m_mediaSource, m_mediaBase;
+    mutable QString m_paletteHeader, m_paletteDefinitions, m_mediaSource, m_mediaBase, m_mediaStamp;
     mutable QString m_sizeSource, m_sizeBase;
     mutable qint64 m_totalBytes = -1, m_assetBytes = 0;
     mutable QStringList m_sizeFiles;
@@ -180,6 +214,25 @@ class Deck : public QAbstractListModel {
     mutable QHash<int, RenderIdentity> m_renderIds;
     mutable QVariantMap m_mediaCache;
     mutable QVariantMap m_paletteCache;
+    mutable QString m_paletteStamp, m_templatePath, m_templateText, m_templateHeader;
+    mutable int m_paletteEpoch = -1;
+    mutable QString m_requestedKey;
+    mutable QStringList m_requested;
+    bool m_fontDownloads = false, m_fetchingFonts = false, m_loadingCatalog = false;
+    QSet<QString> m_fontAttempts;
+    void fetchFontsLater();
+    mutable QMutex m_stampMutex;
+    mutable QString m_stampKey, m_stampValue;
+    mutable QStringList m_templateWatched; // Files the templates it builds on came from, or may.
+    mutable bool m_followsDesktop = false; // Its theme is the desktop's, which may change.
+    mutable QHash<QString, QPair<QString, QString>>
+        m_templatePreviews; // Path: file stamp, render id.
+    // What this presentation and its template previews draw with, kept from being forgotten.
+    mutable QVariantMap m_heldLook;
+    mutable QHash<QString, QVariantMap> m_heldPreviews;
+    QString templatePreview(const QString &path, const QString &title) const;
+    mutable QElapsedTimer m_stampClock;
+    QString templateStamp(bool force = false) const;
     QString m_source, m_saved, m_path, m_status;
     ParsedDeck m_parsed;
     // Whether m_parsed.error came from checking known slide boundaries rather than parsing the whole document.
@@ -188,7 +241,7 @@ class Deck : public QAbstractListModel {
     QVector<State> m_undo, m_redo;
     QMap<QString, QString> m_themes;
     QFileSystemWatcher m_watcher, m_mediaWatcher;
-    QTimer m_reloadTimer, m_mediaTimer;
+    QTimer m_reloadTimer, m_mediaTimer, m_watchTimer;
     QString m_notifiedFont;
     bool m_externalChange = false;
     QString m_recoveryDirectory, m_checkpointSource, m_checkpointPath;

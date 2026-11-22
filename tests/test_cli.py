@@ -20,6 +20,8 @@ class CliTests(unittest.TestCase):
         # No display, on a desktop that asks Qt for Wayland: commands must pick offscreen themselves.
         self.env = {key: value for key, value in os.environ.items() if key not in ('DISPLAY', 'WAYLAND_DISPLAY')}
         self.env.update(QT_QPA_PLATFORM='wayland;xcb', XDG_CONFIG_HOME=str(self.root / 'config'),
+                        XDG_DATA_HOME=str(self.root / 'home/.local/share'),
+                        XDG_STATE_HOME=str(self.root / 'home/.local/state'),
                         OMARCHY_PATH=str(self.root / 'omarchy'), HOME=str(self.root / 'home'))
         theme = self.root / 'omarchy/themes/paper'
         theme.mkdir(parents=True)
@@ -139,6 +141,68 @@ class CliTests(unittest.TestCase):
         manifest = json.loads((self.root / 'all/slides.json').read_text())
         self.assertEqual([s['image'] for s in manifest['slides']], ['slide-001.png', 'slide-002.png', 'slide-003.png'])
 
+    def test_render_writes_smaller_pictures_when_asked(self):
+        self.write(DECK)
+        # One slide takes its format from the file it is saved as.
+        self.hype('render', self.deck, '--slide', 1, '-o', 'one.webp', '--width', 640)
+        self.hype('render', self.deck, '--slide', 1, '-o', 'one.jpg', '--width', 640, '--quality', 80)
+        self.hype('render', self.deck, '--slide', 1, '-o', 'one.png', '--width', 640)
+        webp, jpg = (self.root / 'one.webp').read_bytes(), (self.root / 'one.jpg').read_bytes()
+        self.assertEqual((webp[:4], webp[8:12]), (b'RIFF', b'WEBP'))
+        self.assertEqual(jpg[:3], b'\xff\xd8\xff')
+        self.assertLess(len(webp), (self.root / 'one.png').stat().st_size)
+        # A directory has no ending to go by, so the format is named.
+        self.hype('render', self.deck, '-o', 'all', '--format', 'webp', '--width', 320)
+        manifest = json.loads((self.root / 'all/slides.json').read_text())
+        self.assertEqual([s['image'] for s in manifest['slides']], ['slide-001.webp', 'slide-002.webp', 'slide-003.webp'])
+        self.assertEqual((self.root / 'all/slide-002.webp').read_bytes()[:4], b'RIFF')
+        self.hype('render', self.deck, '--slide', 2, '--format', 'jpg')
+        self.assertEqual((self.root / 'slide-002.jpg').read_bytes()[:3], b'\xff\xd8\xff')
+        self.assertIn('png, webp or jpg', self.hype('render', self.deck, '--slide', 1, '--format', 'gif', code=1).stderr)
+        self.assertIn('between 1 and 100', self.hype('render', self.deck, '--slide', 1, '-o', 'x.webp', '--quality', 0, code=1).stderr)
+
+    def test_batch_answers_many_requests_from_one_process(self):
+        self.write(DECK + '\n---\n\n![](missing.png)\n')
+        requests = [
+            {'id': 1, 'command': 'render', 'presentation': str(self.deck), 'slide': 2, 'width': 320, 'output': str(self.root / 'two.webp')},
+            {'id': 'a', 'command': 'check', 'presentation': str(self.deck)},
+            {'id': 2, 'command': 'render', 'presentation': str(self.deck), 'slide': 4, 'output': str(self.root / 'four.png')},
+            {'id': 3, 'command': 'render', 'presentation': str(self.deck), 'slide': 9, 'output': str(self.root / 'nine.png')},
+            {'id': 4, 'command': 'render', 'presentation': str(self.root / 'nowhere.md'), 'slide': 1, 'output': str(self.root / 'x.png')},
+            {'id': 5, 'command': 'export'},
+        ]
+        lines = '\n'.join(json.dumps(request) for request in requests) + '\nnot json\n'
+        result = subprocess.run([str(APP), 'batch'], input=lines, env=self.env, cwd=self.root, capture_output=True, text=True,
+                                timeout=60)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        answers = [json.loads(line) for line in result.stdout.splitlines()]
+        self.assertEqual([answer.get('id') for answer in answers], [1, 'a', 2, 3, 4, 5, None])
+        self.assertEqual((answers[0]['width'], answers[0]['height'], answers[0]['problems']), (320, 180, []))
+        self.assertEqual((self.root / 'two.webp').read_bytes()[:4], b'RIFF')
+        # The same answers the commands give with --json.
+        self.assertEqual({key: answers[1][key] for key in ('ok', 'slides', 'problems')},
+                         json.loads(self.hype('check', self.deck, '--json', code=1).stdout))
+        self.assertIn('Missing media: missing.png', answers[2]['problems'][0]['message'])
+        self.assertEqual(self.png_size(self.root / 'four.png'), (1920, 1080))
+        self.assertIn('there are 4 slides', answers[3]['error'])
+        self.assertIn('nowhere.md', answers[4]['error'])
+        self.assertIn('render and check', answers[5]['error'])
+        self.assertIn('Not a JSON object', answers[6]['error'])
+        # The presentation is read afresh for each request.
+        process = subprocess.Popen([str(APP), 'batch'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, env=self.env,
+                                   cwd=self.root, text=True)
+        self.addCleanup(process.kill)
+        ask = json.dumps({'command': 'check', 'presentation': str(self.deck)}) + '\n'
+        process.stdin.write(ask)
+        process.stdin.flush()
+        self.assertEqual(json.loads(process.stdout.readline())['slides'], 4)
+        self.write(DECK)
+        process.stdin.write(ask)
+        process.stdin.flush()
+        self.assertEqual(json.loads(process.stdout.readline()), {'ok': True, 'slides': 3, 'problems': []})
+        process.stdin.close()
+        self.assertEqual(process.wait(timeout=10), 0)
+
     def test_render_shows_a_broken_slide_but_fails(self):
         self.write('# One\n\n---\n\n![](missing.png)\n')
         result = self.hype('render', self.deck, '--slide', 2, '-o', 'broken.png', code=1)
@@ -179,6 +243,192 @@ class CliTests(unittest.TestCase):
         self.assertEqual((home / '.agents/skills/hype/SKILL.md').read_text(), self.hype('skill').stdout)
         self.assertEqual(os.readlink(home / '.claude/skills/hype'), '../../.agents/skills/hype')
         self.assertTrue((home / '.claude/skills/hype/SKILL.md').is_file())
+
+    def test_components_check_render_and_icons(self):
+        self.write('# Results\n\n<Row>\n<Stat value="42" label="Answer"/>\n<Crad/>\n</Row>\n')
+        report = json.loads(self.hype('check', self.deck, '--json', code=1).stdout)
+        message = report['problems'][0]['message']
+        self.assertIn('<Crad>', message)
+        self.assertIn('did you mean <Card>', message)
+        self.write('# Results\n\n<Row>\n<Stat value="42" label="Answer"/>\n<Card icon="rocket" title="Go"/>\n</Row>\n')
+        self.assertEqual(json.loads(self.hype('check', self.deck, '--json').stdout)['problems'], [])
+        self.hype('render', self.deck, '--slide', '1', '-o', self.root / 'one.png')
+        self.assertEqual(self.png_size(self.root / 'one.png'), (1920, 1080))
+        self.assertIn('rocket', json.loads(self.hype('icons', 'rocket', '--json').stdout)['icons'])
+        self.assertIn('chart-bar', self.hype('icons', 'chart').stdout.split())
+        self.assertIn('No icon matches', self.hype('icons', 'zzzzqq', code=1).stderr)
+        guide = self.hype('help', 'components').stdout
+        for name in ('<Card', '<Chart', '<Gantt', '<Define', '<Slot'):
+            self.assertIn(name, guide)
+        self.assertIn('help components', self.hype('help').stdout)
+
+    def test_new_starts_from_a_template(self):
+        template = self.root / 'talk/templates/brand/template.md'
+        template.parent.mkdir(parents=True)
+        template.write_text('---\ncolor_accent: "#123456"\nframe: Frame\n---\n\n'
+                            '<Define name="Frame">\n<Place at="bottom" inset="0" height="8" fill="accent"/>\n{children}\n</Define>\n')
+        self.hype('new', self.deck, '--template', 'brand')
+        text = self.deck.read_text()
+        self.assertIn('template: "brand"', text)
+        self.assertNotIn('color_background', text)
+        self.assertEqual(json.loads(self.hype('check', self.deck, '--json').stdout)['problems'], [])
+        self.assertIn('not found', self.hype('new', self.root / 'other/p.md', '--template', 'nope', code=1).stderr)
+        template.write_text('<Define name="Card">\nx\n</Define>\n')
+        report = json.loads(self.hype('check', self.deck, '--json', code=1).stdout)
+        self.assertIn('built-in', report['problems'][0]['message'])
+
+    def test_any_presentation_is_a_template(self):
+        kit = self.root / 'kit/presentation.md'
+        kit.parent.mkdir(parents=True)
+        kit.write_text('---\ntitle: Kit\ntheme: paper\ncolor_accent: "#123456"\n---\n\n<Banner>Hi</Banner>\n\n'
+                       '<Define name="Banner">\n<Card title="Banner">\n{children}\n</Card>\n</Define>\n')
+        self.assertEqual(json.loads(self.hype('check', kit, '--json').stdout)['problems'], [])
+        self.hype('new', self.deck, '--template', '../kit')
+        self.assertIn('template: "../kit"', self.deck.read_text())
+        self.write(self.deck.read_text() + '\n<Banner>Again</Banner>\n')
+        self.assertEqual(json.loads(self.hype('check', self.deck, '--json').stdout)['problems'], [])
+        slides = json.loads(self.hype('slides', kit, '--json').stdout)['slides']
+        self.assertEqual(slides[0]['title'], '<Banner>Hi</Banner>')
+        # A definition's mistakes point at its slide.
+        self.write(self.deck.read_text() + '\n<Define name="banner">\nx\n</Define>\n')
+        problems = json.loads(self.hype('check', self.deck, '--json', code=1).stdout)['problems']
+        self.assertEqual([p['message'] for p in problems], ['Slide line 6: <Define> needs name="PascalCase"'])
+
+    def test_template_library(self):
+        templates = json.loads(self.hype('templates', '--json').stdout)
+        self.assertEqual(templates['library'], str(self.root / 'home/.local/share/hype/templates'))
+        self.assertEqual([(t['name'], t['where']) for t in templates['templates']], [('omarchy', 'built-in')])
+        self.assertIn('Title', templates['templates'][0]['components'])
+        kit = self.root / 'kit/presentation.md'
+        kit.parent.mkdir(parents=True)
+        kit.write_text('---\ntitle: Kit\ncolor_accent: "#123456"\n---\n\n<Banner>Hi</Banner>\n\n'
+                       '<Define name="Banner">\n<Card title="Banner">\n{children}\n</Card>\n</Define>\n')
+        saved = json.loads(self.hype('template', 'save', kit, '--json').stdout)
+        self.assertEqual((saved['name'], saved['copy']), ('kit', False))
+        self.assertIn('already exists', self.hype('template', 'save', kit, code=1).stderr)
+        self.hype('template', 'save', kit, '--name', 'kit-2026', '--copy')
+        listed = {t['name']: t for t in json.loads(self.hype('templates', '--json').stdout)['templates']}
+        self.assertEqual(sorted(listed), ['kit', 'kit-2026', 'omarchy'])
+        self.assertEqual(listed['kit']['linked'], str(kit.resolve()))
+        self.assertIsNone(listed['kit-2026']['linked'])
+        self.assertEqual(listed['kit']['slides'], 1)
+        self.assertEqual(listed['kit']['starters'], [{'slide': 1, 'label': 'Banner · Hi', 'section': ''}])
+        # Its slides, ready to paste: a list, or one slide's Markdown without the definitions.
+        self.assertIn('Banner · Hi', self.hype('template', 'slides', 'kit').stdout)
+        self.assertEqual(self.hype('template', 'slides', 'kit', '1').stdout.strip(), '<Banner>Hi</Banner>')
+        one = json.loads(self.hype('template', 'slides', str(kit), '--json').stdout)
+        self.assertEqual(one['slides'][0]['source'], '<Banner>Hi</Banner>')
+        self.assertIn('from 1 to 1', self.hype('template', 'slides', 'kit', '2', code=1).stderr)
+        # Any presentation, anywhere, names a library template by its name.
+        self.hype('new', self.deck, '--template', 'kit')
+        self.write(self.deck.read_text() + '\n<Banner>Again</Banner>\n')
+        self.assertEqual(json.loads(self.hype('check', self.deck, '--json').stdout)['problems'], [])
+        self.assertIn('follows ' + str(kit.resolve()), self.hype('templates').stdout)
+        self.assertIn('untouched', self.hype('template', 'remove', 'kit').stdout)
+        self.assertTrue(kit.exists())
+        self.assertIn('not found', self.hype('check', self.deck, code=1).stderr)
+        self.assertIn('No template', self.hype('template', 'remove', 'kit', code=1).stderr)
+        # The Omarchy template is built in, and checks clean.
+        omarchy = self.root / 'om/presentation.md'
+        self.hype('new', omarchy, '--template', 'omarchy')
+        self.assertIn('title: "om"', omarchy.read_text())
+        self.assertEqual(json.loads(self.hype('check', omarchy, '--json').stdout)['problems'], [])
+        # The desktop's theme is a theme named current, once Omarchy has one.
+        self.assertNotIn('current', json.loads(self.hype('themes', '--json').stdout)['themes'])
+        desktop = self.root / 'home/.local/state/omarchy/current/theme'
+        desktop.mkdir(parents=True)
+        (desktop / 'colors.toml').write_text('background = "#203040"\nforeground = "#eeeeee"\n')
+        self.assertIn('current', json.loads(self.hype('themes', '--json').stdout)['themes'])
+
+    def fonts_server(self, manifest_files=True):
+        """A stand-in for Google Fonts: its catalog, the download manifest, the CSS API and files."""
+        import http.server, threading, urllib.parse
+        # fc-match answers with its nearest font when the family is missing, and a download
+        # that holds another family is no stand-in for this one.
+        match = subprocess.run(['fc-match', '-f', '%{family}\n%{file}', 'Liberation Serif'], capture_output=True, text=True).stdout
+        family, _, font = match.partition('\n')
+        if 'Liberation Serif' not in family.split(',') or not font.endswith('.ttf'):
+            self.skipTest('Liberation Serif is not installed')
+        data = Path(font).read_bytes()
+        requests = []
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def do_GET(self):
+                url = urllib.parse.urlparse(self.path)
+                query = urllib.parse.parse_qs(url.query)
+                requests.append(url.path)
+                body, kind = b'', 'application/json'
+                if url.path == '/metadata/fonts':
+                    body = b")]}'" + json.dumps({'familyMetadataList': [
+                        {'family': 'Liberation Serif', 'category': 'Serif', 'popularity': 1, 'fonts': {'400': {}}},
+                        {'family': 'Poppins', 'category': 'Sans Serif', 'popularity': 2, 'fonts': {'400': {}, '900': {}}},
+                    ]}).encode()
+                elif url.path == '/download/list':
+                    refs = [{'filename': 'static/LiberationSerif-Regular.ttf', 'url': 'https://fonts.gstatic.com/s/serif.ttf'},
+                            {'filename': 'static/LiberationSerif_Condensed-Regular.ttf', 'url': 'https://fonts.gstatic.com/s/narrow.ttf'},
+                            {'filename': 'LiberationSerif-VariableFont_wght.ttf', 'url': 'https://fonts.gstatic.com/s/variable.ttf'}]
+                    body = b")]}'" + json.dumps({'manifest': {
+                        'files': [{'filename': 'OFL.txt', 'contents': 'SIL Open Font License'}],
+                        'fileRefs': refs if manifest_files else []}}).encode()
+                elif url.path == '/css2':
+                    self.server.family = query['family'][0]
+                    body = b"@font-face { font-family: 'Liberation Serif'; font-style: normal; font-weight: 400; " \
+                           b"src: url(https://fonts.gstatic.com/s/serif.ttf) format('truetype'); }"
+                    kind = 'text/css'
+                elif url.path.startswith('/s/'):
+                    body, kind = data, 'font/ttf'
+                else:
+                    self.send_error(404)
+                    return
+                self.send_response(200)
+                self.send_header('Content-Type', kind)
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        self.env.update(HYPE_FONTS_SERVER=f'http://127.0.0.1:{server.server_address[1]}',
+                        XDG_DATA_HOME=str(self.root / 'data'), XDG_CACHE_HOME=str(self.root / 'cache'))
+        return requests
+
+    def test_fonts_come_from_google_fonts_with_their_license(self):
+        requests = self.fonts_server()
+        self.write('---\nfont: "Liberation Serif"\n---\n\n# Hello\n')
+        added = json.loads(self.hype('fonts', 'add', 'liberation serif', '--into', self.deck, '--json').stdout)['added']
+        self.assertEqual(added[0]['family'], 'Liberation Serif')  # The catalog's spelling.
+        downloaded = self.root / 'data/hype/fonts/Liberation Serif'
+        # Only the family's own static files: no other widths, no variable font.
+        self.assertEqual(sorted(p.name for p in downloaded.iterdir()), ['LiberationSerif-Regular.ttf', 'OFL.txt'])
+        bundled = sorted(p.name for p in (self.deck.parent / 'fonts').iterdir())
+        self.assertEqual(bundled, ['LiberationSerif-OFL.txt', 'LiberationSerif-Regular.ttf'])
+        self.assertNotIn('/s/narrow.ttf', requests)
+        # The catalog is cached, so a second family needs no new catalog request.
+        catalog_requests = requests.count('/metadata/fonts')
+        self.assertIn('Poppins', self.hype('fonts', 'search', 'pop').stdout.split('\n'))
+        self.assertEqual(requests.count('/metadata/fonts'), catalog_requests)
+        report = {f['family']: f['source'] for f in json.loads(self.hype('fonts', self.deck, '--json').stdout)['fonts']}
+        self.assertIn('Liberation Serif', report)
+        # A misspelled family is reported with the closest names, and the slide still renders.
+        self.write('# Hello\n\n<Text font="Poppinz">Hi</Text>\n')
+        problems = json.loads(self.hype('check', self.deck, '--json').stdout)['problems']
+        self.assertEqual(problems[0]['slide'], 1)
+        self.assertEqual(problems[0]['severity'], 'warning')
+        self.assertIn('did you mean Poppins', problems[0]['message'])
+        self.assertIn('not on Google Fonts', self.hype('fonts', 'add', 'Poppinz', code=1).stderr)
+        self.env['HYPE_FONT_DOWNLOADS'] = '0'
+        self.assertIn('turned off', self.hype('fonts', 'add', 'Poppins', code=1).stderr)
+
+    def test_fonts_fall_back_to_the_css_api(self):
+        self.fonts_server(manifest_files=False)
+        self.hype('fonts', 'add', 'Liberation Serif')
+        downloaded = self.root / 'data/hype/fonts/Liberation Serif'
+        self.assertEqual(sorted(p.name for p in downloaded.iterdir()), ['LiberationSerif-Regular.ttf', 'OFL.txt'])
 
 
 if __name__ == '__main__':

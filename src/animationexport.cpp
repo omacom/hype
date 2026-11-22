@@ -18,7 +18,7 @@ static QString tr(const char *text) { return QCoreApplication::translate("Hype",
 bool exportAnimation(const QString &source, const QString &base, const QVariantMap &palette,
                      const QString &output, int width, int *repeats, QString *error,
                      const std::function<void(double)> &progress) {
-    const auto media = parseMedia(source, base);
+    const auto media = parseMedia(source, base, palette);
     QImageReader reader(media.path);
     int frames = reader.imageCount();
     *repeats = media.loop || reader.loopCount() < 0 ? -1 : reader.loopCount() + 1;

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(hype LANGUAGES CXX)
+project(hype LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -23,20 +23,20 @@ if(NOT CMAKE_PREFIX_PATH AND NOT DEFINED ENV{CMAKE_PREFIX_PATH})
 endif()
 
 find_package(Qt6 6.9 REQUIRED COMPONENTS
-  Core Gui Qml Quick QuickControls2 Multimedia Concurrent DBus Svg Widgets Test)
+  Core Gui Qml Quick QuickControls2 Multimedia Concurrent DBus Svg Network Widgets Test)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(WEBP REQUIRED IMPORTED_TARGET libwebp libwebpdemux)
 find_package(ZLIB REQUIRED)
 
 # Everything but main.cpp, shared by the app and the tests, so each source
 # compiles once and a new file in src/ needs no line here.
-file(GLOB hype_sources CONFIGURE_DEPENDS src/*.cpp src/*.h)
+file(GLOB hype_sources CONFIGURE_DEPENDS src/*.cpp src/*.h src/*.c)
 list(REMOVE_ITEM hype_sources ${CMAKE_SOURCE_DIR}/src/main.cpp)
 add_library(hype_core STATIC ${hype_sources})
 target_include_directories(hype_core PUBLIC src)
 target_link_libraries(hype_core PUBLIC
   Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::QuickControls2 Qt6::Multimedia Qt6::Concurrent
-  Qt6::DBus Qt6::Svg PkgConfig::WEBP ZLIB::ZLIB)
+  Qt6::DBus Qt6::Svg Qt6::Network PkgConfig::WEBP ZLIB::ZLIB)
 target_compile_options(hype_core PUBLIC -Wall -Wextra)
 set_target_properties(hype_core PROPERTIES INTERPROCEDURAL_OPTIMIZATION ON)
 
