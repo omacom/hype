@@ -19,7 +19,7 @@ class ShutdownTests(unittest.TestCase):
             highlighter = tools / 'source-highlight'
             highlighter.write_text('#!/bin/sh\n'
                                    'echo "start $$" >> "$HYPE_TEST_RENDER_LOG"\n'
-                                   '/usr/bin/sleep 2\n'
+                                   'sleep 2\n'
                                    'echo "done $$" >> "$HYPE_TEST_RENDER_LOG"\n')
             highlighter.chmod(0o755)
             deck = root / 'presentation.md'
