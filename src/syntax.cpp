@@ -14,7 +14,7 @@ static QString highlightedHtml(const QString &source, QString language) {
         {"shell", "sh"}, {"shellscript", "sh"}, {"c++", "cpp"}, {"yml", "yaml"},
         {"rust", "rs"}};
     language = aliases.value(language, language);
-    static const QRegularExpression validLanguage("^[a-z0-9+#_-]+$");
+    static thread_local const QRegularExpression validLanguage("^[a-z0-9+#_-]+$");
     if (!validLanguage.match(language).hasMatch())
         return {};
     static QCache<QString, QString> cache(4 * 1024 * 1024);

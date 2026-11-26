@@ -32,7 +32,9 @@
 static QString tr(const char *text) { return QCoreApplication::translate("Hype", text); }
 #include <QXmlStreamReader>
 
-static QRegularExpression mediaRe(R"(!\[([^\]]*)\]\((?:<([^>]+)>|([^\s)]+))\))");
+// Rendering runs on several thread pools. QRegularExpression is reentrant, but
+// not thread-safe, so cached patterns must belong to the worker using them.
+static thread_local const QRegularExpression mediaRe(R"(!\[([^\]]*)\]\((?:<([^>]+)>|([^\s)]+))\))");
 namespace {
 class ImageCache {
     QMutex mutex;
@@ -57,7 +59,7 @@ class ImageCache {
 static QString outsideCode(QString source, bool maskInline = true) {
     int position = 0, fenceLength = 0;
     QChar fence;
-    static const QRegularExpression marker("^ {0,3}(`{3,}|~{3,})(.*)$");
+    static thread_local const QRegularExpression marker("^ {0,3}(`{3,}|~{3,})(.*)$");
     while (position < source.size()) {
         int end = source.indexOf('\n', position);
         if (end < 0)
@@ -81,7 +83,7 @@ static QString outsideCode(QString source, bool maskInline = true) {
     }
     if (!maskInline)
         return source;
-    static const QRegularExpression inlineCode("(`+)([^`]|`(?!`))*?\\1");
+    static thread_local const QRegularExpression inlineCode("(`+)([^`]|`(?!`))*?\\1");
     auto matches = inlineCode.globalMatch(source);
     QVector<QPair<int, int>> ranges;
     while (matches.hasNext()) {
@@ -107,7 +109,7 @@ QString speakerNotes(const QString &source) {
     const QString visible = outsideCode(source);
     auto matches = QRegularExpression("<!--[\\s\\S]*?-->").globalMatch(visible);
     QStringList notes;
-    static const QRegularExpression directive("^hype:", QRegularExpression::CaseInsensitiveOption);
+    static thread_local const QRegularExpression directive("^hype:", QRegularExpression::CaseInsensitiveOption);
     while (matches.hasNext()) {
         const auto match = matches.next();
         QString note = source.mid(match.capturedStart() + 4, match.capturedLength() - 7).trimmed();
@@ -188,7 +190,7 @@ QString withMediaDirectives(const QString &source, const QStringList &remove,
     if (end < 2)
         return source;
     QString flags = reference.mid(2, end - 2).trimmed();
-    static const QRegularExpression tokens(R"re(([a-z]+)(?:=("(?:[^"\\]|\\.)*"|[^\s]+))?)re");
+    static thread_local const QRegularExpression tokens(R"re(([a-z]+)(?:=("(?:[^"\\]|\\.)*"|[^\s]+))?)re");
     const auto first = tokens.match(flags);
     const bool directives =
         first.hasMatch() && first.capturedStart() == 0 &&
@@ -222,7 +224,7 @@ static Media readMedia(const QString &source, const QString &base) {
                   outsideCode(result.text)
                       .contains(QRegularExpression("^# ", QRegularExpression::MultilineOption));
     QString flags = m.captured(1).trimmed();
-    static const QRegularExpression tokens(R"re(([a-z]+)(?:=("(?:[^"\\]|\\.)*"|[^\s]+))?)re");
+    static thread_local const QRegularExpression tokens(R"re(([a-z]+)(?:=("(?:[^"\\]|\\.)*"|[^\s]+))?)re");
     auto first = tokens.match(flags);
     bool directives =
         first.hasMatch() && first.capturedStart() == 0 &&
@@ -262,7 +264,7 @@ static Media readMedia(const QString &source, const QString &base) {
                     result.error = tr("Unknown position");
             } else if (key == "size") {
                 // Plain decimals only: toDouble() would also accept "nan" and "1e1".
-                static const QRegularExpression percentage(R"(^(\d{1,3}(?:\.\d+)?)%$)");
+                static thread_local const QRegularExpression percentage(R"(^(\d{1,3}(?:\.\d+)?)%$)");
                 const auto number = percentage.match(value);
                 result.size = number.hasMatch() ? number.captured(1).toDouble() : 0;
                 if (result.size < 1 || result.size > 100) {
@@ -316,7 +318,7 @@ static Media readMedia(const QString &source, const QString &base) {
 }
 // The first fence in this language: taken out of the text, its lines returned in body.
 static bool takeFence(QString &text, const QString &language, QString *body) {
-    static const QRegularExpression marker("^ {0,3}(`{3,}|~{3,})(.*)$");
+    static thread_local const QRegularExpression marker("^ {0,3}(`{3,}|~{3,})(.*)$");
     int position = 0, fenceLength = 0, start = -1, content = 0;
     QChar fence;
     while (position < text.size()) {
@@ -351,7 +353,7 @@ static bool takeFence(QString &text, const QString &language, QString *body) {
 // The deck's colors by name, as var(--accent), and its colors and font as the SVG's defaults,
 // so a drawing follows the theme unless it says otherwise.
 static QByteArray themedSvg(const QString &svg, const QVariantMap &palette) {
-    static const QRegularExpression variable(R"(var\(\s*--([a-z_-]+)\s*\))"),
+    static thread_local const QRegularExpression variable(R"(var\(\s*--([a-z_-]+)\s*\))"),
         root("<svg\\b([^>]*)>");
     QString themed;
     int last = 0;
@@ -392,7 +394,7 @@ static QString svgProblem(const QString &svg) {
     }
     if (xml.hasError())
         return QString("SVG line %1: %2").arg(xml.lineNumber()).arg(xml.errorString());
-    static const QRegularExpression variable(R"(var\(\s*--([a-z_-]+)\s*\))");
+    static thread_local const QRegularExpression variable(R"(var\(\s*--([a-z_-]+)\s*\))");
     static const QStringList colors{
         "background", "foreground", "accent", "green",           "red",
         "yellow",     "magenta",    "cyan",   "dark_foreground", "font"};
@@ -626,8 +628,9 @@ static QString preserveLineBreaks(QString markdown) {
 }
 static const QRegularExpression &tableDelimiter() {
     // A delimiter row, with or without outer pipes: | --- | :-: | or --- | ---:
-    static const QRegularExpression re("^ {0,3}(?=[^\\n]*\\|)\\|? *:?-+:? *(?:\\| *:?-+:? *)*\\|? *$",
-                                       QRegularExpression::MultilineOption);
+    static thread_local const QRegularExpression re(
+        "^ {0,3}(?=[^\\n]*\\|)\\|? *:?-+:? *(?:\\| *:?-+:? *)*\\|? *$",
+        QRegularExpression::MultilineOption);
     return re;
 }
 // Markdown trims table cells. Keep the one space each side that reads as
